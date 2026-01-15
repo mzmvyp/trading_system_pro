@@ -29,14 +29,16 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Configurações
+# CORRIGIDO: Usar caminhos relativos ao invés de caminhos absolutos do Windows
+# Isso permite portabilidade entre diferentes sistemas operacionais
 CONFIG = {
-    # Diretórios de sinais
+    # Diretórios de sinais (caminhos relativos ao diretório do projeto)
     "signal_dirs": [
-        r"C:\Users\Willian\python_projects\tradebot_original_sem_reevaluacao\deepseek_logs",
-        r"C:\Users\Willian\python_projects\tradebot_dez8 - Copia\deepseek_logs",
+        "deepseek_logs",  # Diretório padrão de logs do DeepSeek
+        "signals",        # Diretório de sinais salvos
     ],
-    # Output
-    "output_dir": r"C:\Users\Willian\python_projects\tradebot_original_sem_reevaluacao\ml_dataset",
+    # Output (caminho relativo)
+    "output_dir": "ml_dataset",
     # Binance API (pública, sem autenticação)
     "binance_base_url": "https://fapi.binance.com",
     # Timeout máximo para validar sinal (em horas)

@@ -89,28 +89,79 @@ class OnlineLearningManager:
     def add_signal_result(self, signal: Dict, result: str, return_pct: float = 0.0):
         """
         Adiciona um resultado de sinal ao buffer para aprendizado futuro.
-        
+
         Args:
             signal: O sinal original (com features)
             result: 'TP1', 'TP2', 'SL', 'TIMEOUT'
             return_pct: Retorno percentual
         """
-        # Extrair features do sinal
+        # CORRIGIDO: Extrair TODAS as features necessárias para o modelo
+        # Sincronizado com simple_signal_validator.py
+        indicators = signal.get('indicators', {})
+
+        # Calcular campos derivados
+        # 1. trend_encoded
+        trend = signal.get('trend', indicators.get('trend', 'neutral'))
+        trend_map = {'strong_bullish': 2, 'bullish': 1, 'neutral': 0, 'bearish': -1, 'strong_bearish': -2}
+        trend_encoded = trend_map.get(str(trend).lower(), 0)
+
+        # 2. sentiment_encoded
+        sentiment = signal.get('sentiment', indicators.get('sentiment', 'neutral'))
+        sentiment_map = {'bullish': 1, 'neutral': 0, 'bearish': -1}
+        sentiment_encoded = sentiment_map.get(str(sentiment).lower(), 0)
+
+        # 3. signal_encoded
+        signal_type = signal.get('signal', 'NO_SIGNAL')
+        signal_encoded = 1 if signal_type == 'BUY' else 0
+
+        # 4. risk_distance_pct e reward_distance_pct
+        entry_price = signal.get('entry_price', 0)
+        stop_loss = signal.get('stop_loss', 0)
+        take_profit_1 = signal.get('take_profit_1', 0)
+
+        if entry_price > 0 and stop_loss > 0:
+            risk_distance_pct = abs(entry_price - stop_loss) / entry_price * 100
+        else:
+            risk_distance_pct = 2.0  # Default 2%
+
+        if entry_price > 0 and take_profit_1 > 0:
+            reward_distance_pct = abs(take_profit_1 - entry_price) / entry_price * 100
+        else:
+            reward_distance_pct = 2.0  # Default 2%
+
+        # 5. risk_reward_ratio
+        risk_reward_ratio = reward_distance_pct / risk_distance_pct if risk_distance_pct > 0 else 1.0
+
+        # Construir data point com TODAS as 16 features
         data_point = {
             'timestamp': datetime.now().isoformat(),
             'symbol': signal.get('symbol', ''),
-            'signal_type': signal.get('signal', 'NO_SIGNAL'),
-            'confidence': signal.get('confidence', 0),
-            
-            # Features
-            'rsi': signal.get('rsi', signal.get('indicators', {}).get('rsi', 50)),
-            'macd_histogram': signal.get('macd_histogram', signal.get('indicators', {}).get('macd_histogram', 0)),
-            'adx': signal.get('adx', signal.get('indicators', {}).get('adx', 25)),
-            'atr': signal.get('atr', signal.get('indicators', {}).get('atr', 0)),
-            'bb_position': signal.get('bb_position', signal.get('indicators', {}).get('bb_position', 0.5)),
-            'cvd': signal.get('cvd', 0),
-            'orderbook_imbalance': signal.get('orderbook_imbalance', 0.5),
-            
+            'signal_type': signal_type,
+
+            # Features básicas (8)
+            'rsi': signal.get('rsi', indicators.get('rsi', 50)),
+            'macd_histogram': signal.get('macd_histogram', indicators.get('macd_histogram', 0)),
+            'adx': signal.get('adx', indicators.get('adx', 25)),
+            'atr': signal.get('atr', indicators.get('atr', 0)),
+            'bb_position': signal.get('bb_position', indicators.get('bb_position', 0.5)),
+            'cvd': signal.get('cvd', indicators.get('cvd', 0)),
+            'orderbook_imbalance': signal.get('orderbook_imbalance', indicators.get('orderbook_imbalance', 0.5)),
+            'confidence': signal.get('confidence', 5),
+
+            # Features multi-timeframe (2)
+            'bullish_tf_count': signal.get('bullish_tf_count', indicators.get('bullish_tf_count', 0)),
+            'bearish_tf_count': signal.get('bearish_tf_count', indicators.get('bearish_tf_count', 0)),
+
+            # Features codificadas (3)
+            'trend_encoded': trend_encoded,
+            'sentiment_encoded': sentiment_encoded,
+            'signal_encoded': signal_encoded,
+
+            # Features de risco (3)
+            'risk_distance_pct': risk_distance_pct,
+            'reward_distance_pct': reward_distance_pct,
+            'risk_reward_ratio': risk_reward_ratio,
+
             # Resultado
             'result': result,
             'return_pct': return_pct,
@@ -152,10 +203,13 @@ class OnlineLearningManager:
             # Preparar novos dados
             new_df = pd.DataFrame(self.buffer)
             
-            # Preparar features
+            # CORRIGIDO: Sincronizar features com simple_signal_validator.py
+            # Usando as mesmas 16 features para consistência entre treino e retreino
             feature_cols = [
                 'rsi', 'macd_histogram', 'adx', 'atr', 'bb_position',
-                'cvd', 'orderbook_imbalance', 'confidence'
+                'cvd', 'orderbook_imbalance', 'bullish_tf_count', 'bearish_tf_count',
+                'confidence', 'trend_encoded', 'sentiment_encoded', 'signal_encoded',
+                'risk_distance_pct', 'reward_distance_pct', 'risk_reward_ratio'
             ]
             
             available_cols = [col for col in feature_cols if col in new_df.columns]

@@ -35,11 +35,12 @@ class Settings(BaseSettings):
     trading_symbol: str = "BTCUSDT"
     
     # Configurações de Risk Management
-    max_risk_per_trade: float = 0.05  # Máximo 5% de risco por trade (aumentado para paper trading)
-    max_drawdown: float = 0.40  # Máximo 40% de drawdown (aumentado para paper trading)
-    max_exposure: float = 0.80  # Máximo 80% de exposição total (aumentado para paper trading)
-    max_daily_trades: int = 5  # Máximo 5 trades por dia
-    base_risk_percentage: float = 0.02  # 2% base de risco
+    # CORRIGIDO: Valores mais conservadores para proteger o capital
+    max_risk_per_trade: float = 0.02  # Máximo 2% de risco por trade (reduzido de 5%)
+    max_drawdown: float = 0.15  # Máximo 15% de drawdown (reduzido de 40%)
+    max_exposure: float = 0.50  # Máximo 50% de exposição total (reduzido de 80%)
+    max_daily_trades: int = 3  # Máximo 3 trades por dia (reduzido de 5)
+    base_risk_percentage: float = 0.01  # 1% base de risco (reduzido de 2%)
 
     # ========================================
     # GESTAO DE CAPITAL E RISCO POR TRADE
@@ -48,8 +49,9 @@ class Settings(BaseSettings):
     initial_capital: float = 10000.0  # Capital inicial em USDT
 
     # Porcentagem do capital a arriscar por trade
-    # Exemplo: 5% significa que se o stop loss for atingido, voce perde 5% do capital
-    risk_percent_per_trade: float = 5.0  # 5% do capital arriscado por trade
+    # CORRIGIDO: Reduzido de 5% para 2% - mais conservador
+    # Exemplo: 2% significa que se o stop loss for atingido, voce perde 2% do capital
+    risk_percent_per_trade: float = 2.0  # 2% do capital arriscado por trade (reduzido de 5%)
 
     # Como calcular o tamanho da posicao:
     # 1. Risco em $ = capital * (risk_percent_per_trade / 100)
@@ -70,7 +72,8 @@ class Settings(BaseSettings):
     # DEPRECATED: min_confidence_0_5 removido - sempre usar escala 0-10
     
     # Configurações de Intervalo de Análise
-    min_analysis_interval_hours: float = 1.0  # Mínimo 1 hora entre análises do mesmo símbolo
+    # CORRIGIDO: Aumentado para evitar overtrading
+    min_analysis_interval_hours: float = 2.0  # Mínimo 2 horas entre análises do mesmo símbolo (aumentado de 1h)
     
     # Top 10 criptomoedas para análise
     top_crypto_pairs: list = [
@@ -108,8 +111,9 @@ class Settings(BaseSettings):
     # ========================================
     # Habilita validação de sinais usando modelo ML treinado
     ml_validation_enabled: bool = True
-    # Threshold de probabilidade para considerar confluência (0.0 a 1.0)
-    ml_validation_threshold: float = 0.5
+    # CORRIGIDO: Threshold aumentado de 0.5 para 0.65 para filtrar sinais fracos
+    # 0.5 = basicamente aleatório, 0.65 = mais confiável
+    ml_validation_threshold: float = 0.65
     # Se True, só executa sinais que passam na validação ML
     # Se False, apenas loga a validação mas executa de qualquer forma
     ml_validation_required: bool = False
