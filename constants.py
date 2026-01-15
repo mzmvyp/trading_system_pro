@@ -1,0 +1,178 @@
+"""
+Trading system constants
+Centralizes magic numbers and configuration values
+"""
+
+# Technical Indicators
+RSI_PERIOD = 14
+RSI_OVERBOUGHT = 70
+RSI_OVERSOLD = 30
+
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+
+ADX_PERIOD = 14
+ADX_STRONG_TREND = 25
+ADX_VERY_STRONG_TREND = 50
+
+ATR_PERIOD = 14
+
+BOLLINGER_PERIOD = 20
+BOLLINGER_STD_DEV = 2
+
+SMA_SHORT = 20
+SMA_LONG = 50
+
+# Market Data
+DEFAULT_KLINES_LIMIT = 100
+ORDERBOOK_DEPTH = 20
+RECENT_TRADES_LIMIT = 100
+
+# Timeframes
+TIMEFRAMES = {
+    "5m": "5 minutes",
+    "15m": "15 minutes",
+    "1h": "1 hour",
+    "4h": "4 hours",
+    "1d": "1 day"
+}
+
+MULTI_TIMEFRAME_LIST = ["5m", "15m", "1h", "4h", "1d"]
+
+# Risk Management
+MIN_CONFIDENCE = 7
+MAX_CONFIDENCE = 10
+DEFAULT_CONFIDENCE = 5
+
+BASE_RISK_PERCENTAGE = 0.02  # 2%
+MAX_RISK_PER_TRADE = 0.03   # 3%
+MAX_DRAWDOWN = 0.15          # 15%
+MAX_EXPOSURE = 0.10          # 10%
+MAX_DAILY_TRADES = 5
+
+# Position Sizing
+MIN_POSITION_SIZE_PCT = 0.01  # 1%
+CONFIDENCE_RISK_MULTIPLIER = 0.1  # 10% per confidence point
+
+# Paper Trading
+INITIAL_BALANCE = 10000.0
+MONITORING_INTERVAL_SECONDS = 5
+PRICE_CHECK_INTERVAL = 5
+
+# API Timeouts (seconds)
+API_TIMEOUT = 10
+API_RETRY_DELAY_BASE = 2.0
+API_MAX_RETRIES = 4
+
+# Binance Rate Limits
+BINANCE_MAX_REQUESTS_PER_MINUTE = 1200
+BINANCE_MAX_ORDERS_PER_SECOND = 10
+BINANCE_RATE_LIMIT_PERIOD = 60
+
+# Circuit Breaker
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
+CIRCUIT_BREAKER_RECOVERY_TIMEOUT = 60
+
+# DeepSeek API
+DEEPSEEK_TEMPERATURE = 0.3
+DEEPSEEK_MAX_TOKENS = 1000
+
+# Sentiment Analysis
+SENTIMENT_POSITIVE_THRESHOLD = 0.6
+SENTIMENT_NEGATIVE_THRESHOLD = 0.4
+SENTIMENT_NEUTRAL_MIN = 0.4
+SENTIMENT_NEUTRAL_MAX = 0.6
+
+# Structure Detection
+MIN_STRUCTURE_POINTS = 3
+STRUCTURE_CONFIRMATION_BARS = 2
+
+# Order Flow
+ORDERBOOK_IMBALANCE_THRESHOLD = 1.5  # 50% more on one side
+CVD_SIGNIFICANT_THRESHOLD = 0.2       # 20% cumulative delta
+
+# Backtesting
+BACKTEST_DEFAULT_INTERVAL = "1h"
+BACKTEST_MIN_HISTORY_DAYS = 7
+BACKTEST_WARMUP_CANDLES = 50
+
+# File Paths
+PORTFOLIO_DIR = "portfolio"
+TRADES_DIR = "paper_trades"
+LOGS_DIR = "logs"
+SIMULATION_LOGS_DIR = "simulation_logs"
+SIGNALS_DIR = "signals"
+
+STATE_FILE = "portfolio/state.json"
+PERFORMANCE_REPORT_PREFIX = "performance_report"
+
+# Log Files
+MAIN_LOG_FILE = "logs/trading_bot.log"
+LOG_MAX_BYTES = 10_485_760  # 10MB
+LOG_BACKUP_COUNT = 5
+
+# Top Crypto Pairs (from config.py)
+TOP_5_PAIRS = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT"
+]
+
+TOP_10_PAIRS = TOP_5_PAIRS + [
+    "ADAUSDT",
+    "DOGEUSDT",
+    "AVAXUSDT",
+    "DOTUSDT",
+    "LINKUSDT"
+]
+
+# Analysis Modes
+MODE_SINGLE = "single"
+MODE_MONITOR = "monitor"
+MODE_TOP5 = "top5"
+MODE_TOP10 = "top10"
+
+# Signal Types
+SIGNAL_BUY = "BUY"
+SIGNAL_SELL = "SELL"
+SIGNAL_HOLD = "HOLD"
+
+# Position Status
+STATUS_OPEN = "OPEN"
+STATUS_CLOSED = "CLOSED"
+STATUS_PENDING = "PENDING"
+
+# Close Reasons
+CLOSE_REASON_STOP_LOSS = "STOP_LOSS"
+CLOSE_REASON_TAKE_PROFIT_1 = "TAKE_PROFIT_1"
+CLOSE_REASON_TAKE_PROFIT_2 = "TAKE_PROFIT_2"
+CLOSE_REASON_MANUAL = "MANUAL"
+CLOSE_REASON_EXPIRED = "EXPIRED"
+
+# Trend States
+TREND_BULLISH = "bullish"
+TREND_BEARISH = "bearish"
+TREND_NEUTRAL = "neutral"
+
+# Momentum States
+MOMENTUM_OVERBOUGHT = "overbought"
+MOMENTUM_OVERSOLD = "oversold"
+MOMENTUM_NEUTRAL = "neutral"
+
+# Market Structure
+STRUCTURE_UPTREND = "UPTREND"
+STRUCTURE_DOWNTREND = "DOWNTREND"
+STRUCTURE_RANGE = "RANGE"
+
+# Trend Strength
+TREND_STRONG = "strong"
+TREND_MODERATE = "moderate"
+TREND_WEAK = "weak"
+
+# Circuit Breaker States
+CIRCUIT_CLOSED = "CLOSED"
+CIRCUIT_OPEN = "OPEN"
+CIRCUIT_HALF_OPEN = "HALF_OPEN"
