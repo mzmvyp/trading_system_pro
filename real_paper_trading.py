@@ -343,7 +343,21 @@ class RealPaperTradingSystem:
                 "status": "OPEN",
                 "max_profit_reached": 0.0,
                 "max_loss_reached": 0.0,
-                "tp1_partial_closed": False  # Flag para indicar se TP1 já foi parcialmente fechado
+                "tp1_partial_closed": False,  # Flag para indicar se TP1 já foi parcialmente fechado
+                # CORRIGIDO: Armazenar indicadores técnicos para Online Learning
+                "indicators": {
+                    "rsi": signal.get("rsi", signal.get("indicators", {}).get("rsi", 50)),
+                    "macd_histogram": signal.get("macd_histogram", signal.get("indicators", {}).get("macd_histogram", 0)),
+                    "adx": signal.get("adx", signal.get("indicators", {}).get("adx", 25)),
+                    "atr": signal.get("atr", signal.get("indicators", {}).get("atr", 0)),
+                    "bb_position": signal.get("bb_position", signal.get("indicators", {}).get("bb_position", 0.5)),
+                    "cvd": signal.get("cvd", signal.get("order_flow", {}).get("cvd", 0)),
+                    "orderbook_imbalance": signal.get("orderbook_imbalance", signal.get("order_flow", {}).get("orderbook_imbalance", 0.5)),
+                    "bullish_tf_count": signal.get("bullish_tf_count", 0),
+                    "bearish_tf_count": signal.get("bearish_tf_count", 0),
+                    "trend": signal.get("trend", "neutral"),
+                    "sentiment": signal.get("sentiment", "neutral"),
+                }
             }
             
             # MODIFICADO: Não deduzir do saldo - sistema foca apenas em P&L
@@ -685,16 +699,32 @@ class RealPaperTradingSystem:
                             result = val
                             break
                             
-                    # Preparar sinal para registro
+                    # CORRIGIDO: Preparar sinal com TODOS os indicadores para Online Learning
+                    indicators = position.get('indicators', {})
                     signal_data = {
                         'symbol': symbol,
                         'signal': signal_type,
                         'confidence': position.get('confidence', 5),
-                        'indicators': position.get('indicators', {}),
                         'entry_price': entry_price,
-                        'close_price': current_price
+                        'close_price': current_price,
+                        'stop_loss': position.get('stop_loss', 0),
+                        'take_profit_1': position.get('take_profit_1', 0),
+                        # Indicadores técnicos extraídos
+                        'rsi': indicators.get('rsi', 50),
+                        'macd_histogram': indicators.get('macd_histogram', 0),
+                        'adx': indicators.get('adx', 25),
+                        'atr': indicators.get('atr', 0),
+                        'bb_position': indicators.get('bb_position', 0.5),
+                        'cvd': indicators.get('cvd', 0),
+                        'orderbook_imbalance': indicators.get('orderbook_imbalance', 0.5),
+                        'bullish_tf_count': indicators.get('bullish_tf_count', 0),
+                        'bearish_tf_count': indicators.get('bearish_tf_count', 0),
+                        'trend': indicators.get('trend', 'neutral'),
+                        'sentiment': indicators.get('sentiment', 'neutral'),
+                        # Manter 'indicators' para compatibilidade
+                        'indicators': indicators,
                     }
-                    
+
                     add_trade_result(signal_data, result, total_pnl_percent)
                     logger.info(f"[OL] Resultado registrado para online learning: {symbol} -> {result}")
                 except Exception as e:
