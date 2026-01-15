@@ -41,15 +41,16 @@ TIMEFRAMES = {
 MULTI_TIMEFRAME_LIST = ["5m", "15m", "1h", "4h", "1d"]
 
 # Risk Management
+# CORRIGIDO: Valores sincronizados com config.py
 MIN_CONFIDENCE = 7
 MAX_CONFIDENCE = 10
 DEFAULT_CONFIDENCE = 5
 
-BASE_RISK_PERCENTAGE = 0.02  # 2%
-MAX_RISK_PER_TRADE = 0.03   # 3%
-MAX_DRAWDOWN = 0.15          # 15%
-MAX_EXPOSURE = 0.10          # 10%
-MAX_DAILY_TRADES = 5
+BASE_RISK_PERCENTAGE = 0.01  # 1% (sincronizado com config.py)
+MAX_RISK_PER_TRADE = 0.02   # 2% (sincronizado com config.py)
+MAX_DRAWDOWN = 0.15          # 15% (sincronizado com config.py)
+MAX_EXPOSURE = 0.50          # 50% (sincronizado com config.py)
+MAX_DAILY_TRADES = 3         # 3 trades por dia (sincronizado com config.py)
 
 # Position Sizing
 MIN_POSITION_SIZE_PCT = 0.01  # 1%

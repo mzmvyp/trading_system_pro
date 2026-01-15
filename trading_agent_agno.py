@@ -155,16 +155,28 @@ class AgnoTradingAgent:
             
             # Configuracao: threshold de probabilidade para aceitar sinal
             from config import settings
-            ml_threshold = getattr(settings, 'ml_validation_threshold', 0.5)
+            ml_threshold = getattr(settings, 'ml_validation_threshold', 0.65)
             ml_required = getattr(settings, 'ml_validation_required', False)
             ml_enabled = getattr(settings, 'ml_validation_enabled', True)
-            
-            has_confluence = prediction == 1 and probability > ml_threshold
-            
-            # Se ML está habilitado, só executar se houver confluência
-            # ml_required força a validação mesmo se ml_enabled=False
-            skip_signal = (ml_enabled or ml_required) and not has_confluence
-            
+
+            # CORRIGIDO: Lógica de confluência mais clara
+            # has_confluence = True se modelo prevê sucesso E probabilidade > threshold
+            has_confluence = prediction == 1 and probability >= ml_threshold
+
+            # CORRIGIDO: Lógica de skip mais clara
+            # skip_signal = True APENAS se:
+            # - ml_required=True (ML é obrigatório) E não tem confluência, OU
+            # - ml_enabled=True E não tem confluência E probabilidade é muito baixa (< 0.4)
+            if ml_required:
+                # Se ML é obrigatório, só executa com confluência
+                skip_signal = not has_confluence
+            elif ml_enabled:
+                # Se ML está habilitado mas não obrigatório, só bloqueia se prob muito baixa
+                skip_signal = not has_confluence and probability < 0.4
+            else:
+                # Se ML desabilitado, não bloqueia
+                skip_signal = False
+
             return {
                 "skip_signal": skip_signal,
                 "has_confluence": has_confluence,
@@ -215,6 +227,75 @@ class AgnoTradingAgent:
         if risk > 0:
             return reward / risk
         return 1.0
+
+    # REFATORADO: Constante de preços padrão para evitar duplicação
+    DEFAULT_PRICES = {
+        "BTCUSDT": 90000, "ETHUSDT": 3000, "SOLUSDT": 140,
+        "BNBUSDT": 600, "ADAUSDT": 0.5, "XRPUSDT": 2.0,
+        "DOGEUSDT": 0.15, "AVAXUSDT": 40, "DOTUSDT": 7,
+        "LINKUSDT": 20, "PAXGUSDT": 2700
+    }
+
+    def _extract_price_from_text(self, text: str, min_price: float = 0.01, max_price: float = 1000000) -> Optional[float]:
+        """
+        REFATORADO: Função helper para extrair preço de texto.
+        Elimina código duplicado de extração de preço.
+
+        Args:
+            text: Texto para buscar preço
+            min_price: Preço mínimo válido
+            max_price: Preço máximo válido
+
+        Returns:
+            Preço extraído ou None se não encontrado
+        """
+        if not text:
+            return None
+
+        price_patterns = [
+            r"\$([0-9,]+\.?[0-9]+)",  # $90,563.50
+            r"([0-9]{1,3}(?:[,.][0-9]{1,2})?)\s*(?:USD|USDT)",  # 90,563.50 USD
+            r"preço[^0-9]*([0-9,]+\.?[0-9]+)",  # preço 90,563.50
+            r"preco[^0-9]*([0-9,]+\.?[0-9]+)",  # preco 90,563.50
+            r"entrada[^0-9]*\$?([0-9,]+\.?[0-9]*)",
+            r"entry[^0-9]*\$?([0-9,]+\.?[0-9]*)",
+            r"entry_price[^0-9]*[:=]\s*\$?([0-9,]+\.?[0-9]*)",
+            r"current[^0-9]*price[^0-9]*\$?([0-9,]+\.?[0-9]*)"
+        ]
+
+        for pattern in price_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                try:
+                    price_str = match.group(1).replace(",", "")
+                    price = float(price_str)
+                    if min_price <= price <= max_price:
+                        return price
+                except ValueError:
+                    continue
+
+        return None
+
+    def _get_default_price(self, symbol: str) -> float:
+        """Retorna preço padrão para um símbolo"""
+        return self.DEFAULT_PRICES.get(symbol, 100)
+
+    def _calculate_stop_loss(self, entry_price: float, signal_type: str, distance_pct: float = 0.02) -> float:
+        """
+        REFATORADO: Calcula stop loss baseado no tipo de sinal.
+
+        Args:
+            entry_price: Preço de entrada
+            signal_type: BUY ou SELL
+            distance_pct: Distância percentual do stop (default 2%)
+
+        Returns:
+            Preço do stop loss
+        """
+        if signal_type == "BUY":
+            return entry_price * (1 - distance_pct)
+        else:  # SELL
+            return entry_price * (1 + distance_pct)
     
     def _get_instructions(self) -> str:
         """Retorna as instruções para o agent"""
@@ -978,19 +1059,21 @@ class AgnoTradingAgent:
                     r"alvo[^0-9]*1[^0-9]*\$?([0-9,]+\.?[0-9]*)",
                     r"target[^0-9]*1[^0-9]*\$?([0-9,]+\.?[0-9]*)"
                 ]
-                
+
                 signal["take_profit_1"] = None
                 for pattern in tp1_patterns:
                     tp1_match = re.search(pattern, response_text, re.IGNORECASE)
                     if tp1_match:
                         try:
                             price = float(tp1_match.group(1).replace(",", ""))
-                            if signal["entry_price"] and price < signal["entry_price"] and price >= 1000:
+                            # CORRIGIDO: price >= 0.01 ao invés de price >= 1000
+                            # Isso permite TP para moedas baratas como DOGE, ADA, etc.
+                            if signal["entry_price"] and price < signal["entry_price"] and price >= 0.01:
                                 signal["take_profit_1"] = price
                                 break
                         except ValueError:
                             continue
-                
+
                 # Se não encontrou, calcular 2% abaixo
                 if not signal["take_profit_1"] and signal["entry_price"]:
                     signal["take_profit_1"] = signal["entry_price"] * 0.98
@@ -1027,19 +1110,21 @@ class AgnoTradingAgent:
                     r"alvo[^0-9]*2[^0-9]*\$?([0-9,]+\.?[0-9]*)",
                     r"target[^0-9]*2[^0-9]*\$?([0-9,]+\.?[0-9]*)"
                 ]
-                
+
                 signal["take_profit_2"] = None
                 for pattern in tp2_patterns:
                     tp2_match = re.search(pattern, response_text, re.IGNORECASE)
                     if tp2_match:
                         try:
                             price = float(tp2_match.group(1).replace(",", ""))
-                            if signal["entry_price"] and price < signal["take_profit_1"] and price >= 1000:
+                            # CORRIGIDO: price >= 0.01 ao invés de price >= 1000
+                            # Isso permite TP para moedas baratas como DOGE, ADA, etc.
+                            if signal["entry_price"] and signal["take_profit_1"] and price < signal["take_profit_1"] and price >= 0.01:
                                 signal["take_profit_2"] = price
                                 break
                         except ValueError:
                             continue
-                
+
                 # Se não encontrou, calcular 5% abaixo
                 if not signal["take_profit_2"] and signal["entry_price"]:
                     signal["take_profit_2"] = signal["entry_price"] * 0.95

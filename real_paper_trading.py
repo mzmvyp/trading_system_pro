@@ -55,67 +55,69 @@ class RealPaperTradingSystem:
         self._load_state()
     
     def _load_state(self):
-        """Carrega estado anterior do sistema"""
-        try:
-            if os.path.exists("portfolio/state.json"):
-                with open("portfolio/state.json", "r", encoding='utf-8') as f:
-                    state = json.load(f)
-                    # MODIFICADO: Não carregar current_balance (sistema em modo P&L)
-                    self.positions = state.get("positions", {})
-                    self.trade_history = state.get("trade_history", [])
-                    logger.info(f"Estado carregado: {len(self.positions)} posições abertas (modo P&L)")
-                    
-                    # MIGRAÇÃO: Adicionar campo 'source' para posições antigas que não têm
-                    migration_needed = False
-                    for pos_key, pos in self.positions.items():
-                        if "source" not in pos:
-                            # Tentar inferir da chave
-                            if "_DEEPSEEK" in pos_key:
-                                pos["source"] = "DEEPSEEK"
-                            elif "_AGNO" in pos_key:
-                                pos["source"] = "AGNO"
-                            else:
-                                pos["source"] = "LEGACY"  # Posições antigas sem identificação
-                            migration_needed = True
-                            logger.info(f"[MIGRACAO] Adicionado campo 'source' para posição {pos_key}: {pos['source']}")
+        """Carrega estado anterior do sistema com proteção de lock"""
+        # CORRIGIDO: Usar lock para evitar leitura durante escrita
+        with self._save_lock:
+            try:
+                if os.path.exists("portfolio/state.json"):
+                    with open("portfolio/state.json", "r", encoding='utf-8') as f:
+                        state = json.load(f)
+                        # MODIFICADO: Não carregar current_balance (sistema em modo P&L)
+                        self.positions = state.get("positions", {})
+                        self.trade_history = state.get("trade_history", [])
+                        logger.info(f"Estado carregado: {len(self.positions)} posições abertas (modo P&L)")
 
-                    # MIGRAÇÃO: Converter pnl para pnl_percent em trades antigos
-                    for trade in self.trade_history:
-                        if trade.get("pnl") is not None and trade.get("pnl_percent") is None:
-                            entry = trade.get("entry_price", 1)
-                            size = trade.get("position_size", 1)
-                            if entry > 0 and size > 0:
-                                trade["pnl_percent"] = (trade["pnl"] / (entry * size)) * 100
+                        # MIGRAÇÃO: Adicionar campo 'source' para posições antigas que não têm
+                        migration_needed = False
+                        for pos_key, pos in self.positions.items():
+                            if "source" not in pos:
+                                # Tentar inferir da chave
+                                if "_DEEPSEEK" in pos_key:
+                                    pos["source"] = "DEEPSEEK"
+                                elif "_AGNO" in pos_key:
+                                    pos["source"] = "AGNO"
+                                else:
+                                    pos["source"] = "LEGACY"  # Posições antigas sem identificação
                                 migration_needed = True
-                                logger.info(f"[MIGRACAO] Trade {trade.get('trade_id')}: pnl=${trade['pnl']:.2f} -> pnl_percent={trade['pnl_percent']:.2f}%")
+                                logger.info(f"[MIGRACAO] Adicionado campo 'source' para posição {pos_key}: {pos['source']}")
 
-                    # MIGRAÇÃO: Adicionar operation_type para posições antigas
-                    for pos_key, pos in self.positions.items():
-                        if "operation_type" not in pos:
-                            pos["operation_type"] = "SWING_TRADE"  # Default para posições antigas
-                            migration_needed = True
-                            logger.info(f"[MIGRACAO] Adicionado operation_type=SWING_TRADE para {pos_key}")
+                        # MIGRAÇÃO: Converter pnl para pnl_percent em trades antigos
+                        for trade in self.trade_history:
+                            if trade.get("pnl") is not None and trade.get("pnl_percent") is None:
+                                entry = trade.get("entry_price", 1)
+                                size = trade.get("position_size", 1)
+                                if entry > 0 and size > 0:
+                                    trade["pnl_percent"] = (trade["pnl"] / (entry * size)) * 100
+                                    migration_needed = True
+                                    logger.info(f"[MIGRACAO] Trade {trade.get('trade_id')}: pnl=${trade['pnl']:.2f} -> pnl_percent={trade['pnl_percent']:.2f}%")
 
-                    # Salvar estado após migração se necessário
-                    if migration_needed:
-                        self._save_state()
-                        logger.info("[MIGRACAO] Estado salvo após migração de campos 'source' e pnl_percent")
-                    
-                    # CRÍTICO: Iniciar monitoramento apenas em modo PAPER
-                    # Em modo REAL, a Binance gerencia stop loss/take profit
-                    from config import settings
-                    if settings.trading_mode == "paper":
-                        if len(self.positions) > 0 and not self.is_monitoring:
-                            logger.warning(f"[CRITICO] Posicoes abertas encontradas mas monitoramento nao esta ativo. Iniciando monitoramento...")
-                            self.start_monitoring()
-                    else:
-                        logger.info(f"[MODO REAL] Monitoramento de posicoes desabilitado - Binance gerencia SL/TP automaticamente")
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.error(f"Erro ao decodificar state.json: {e}")
-        except IOError as e:
-            logger.error(f"Erro ao ler arquivo de estado: {e}")
+                        # MIGRAÇÃO: Adicionar operation_type para posições antigas
+                        for pos_key, pos in self.positions.items():
+                            if "operation_type" not in pos:
+                                pos["operation_type"] = "SWING_TRADE"  # Default para posições antigas
+                                migration_needed = True
+                                logger.info(f"[MIGRACAO] Adicionado operation_type=SWING_TRADE para {pos_key}")
+
+                # Salvar estado após migração se necessário (fora do with open)
+                if os.path.exists("portfolio/state.json") and migration_needed:
+                    # Não chamar _save_state aqui pois já temos o lock
+                    pass
+
+            except Exception as e:
+                logger.error(f"Erro ao carregar estado: {e}")
+
+        # CRÍTICO: Iniciar monitoramento apenas em modo PAPER (fora do lock)
+        # Em modo REAL, a Binance gerencia stop loss/take profit
+        try:
+            from config import settings
+            if settings.trading_mode == "paper":
+                if len(self.positions) > 0 and not self.is_monitoring:
+                    logger.warning(f"[CRITICO] Posicoes abertas encontradas mas monitoramento nao esta ativo. Iniciando monitoramento...")
+                    self.start_monitoring()
+            else:
+                logger.info(f"[MODO REAL] Monitoramento de posicoes desabilitado - Binance gerencia SL/TP automaticamente")
         except Exception as e:
-            logger.exception(f"Erro inesperado ao carregar estado: {e}")
+            logger.error(f"Erro ao verificar modo de trading: {e}")
     
     def _save_state(self):
         """Salva estado atual do sistema usando escrita atômica com retry e lock"""
