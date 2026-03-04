@@ -40,6 +40,11 @@ venv.bak/
 logs/
 *.log
 
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
 # Data directories
 deepseek_logs/
 ml_dataset/
@@ -59,4 +64,5 @@ Thumbs.db
 *.temp
 *.md
 !README.md
+!docs/*.md
 

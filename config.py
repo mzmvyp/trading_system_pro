@@ -4,7 +4,7 @@ Configurações do sistema de trading
 import os
 from typing import Optional
 from pydantic_settings import BaseSettings
-from pydantic import Field, validator
+from pydantic import Field
 
 class Settings(BaseSettings):
     # ========================================
