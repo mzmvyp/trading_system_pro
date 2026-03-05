@@ -28,9 +28,12 @@ ENV PATH=/home/appuser/.local/bin:$PATH
 # Copy application
 COPY --chown=appuser:appuser . .
 
-# Healthcheck (assume main.py can be run with --help)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import config; print('ok')" || exit 1
+# Data directories (models, datasets, backups)
+RUN mkdir -p /app/data/models /app/data/datasets /app/data/backups
 
-EXPOSE 8501
+# Healthcheck: import from src (post-refactor)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "from src.core.config import settings; print('ok')" || exit 1
+
+EXPOSE 8501 8502
 CMD ["python", "main.py", "--symbol", "BTCUSDT", "--mode", "single"]

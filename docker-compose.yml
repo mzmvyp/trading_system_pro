@@ -8,25 +8,45 @@ services:
     env_file: .env
     environment:
       - TRADING_MODE=paper
+      # Notificações (opcional)
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - NOTIFICATION_LEVEL=${NOTIFICATION_LEVEL:-info}
     volumes:
       - ./logs:/app/logs
       - ./portfolio:/app/portfolio
       - ./signals:/app/signals
+      - ./data:/app/data
     restart: unless-stopped
-    # Optional: run dashboard in same container or separate
-    # command: ["python", "main.py", "--symbol", "BTCUSDT", "--mode", "monitor"]
 
   dashboard:
     build: .
     image: trading_system_pro:latest
     container_name: trading_dashboard
     env_file: .env
-    command: ["streamlit", "run", "streamlit_dashboard.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    command: ["streamlit", "run", "src/dashboard/streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
     ports:
       - "8501:8501"
     volumes:
       - ./logs:/app/logs
       - ./portfolio:/app/portfolio
+      - ./data:/app/data
+    restart: unless-stopped
+    depends_on:
+      - bot
+
+  ml_dashboard:
+    build: .
+    image: trading_system_pro:latest
+    container_name: trading_ml_dashboard
+    env_file: .env
+    command: ["streamlit", "run", "src/dashboard/ml_dashboard.py", "--server.port=8502", "--server.address=0.0.0.0"]
+    ports:
+      - "8502:8502"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
     restart: unless-stopped
     depends_on:
       - bot
@@ -34,3 +54,4 @@ services:
 volumes:
   logs:
   portfolio:
+  data:
