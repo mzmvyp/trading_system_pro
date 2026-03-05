@@ -71,6 +71,11 @@ async def main():
     
     args = parser.parse_args()
 
+    # Respeitar TRADING_MODE do .env: real = executar na Binance (testnet/prod)
+    from src.core.config import settings
+    if settings.trading_mode == "real":
+        args.paper = False
+
     # Banner
     print("\n" + "="*60)
     print("SISTEMA DE TRADING COM AGNO AGENT")
