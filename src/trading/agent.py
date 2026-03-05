@@ -96,7 +96,7 @@ class AgnoTradingAgent:
     def _load_ml_validator(self):
         """Carrega o validador ML se disponível"""
         try:
-            from simple_signal_validator import SimpleSignalValidator
+            from src.ml.simple_validator import SimpleSignalValidator
             validator = SimpleSignalValidator()
             validator.load_models()
             self.ml_validator = validator
