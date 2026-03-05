@@ -398,3 +398,88 @@ def _calculate_suggested_stops(atr: float, price: float, signal_type: str = "BUY
             "suggested_tp1_pct": 2.5,
             "suggested_tp2_pct": 5.0
         }
+
+
+def calculate_stochastic(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    k_period: int = 14, d_period: int = 3
+) -> Dict[str, Any]:
+    """
+    Calculate Stochastic Oscillator.
+    Source: agente_trade_futuros
+    Returns %K, %D, and interpretation.
+    """
+    try:
+        lowest_low = low.rolling(k_period).min()
+        highest_high = high.rolling(k_period).max()
+        stoch_k = 100 * (close - lowest_low) / (highest_high - lowest_low + 1e-10)
+        stoch_d = stoch_k.rolling(d_period).mean()
+
+        k_val = float(stoch_k.iloc[-1])
+        d_val = float(stoch_d.iloc[-1])
+
+        if k_val > 80:
+            zone = "overbought"
+        elif k_val < 20:
+            zone = "oversold"
+        else:
+            zone = "neutral"
+
+        crossover = "none"
+        if len(stoch_k) >= 2 and len(stoch_d) >= 2:
+            prev_k = float(stoch_k.iloc[-2])
+            prev_d = float(stoch_d.iloc[-2])
+            if prev_k <= prev_d and k_val > d_val:
+                crossover = "bullish"
+            elif prev_k >= prev_d and k_val < d_val:
+                crossover = "bearish"
+
+        return {
+            "stoch_k": k_val,
+            "stoch_d": d_val,
+            "zone": zone,
+            "crossover": crossover,
+        }
+    except Exception as e:
+        logger.warning(f"Stochastic calculation error: {e}")
+        return {"stoch_k": 50.0, "stoch_d": 50.0, "zone": "neutral", "crossover": "none"}
+
+
+def calculate_vwap(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    volume: pd.Series, window: int = 50
+) -> Dict[str, Any]:
+    """
+    Calculate Volume Weighted Average Price (VWAP).
+    Source: sinais
+    Returns VWAP value, distance from price, and signals.
+    """
+    try:
+        typical_price = (high + low + close) / 3
+        pv = typical_price * volume
+        rolling_pv = pv.rolling(window=window).sum()
+        rolling_volume = volume.rolling(window=window).sum()
+        vwap = rolling_pv / (rolling_volume + 1e-10)
+
+        latest_price = float(close.iloc[-1])
+        latest_vwap = float(vwap.iloc[-1])
+        distance_pct = ((latest_price - latest_vwap) / latest_vwap) * 100
+
+        position = "above" if latest_price > latest_vwap else "below"
+
+        signal = "none"
+        if abs(distance_pct) < 0.5:
+            if position == "above":
+                signal = "vwap_support_test"
+            else:
+                signal = "vwap_resistance_test"
+
+        return {
+            "vwap": latest_vwap,
+            "price_vs_vwap": position,
+            "distance_pct": distance_pct,
+            "signal": signal,
+        }
+    except Exception as e:
+        logger.warning(f"VWAP calculation error: {e}")
+        return {"vwap": 0.0, "price_vs_vwap": "unknown", "distance_pct": 0.0, "signal": "none"}
