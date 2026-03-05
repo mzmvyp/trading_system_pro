@@ -8,8 +8,8 @@ import sys
 import json
 import os
 from pathlib import Path
-from trading_agent_agno import AgnoTradingAgent
-from logger import get_logger
+from src.trading.agent import AgnoTradingAgent
+from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -96,7 +96,7 @@ async def main():
         
         elif args.mode == 'monitor':
             # Monitoramento contínuo do Top 10 - SEM dependência do real_paper_trading
-            from config import settings
+            from src.core.config import settings
             
             symbols = settings.top_crypto_pairs  # Todos os pares configurados
             
@@ -156,7 +156,7 @@ async def main():
         
         elif args.mode == 'top5':
             # Todos os pares configurados
-            from config import settings
+            from src.core.config import settings
             symbols = settings.top_crypto_pairs  # Todos os pares configurados
             
             print(f"\n[TOP] Analisando {len(symbols)} pares configurados...")
@@ -190,7 +190,7 @@ async def main():
         
         elif args.mode == 'top10':
             # Todos os pares configurados
-            from config import settings
+            from src.core.config import settings
             symbols = settings.top_crypto_pairs
             
             print(f"\n[TOP] Analisando {len(symbols)} pares configurados...")

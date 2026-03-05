@@ -1,0 +1,818 @@
+"""
+Executor de Ordens para Binance Futures
+Executa ordens reais na Binance Futures USDT-M
+
+AVISO: Este modulo executa ordens REAIS com dinheiro REAL.
+Use com extrema cautela. Teste sempre em modo paper primeiro.
+"""
+
+import asyncio
+import aiohttp
+import hashlib
+import hmac
+import time
+import json
+import os
+from datetime import datetime
+from typing import Dict, Any, Optional, List
+from urllib.parse import urlencode
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Carregar variaveis de ambiente
+load_dotenv()
+
+from src.core.logger import get_logger
+from src.core.config import settings
+
+logger = get_logger(__name__)
+
+
+class BinanceFuturesExecutor:
+    """
+    Executor de ordens para Binance Futures USDT-M.
+
+    Recursos:
+    - Ordens de mercado e limite
+    - Stop Loss e Take Profit automáticos
+    - Gestão de alavancagem
+    - Verificação de margem disponível
+    - Log completo de todas as operações
+    - Suporte a Testnet para testes
+    """
+
+    # URLs da Binance Futures
+    PRODUCTION_URL = "https://fapi.binance.com"
+    TESTNET_URL = "https://testnet.binancefuture.com"
+
+    def __init__(self):
+        """
+        Inicializa o executor de Binance Futures.
+
+        Requer:
+        - BINANCE_API_KEY: Chave da API Binance
+        - BINANCE_SECRET_KEY: Chave secreta da API Binance
+        """
+        # Verificar se deve usar testnet
+        self.use_testnet = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
+        self.BASE_URL = self.TESTNET_URL if self.use_testnet else self.PRODUCTION_URL
+        
+        self.api_key = os.getenv("BINANCE_API_KEY") or settings.binance_api_key
+        self.api_secret = os.getenv("BINANCE_SECRET_KEY") or settings.binance_secret_key
+
+        if not self.api_key or not self.api_secret:
+            raise ValueError(
+                "BINANCE_API_KEY e BINANCE_SECRET_KEY sao necessarios para modo REAL. "
+                "Configure no arquivo .env ou nas variaveis de ambiente."
+            )
+
+        # Diretório para logs de ordens reais
+        self.orders_dir = Path("real_orders")
+        self.orders_dir.mkdir(exist_ok=True)
+
+        # Alavancagem padrão (conservadora)
+        self.default_leverage = 5
+
+        # Log do modo
+        if self.use_testnet:
+            logger.info("="*60)
+            logger.info("[BINANCE FUTURES] MODO TESTNET ATIVO")
+            logger.info(f"[BINANCE FUTURES] URL: {self.BASE_URL}")
+            logger.info("="*60)
+        else:
+            logger.warning("="*60)
+            logger.warning("[BINANCE FUTURES] MODO PRODUCAO ATIVO - ORDENS REAIS!")
+            logger.warning(f"[BINANCE FUTURES] URL: {self.BASE_URL}")
+            logger.warning("="*60)
+
+    def _generate_signature(self, params: Dict[str, Any]) -> str:
+        """Gera assinatura HMAC SHA256 para autenticação"""
+        query_string = urlencode(params)
+        signature = hmac.new(
+            self.api_secret.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        return signature
+
+    async def _request(
+        self,
+        method: str,
+        endpoint: str,
+        params: Dict[str, Any] = None,
+        signed: bool = False,
+        retry_timestamp: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Faz requisição à API Binance Futures.
+
+        Args:
+            method: GET, POST, DELETE
+            endpoint: Endpoint da API (ex: /fapi/v1/order)
+            params: Parâmetros da requisição
+            signed: Se True, adiciona timestamp e assinatura
+            retry_timestamp: Se True, faz retry com timestamp ajustado em caso de erro -1021
+
+        Returns:
+            Resposta da API como dict
+        """
+        url = f"{self.BASE_URL}{endpoint}"
+        params = params or {}
+        
+        # Fazer cópia dos params para não modificar o original
+        request_params = params.copy()
+
+        headers = {
+            "X-MBX-APIKEY": self.api_key
+        }
+
+        if signed:
+            # Ajustar timestamp para evitar erro -1021 (timestamp ahead of server)
+            # Subtrair 1000ms para garantir que não fique à frente do servidor
+            request_params["timestamp"] = int(time.time() * 1000) - 1000
+            request_params["signature"] = self._generate_signature(request_params)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                if method == "GET":
+                    async with session.get(url, params=request_params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                        data = await response.json()
+                elif method == "POST":
+                    async with session.post(url, params=request_params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                        data = await response.json()
+                elif method == "DELETE":
+                    async with session.delete(url, params=request_params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                        data = await response.json()
+                else:
+                    raise ValueError(f"Metodo HTTP nao suportado: {method}")
+
+                # Verificar erro da API
+                if isinstance(data, dict) and "code" in data and data["code"] < 0:
+                    error_msg = data.get("msg", "Erro desconhecido")
+                    error_code = data["code"]
+                    
+                    # Erro -1021: Timestamp ahead of server - fazer retry com timestamp ajustado
+                    if error_code == -1021 and signed and retry_timestamp:
+                        logger.warning(f"[BINANCE API] Erro -1021 detectado. Ajustando timestamp e tentando novamente...")
+                        # Ajustar timestamp ainda mais (subtrair mais 2000ms total = 3000ms)
+                        request_params["timestamp"] = int(time.time() * 1000) - 3000
+                        request_params["signature"] = self._generate_signature(request_params)
+                        
+                        # Retry uma vez com timestamp ajustado (fazer requisição diretamente)
+                        await asyncio.sleep(0.1)  # Pequeno delay antes do retry
+                        try:
+                            async with aiohttp.ClientSession() as retry_session:
+                                if method == "GET":
+                                    async with retry_session.get(url, params=request_params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as retry_response:
+                                        retry_data = await retry_response.json()
+                                elif method == "POST":
+                                    async with retry_session.post(url, params=request_params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as retry_response:
+                                        retry_data = await retry_response.json()
+                                elif method == "DELETE":
+                                    async with retry_session.delete(url, params=request_params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as retry_response:
+                                        retry_data = await retry_response.json()
+                                
+                                # Verificar se o retry foi bem-sucedido
+                                if isinstance(retry_data, dict) and "code" in retry_data and retry_data["code"] < 0:
+                                    error_msg = retry_data.get("msg", "Erro desconhecido")
+                                    error_code = retry_data["code"]
+                                    if error_code == -4046:
+                                        logger.info(f"[BINANCE API] Codigo: {error_code}, Mensagem: {error_msg}")
+                                    else:
+                                        logger.error(f"[BINANCE API ERROR] Codigo: {error_code}, Mensagem: {error_msg}")
+                                    return {"error": error_msg, "code": error_code}
+                                
+                                logger.info("[BINANCE API] Retry com timestamp ajustado foi bem-sucedido")
+                                return retry_data
+                        except Exception as retry_e:
+                            logger.error(f"[BINANCE] Erro no retry: {retry_e}")
+                            return {"error": error_msg, "code": error_code}
+                    
+                    # Erro -4046 é apenas um aviso (margem já está no tipo correto)
+                    if error_code == -4046:
+                        logger.info(f"[BINANCE API] Codigo: {error_code}, Mensagem: {error_msg}")
+                    else:
+                        logger.error(f"[BINANCE API ERROR] Codigo: {error_code}, Mensagem: {error_msg}")
+                    
+                    return {"error": error_msg, "code": error_code}
+
+                return data
+
+        except aiohttp.ClientError as e:
+            logger.error(f"[BINANCE] Erro de conexão: {e}")
+            return {"error": f"Erro de conexão: {str(e)}"}
+        except asyncio.TimeoutError:
+            logger.error("[BINANCE] Timeout na requisição")
+            return {"error": "Timeout na requisição"}
+        except Exception as e:
+            logger.exception(f"[BINANCE] Erro inesperado: {e}")
+            return {"error": f"Erro inesperado: {str(e)}"}
+
+    async def get_account_info(self) -> Dict[str, Any]:
+        """Obtém informações da conta Futures"""
+        return await self._request("GET", "/fapi/v2/account", signed=True)
+
+    async def get_balance(self) -> Dict[str, Any]:
+        """Obtém saldo disponível em USDT"""
+        account = await self.get_account_info()
+        if "error" in account:
+            return account
+
+        # Encontrar saldo USDT
+        for asset in account.get("assets", []):
+            if asset["asset"] == "USDT":
+                wallet_balance = float(asset["walletBalance"])
+                return {
+                    "available_balance": float(asset["availableBalance"]),
+                    "wallet_balance": wallet_balance,
+                    "total_balance": wallet_balance,  # Alias para clareza
+                    "unrealized_pnl": float(asset["unrealizedProfit"]),
+                    "margin_balance": float(asset["marginBalance"])
+                }
+
+        return {"error": "USDT nao encontrado na conta"}
+
+    async def get_position(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Obtém posição aberta para um símbolo"""
+        positions = await self._request("GET", "/fapi/v2/positionRisk", {"symbol": symbol}, signed=True)
+
+        if isinstance(positions, dict) and "error" in positions:
+            return positions
+
+        for pos in positions:
+            if pos["symbol"] == symbol and float(pos["positionAmt"]) != 0:
+                return {
+                    "symbol": symbol,
+                    "side": "LONG" if float(pos["positionAmt"]) > 0 else "SHORT",
+                    "position_amt": float(pos["positionAmt"]),
+                    "entry_price": float(pos["entryPrice"]),
+                    "unrealized_pnl": float(pos["unRealizedProfit"]),
+                    "leverage": int(pos["leverage"]),
+                    "liquidation_price": float(pos["liquidationPrice"])
+                }
+
+        return None  # Sem posição aberta
+
+    async def set_leverage(self, symbol: str, leverage: int) -> Dict[str, Any]:
+        """Define alavancagem para um símbolo"""
+        params = {
+            "symbol": symbol,
+            "leverage": leverage
+        }
+        return await self._request("POST", "/fapi/v1/leverage", params, signed=True)
+
+    async def set_margin_type(self, symbol: str, margin_type: str = "ISOLATED") -> Dict[str, Any]:
+        """Define tipo de margem (ISOLATED ou CROSSED)"""
+        params = {
+            "symbol": symbol,
+            "marginType": margin_type
+        }
+        result = await self._request("POST", "/fapi/v1/marginType", params, signed=True)
+
+        # Erro -4046 significa que já está no tipo de margem correto
+        if isinstance(result, dict) and result.get("code") == -4046:
+            return {"success": True, "message": f"Margem ja esta em {margin_type}"}
+
+        return result
+
+    async def get_symbol_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Obtém informações do símbolo (precisão, filtros, etc.)"""
+        exchange_info = await self._request("GET", "/fapi/v1/exchangeInfo")
+
+        if "error" in exchange_info:
+            return exchange_info
+
+        for sym in exchange_info.get("symbols", []):
+            if sym["symbol"] == symbol:
+                # Extrair precisão de quantidade e preço
+                quantity_precision = sym["quantityPrecision"]
+                price_precision = sym["pricePrecision"]
+
+                # Extrair filtros
+                min_qty = None
+                min_notional = None
+                for filter in sym.get("filters", []):
+                    if filter["filterType"] == "LOT_SIZE":
+                        min_qty = float(filter["minQty"])
+                    elif filter["filterType"] == "MIN_NOTIONAL":
+                        min_notional = float(filter.get("notional", 0))
+
+                return {
+                    "symbol": symbol,
+                    "quantity_precision": quantity_precision,
+                    "price_precision": price_precision,
+                    "min_qty": min_qty,
+                    "min_notional": min_notional
+                }
+
+        return {"error": f"Simbolo {symbol} nao encontrado"}
+
+    def _round_quantity(self, quantity: float, precision: int) -> float:
+        """Arredonda quantidade para a precisão correta"""
+        return round(quantity, precision)
+
+    def _round_price(self, price: float, precision: int) -> float:
+        """Arredonda preço para a precisão correta"""
+        return round(price, precision)
+
+    async def place_market_order(
+        self,
+        symbol: str,
+        side: str,  # BUY ou SELL
+        quantity: float,
+        reduce_only: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Coloca ordem de mercado.
+
+        Args:
+            symbol: Símbolo (ex: BTCUSDT)
+            side: BUY ou SELL
+            quantity: Quantidade em unidades base
+            reduce_only: Se True, apenas reduz posição
+
+        Returns:
+            Resultado da ordem
+        """
+        # Obter informações do símbolo
+        symbol_info = await self.get_symbol_info(symbol)
+        if symbol_info and "quantity_precision" in symbol_info:
+            quantity = self._round_quantity(quantity, symbol_info["quantity_precision"])
+
+        params = {
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET",
+            "quantity": quantity
+        }
+
+        if reduce_only:
+            params["reduceOnly"] = "true"
+
+        logger.warning(f"[ORDEM MERCADO] {side} {quantity} {symbol}")
+        result = await self._request("POST", "/fapi/v1/order", params, signed=True)
+
+        # Log da ordem
+        self._log_order(symbol, "MARKET", side, quantity, result)
+
+        return result
+
+    async def place_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        reduce_only: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Coloca ordem limite.
+
+        Args:
+            symbol: Símbolo (ex: BTCUSDT)
+            side: BUY ou SELL
+            quantity: Quantidade em unidades base
+            price: Preço limite
+            reduce_only: Se True, apenas reduz posição
+
+        Returns:
+            Resultado da ordem
+        """
+        # Obter informações do símbolo
+        symbol_info = await self.get_symbol_info(symbol)
+        if symbol_info:
+            quantity = self._round_quantity(quantity, symbol_info.get("quantity_precision", 3))
+            price = self._round_price(price, symbol_info.get("price_precision", 2))
+
+        params = {
+            "symbol": symbol,
+            "side": side,
+            "type": "LIMIT",
+            "quantity": quantity,
+            "price": price,
+            "timeInForce": "GTC"  # Good Till Cancel
+        }
+
+        if reduce_only:
+            params["reduceOnly"] = "true"
+
+        logger.warning(f"[ORDEM LIMITE] {side} {quantity} {symbol} @ ${price}")
+        result = await self._request("POST", "/fapi/v1/order", params, signed=True)
+
+        # Log da ordem
+        self._log_order(symbol, "LIMIT", side, quantity, result, price)
+
+        return result
+
+    async def place_stop_loss(
+        self,
+        symbol: str,
+        side: str,  # Lado oposto da posição
+        quantity: float,
+        stop_price: float
+    ) -> Dict[str, Any]:
+        """
+        Coloca Stop Loss.
+
+        Args:
+            symbol: Símbolo
+            side: BUY (para fechar SHORT) ou SELL (para fechar LONG)
+            quantity: Quantidade
+            stop_price: Preço de ativação do stop
+
+        Returns:
+            Resultado da ordem
+        """
+        symbol_info = await self.get_symbol_info(symbol)
+        if symbol_info:
+            quantity = self._round_quantity(quantity, symbol_info.get("quantity_precision", 3))
+            stop_price = self._round_price(stop_price, symbol_info.get("price_precision", 2))
+
+        params = {
+            "symbol": symbol,
+            "side": side,
+            "type": "STOP_MARKET",
+            "quantity": quantity,
+            "stopPrice": stop_price,
+            "reduceOnly": "true"
+        }
+
+        logger.warning(f"[STOP LOSS] {side} {quantity} {symbol} @ trigger ${stop_price}")
+        result = await self._request("POST", "/fapi/v1/order", params, signed=True)
+
+        self._log_order(symbol, "STOP_LOSS", side, quantity, result, stop_price)
+
+        return result
+
+    async def place_take_profit(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        take_profit_price: float
+    ) -> Dict[str, Any]:
+        """
+        Coloca Take Profit.
+
+        Args:
+            symbol: Símbolo
+            side: BUY (para fechar SHORT) ou SELL (para fechar LONG)
+            quantity: Quantidade
+            take_profit_price: Preço de ativação do take profit
+
+        Returns:
+            Resultado da ordem
+        """
+        symbol_info = await self.get_symbol_info(symbol)
+        if symbol_info:
+            quantity = self._round_quantity(quantity, symbol_info.get("quantity_precision", 3))
+            take_profit_price = self._round_price(take_profit_price, symbol_info.get("price_precision", 2))
+
+        params = {
+            "symbol": symbol,
+            "side": side,
+            "type": "TAKE_PROFIT_MARKET",
+            "quantity": quantity,
+            "stopPrice": take_profit_price,
+            "reduceOnly": "true"
+        }
+
+        logger.warning(f"[TAKE PROFIT] {side} {quantity} {symbol} @ trigger ${take_profit_price}")
+        result = await self._request("POST", "/fapi/v1/order", params, signed=True)
+
+        self._log_order(symbol, "TAKE_PROFIT", side, quantity, result, take_profit_price)
+
+        return result
+
+    async def cancel_all_orders(self, symbol: str) -> Dict[str, Any]:
+        """Cancela todas as ordens abertas de um símbolo"""
+        params = {"symbol": symbol}
+        return await self._request("DELETE", "/fapi/v1/allOpenOrders", params, signed=True)
+
+    async def close_position(self, symbol: str) -> Dict[str, Any]:
+        """
+        Fecha posição aberta (usa ordem de mercado).
+
+        Args:
+            symbol: Símbolo para fechar
+
+        Returns:
+            Resultado do fechamento
+        """
+        # Obter posição atual
+        position = await self.get_position(symbol)
+
+        if not position:
+            return {"success": False, "error": "Nenhuma posição aberta para fechar"}
+
+        if "error" in position:
+            return position
+
+        # Determinar lado oposto para fechar
+        close_side = "SELL" if position["side"] == "LONG" else "BUY"
+        quantity = abs(position["position_amt"])
+
+        # Fechar com ordem de mercado
+        result = await self.place_market_order(symbol, close_side, quantity, reduce_only=True)
+
+        return result
+
+    async def execute_signal(self, signal: Dict[str, Any], position_size: float = None) -> Dict[str, Any]:
+        """
+        Executa um sinal de trading completo.
+
+        Processo:
+        1. Verifica saldo disponível
+        2. Configura alavancagem
+        3. Abre posição com ordem de mercado
+        4. Coloca Stop Loss
+        5. Coloca Take Profit (50% em TP1, 50% em TP2)
+
+        Args:
+            signal: Sinal de trading com entry_price, stop_loss, take_profit_1, take_profit_2
+            position_size: Tamanho da posição (quantidade)
+
+        Returns:
+            Resultado da execução
+        """
+        symbol = signal.get("symbol")
+        signal_type = signal.get("signal")  # BUY ou SELL
+        entry_price = signal.get("entry_price")
+        stop_loss = signal.get("stop_loss")
+        take_profit_1 = signal.get("take_profit_1")
+        take_profit_2 = signal.get("take_profit_2")
+        source = signal.get("source", "UNKNOWN")
+
+        logger.warning("="*60)
+        logger.warning(f"[EXECUTANDO SINAL REAL] {signal_type} {symbol}")
+        logger.warning(f"Fonte: {source}")
+        logger.warning(f"Entry: ${entry_price:.2f}")
+        logger.warning(f"Stop Loss: ${stop_loss:.2f}")
+        logger.warning(f"Take Profit 1: ${take_profit_1:.2f}")
+        logger.warning(f"Take Profit 2: ${take_profit_2:.2f}")
+        logger.warning("="*60)
+
+        try:
+            # 1. Verificar saldo
+            balance = await self.get_balance()
+            if "error" in balance:
+                return {"success": False, "error": f"Erro ao obter saldo: {balance['error']}"}
+
+            available = balance.get("available_balance", 0)
+            total_balance = balance.get("total_balance", available)
+            logger.info(f"[SALDO] Total: ${total_balance:.2f} | Disponivel: ${available:.2f} USDT")
+
+            # 2. Verificar se já existe posição
+            existing_position = await self.get_position(symbol)
+            if existing_position and "position_amt" in existing_position:
+                return {
+                    "success": False,
+                    "error": f"Ja existe posicao aberta para {symbol}: {existing_position['side']} {abs(existing_position['position_amt'])}"
+                }
+
+            # 3. Obter informações do símbolo
+            symbol_info = await self.get_symbol_info(symbol)
+            if not symbol_info or "error" in symbol_info:
+                return {"success": False, "error": f"Erro ao obter info do simbolo: {symbol_info}"}
+
+            # 4. Calcular risco baseado no CAPITAL TOTAL
+            # CORRIGIDO: O risco é calculado sobre o CAPITAL TOTAL, não sobre o disponível
+            # Isso permite abrir até 20 posições simultâneas com 5% de risco cada
+            capital_total = total_balance
+            risk_percent = settings.risk_percent_per_trade / 100.0  # Converter para decimal
+            risk_amount = capital_total * risk_percent  # $ que estamos dispostos a perder
+            
+            if position_size is None:
+                if stop_loss and stop_loss != entry_price:
+                    # Distancia do stop loss em $
+                    stop_distance = abs(entry_price - stop_loss)
+
+                    # Tamanho da posicao (em unidades do ativo)
+                    # Se stop for atingido, perda = position_size * stop_distance = risk_amount
+                    position_size = risk_amount / stop_distance
+
+                    # Calcular valor total da posicao
+                    position_value_calc = position_size * entry_price
+                    
+                    # IMPORTANTE: A margem necessária em modo ISOLATED é apenas o risco (valor do stop)
+                    # Não é o valor_posicao / alavancagem, é o próprio risk_amount + buffer
+                    margin_required = risk_amount * 1.2  # 20% de buffer para taxas e slippage
+
+                    logger.info(f"[RISCO] Capital Total: ${capital_total:.2f} | Risco: {settings.risk_percent_per_trade}% = ${risk_amount:.2f}")
+                    logger.info(f"[POSICAO] Entry: ${entry_price:.4f} | Stop: ${stop_loss:.4f} | Distancia: ${stop_distance:.4f}")
+                    logger.info(f"[POSICAO] Tamanho: {position_size:.4f} unidades | Valor: ${position_value_calc:.2f}")
+                    logger.info(f"[MARGEM] Margem isolada necessaria: ${margin_required:.2f} (risco + buffer)")
+                    
+                    # Verificar se tem margem disponível
+                    if margin_required > available:
+                        logger.warning(f"[MARGEM INSUFICIENTE] Necessario: ${margin_required:.2f} > Disponivel: ${available:.2f}")
+                        return {
+                            "success": False,
+                            "error": f"Margem insuficiente. Disponivel: ${available:.2f}, Necessario: ${margin_required:.2f}"
+                        }
+                else:
+                    # Fallback: usar 1% do saldo se nao tiver stop loss definido
+                    position_value = available * 0.01
+                    position_size = position_value / entry_price
+                    logger.warning(f"[POSICAO FALLBACK] Sem stop loss valido, usando 1% do saldo: {position_size:.6f} unidades")
+
+            # Arredondar para a precisão correta
+            position_size = self._round_quantity(position_size, symbol_info.get("quantity_precision", 3))
+
+            # Verificar quantidade mínima
+            min_qty = symbol_info.get("min_qty", 0)
+            if position_size < min_qty:
+                return {
+                    "success": False,
+                    "error": f"Quantidade {position_size} menor que minimo {min_qty}"
+                }
+
+            # Verificar notional mínimo
+            min_notional = symbol_info.get("min_notional", 0)
+            notional = position_size * entry_price
+            if notional < min_notional:
+                return {
+                    "success": False,
+                    "error": f"Valor nocional ${notional:.2f} menor que minimo ${min_notional}"
+                }
+
+            # 5. Calcular e configurar alavancagem DINAMICA
+            # Para que a margem isolada seja apenas o valor do risco (stop loss)
+            # alavancagem = valor_posicao / margem_desejada
+            position_value = position_size * entry_price
+            desired_margin = risk_amount * 1.2  # Margem = risco + 20% buffer
+            
+            if desired_margin > 0:
+                calculated_leverage = int(position_value / desired_margin)
+                # Limitar entre 1x e 20x (conservador - alguns ativos como PAXG tem limites baixos)
+                calculated_leverage = max(1, min(calculated_leverage, 20))
+            else:
+                calculated_leverage = self.default_leverage
+            
+            logger.info(f"[ALAVANCAGEM] Valor posicao: ${position_value:.2f} / Margem: ${desired_margin:.2f} = {calculated_leverage}x")
+            
+            leverage_result = await self.set_leverage(symbol, calculated_leverage)
+            if "error" in leverage_result:
+                logger.warning(f"Erro ao configurar alavancagem: {leverage_result}")
+
+            # 6. Configurar tipo de margem (ISOLATED para limitar perdas)
+            margin_result = await self.set_margin_type(symbol, "ISOLATED")
+            if isinstance(margin_result, dict) and "error" in margin_result:
+                logger.warning(f"Erro ao configurar margem: {margin_result}")
+
+            # 7. Abrir posição com ordem de mercado
+            order_side = signal_type  # BUY ou SELL
+            main_order = await self.place_market_order(symbol, order_side, position_size)
+
+            if "error" in main_order or (isinstance(main_order, dict) and "orderId" not in main_order):
+                return {
+                    "success": False,
+                    "error": f"Erro ao abrir posicao: {main_order}"
+                }
+
+            logger.info(f"[ORDEM PRINCIPAL] Executada: Order ID {main_order.get('orderId')}")
+
+            # 8. Determinar lado oposto para Stop Loss e Take Profit
+            close_side = "SELL" if signal_type == "BUY" else "BUY"
+
+            # 9. Colocar Stop Loss
+            sl_order = await self.place_stop_loss(symbol, close_side, position_size, stop_loss)
+            if "error" in sl_order:
+                logger.error(f"Erro ao colocar Stop Loss: {sl_order}")
+            else:
+                logger.info(f"[STOP LOSS] Colocado: Order ID {sl_order.get('orderId')}")
+
+            # 10. Colocar Take Profit 1 (50% da posição)
+            tp1_size = self._round_quantity(position_size * 0.5, symbol_info.get("quantity_precision", 3))
+            tp1_order = await self.place_take_profit(symbol, close_side, tp1_size, take_profit_1)
+            if "error" in tp1_order:
+                logger.error(f"Erro ao colocar Take Profit 1: {tp1_order}")
+            else:
+                logger.info(f"[TAKE PROFIT 1] Colocado: Order ID {tp1_order.get('orderId')}")
+
+            # 11. Colocar Take Profit 2 (50% restante)
+            tp2_size = self._round_quantity(position_size - tp1_size, symbol_info.get("quantity_precision", 3))
+            tp2_order = await self.place_take_profit(symbol, close_side, tp2_size, take_profit_2)
+            if "error" in tp2_order:
+                logger.error(f"Erro ao colocar Take Profit 2: {tp2_order}")
+            else:
+                logger.info(f"[TAKE PROFIT 2] Colocado: Order ID {tp2_order.get('orderId')}")
+
+            # 12. Registrar execução completa
+            execution_record = {
+                "timestamp": datetime.now().isoformat(),
+                "symbol": symbol,
+                "source": source,
+                "signal": signal_type,
+                "entry_price": entry_price,
+                "position_size": position_size,
+                "leverage": self.default_leverage,
+                "stop_loss": stop_loss,
+                "take_profit_1": take_profit_1,
+                "take_profit_2": take_profit_2,
+                "main_order_id": main_order.get("orderId"),
+                "sl_order_id": sl_order.get("orderId") if "orderId" in sl_order else None,
+                "tp1_order_id": tp1_order.get("orderId") if "orderId" in tp1_order else None,
+                "tp2_order_id": tp2_order.get("orderId") if "orderId" in tp2_order else None,
+                "status": "OPEN"
+            }
+
+            # Salvar registro
+            record_file = self.orders_dir / f"execution_{symbol}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            with open(record_file, "w") as f:
+                json.dump(execution_record, f, indent=2)
+
+            return {
+                "success": True,
+                "message": f"Posicao {signal_type} aberta para {symbol} com SL e TP configurados",
+                "order_id": main_order.get("orderId"),
+                "position_size": position_size,
+                "entry_price": float(main_order.get("avgPrice", entry_price)),
+                "record_file": str(record_file)
+            }
+
+        except Exception as e:
+            logger.exception(f"Erro ao executar sinal: {e}")
+            return {
+                "success": False,
+                "error": f"Erro inesperado: {str(e)}"
+            }
+
+    def _log_order(
+        self,
+        symbol: str,
+        order_type: str,
+        side: str,
+        quantity: float,
+        result: Dict[str, Any],
+        price: float = None
+    ):
+        """Registra ordem em arquivo de log"""
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "symbol": symbol,
+            "order_type": order_type,
+            "side": side,
+            "quantity": quantity,
+            "price": price,
+            "result": result
+        }
+
+        log_file = self.orders_dir / f"orders_{datetime.now().strftime('%Y%m%d')}.json"
+
+        try:
+            if log_file.exists():
+                with open(log_file, "r") as f:
+                    logs = json.load(f)
+            else:
+                logs = []
+
+            logs.append(log_entry)
+
+            with open(log_file, "w") as f:
+                json.dump(logs, f, indent=2)
+
+        except Exception as e:
+            logger.error(f"Erro ao salvar log de ordem: {e}")
+
+    async def get_open_orders(self, symbol: str = None) -> List[Dict[str, Any]]:
+        """Obtém ordens abertas"""
+        params = {}
+        if symbol:
+            params["symbol"] = symbol
+
+        return await self._request("GET", "/fapi/v1/openOrders", params, signed=True)
+
+    async def get_all_positions(self) -> List[Dict[str, Any]]:
+        """Obtém todas as posições abertas"""
+        positions = await self._request("GET", "/fapi/v2/positionRisk", signed=True)
+
+        if isinstance(positions, dict) and "error" in positions:
+            return [positions]
+
+        # Filtrar apenas posições com quantidade != 0
+        open_positions = []
+        for pos in positions:
+            if float(pos.get("positionAmt", 0)) != 0:
+                open_positions.append({
+                    "symbol": pos["symbol"],
+                    "side": "LONG" if float(pos["positionAmt"]) > 0 else "SHORT",
+                    "position_amt": float(pos["positionAmt"]),
+                    "entry_price": float(pos["entryPrice"]),
+                    "unrealized_pnl": float(pos["unRealizedProfit"]),
+                    "leverage": int(pos["leverage"]),
+                    "liquidation_price": float(pos["liquidationPrice"])
+                })
+
+        return open_positions
+
+
+# Instância singleton (inicializada apenas quando necessário)
+_executor_instance = None
+
+def get_executor() -> BinanceFuturesExecutor:
+    """Retorna instância singleton do executor"""
+    global _executor_instance
+    if _executor_instance is None:
+        _executor_instance = BinanceFuturesExecutor()
+    return _executor_instance

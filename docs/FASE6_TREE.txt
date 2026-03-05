@@ -1,4 +1,4 @@
-trading_system_pro/ (tree 4 níveis)
+trading_system_pro/ (estrutura refatorada = main no GitHub)
 ├── .env.example
 ├── .gitignore
 ├── .dockerignore
@@ -7,28 +7,8 @@ trading_system_pro/ (tree 4 níveis)
 │       └── ci.yml
 ├── Dockerfile
 ├── README.md
-├── config.py
-├── constants.py
 ├── requirements.txt
 ├── main.py
-├── logger.py
-├── deepseek_client.py
-├── signal_reevaluator.py
-├── stop_adjuster.py
-├── agno_tools.py
-├── api_utils.py
-├── binance_client.py
-├── binance_futures_executor.py
-├── real_paper_trading.py
-├── portfolio_manager.py
-├── trading_agent_agno.py
-├── streamlit_dashboard.py
-├── ml_dashboard.py
-├── generate_dataset.py
-├── ml_online_learning.py
-├── simple_signal_validator.py
-├── lstm_signal_validator.py
-├── orphan_order_cleaner.py
 ├── test_corrections.py
 ├── docker-compose.yml
 ├── docs/
@@ -36,41 +16,74 @@ trading_system_pro/ (tree 4 níveis)
 │   ├── FASE3_ESTRATEGIAS.md
 │   ├── FASE4_ML_SENTIMENT.md
 │   ├── FASE5_INDICADORES_DASHBOARD.md
-│   └── FASE6_TREE.txt
-├── dashboard/
-│   ├── app.py
-│   ├── pages/
-│   │   ├── overview.py
-│   │   └── backtesting.py
-│   └── components/
-│       ├── charts.py
-│       └── metrics.py
-├── filters/
-│   ├── __init__.py
-│   ├── volatility_filter.py
-│   ├── time_filter.py
-│   ├── market_condition_filter.py
-│   └── fundamental_filter.py
-├── indicators/
-│   ├── __init__.py
-│   └── technical.py
-├── ml/
-│   ├── __init__.py
-│   └── optimization/
-│       └── __init__.py
-├── sentiment/
-│   ├── __init__.py
-│   ├── llm_analyzer.py
-│   ├── news_fetcher.py
-│   └── sentiment_signals.py
-├── strategies/
-│   ├── __init__.py
-│   ├── base_strategy.py
-│   ├── signal_types.py
-│   ├── trend_following.py
-│   ├── mean_reversion.py
-│   ├── breakout.py
-│   └── swing.py
-└── utils/
+│   ├── FASE6_TREE.txt
+│   └── REPOS_EXTRACTION.md
+└── src/
     ├── __init__.py
-    └── helpers.py
+    ├── core/
+    │   ├── __init__.py
+    │   ├── config.py
+    │   ├── constants.py
+    │   └── logger.py
+    ├── exchange/
+    │   ├── __init__.py
+    │   ├── client.py
+    │   ├── executor.py
+    │   └── utils.py
+    ├── analysis/
+    │   ├── __init__.py
+    │   ├── agno_tools.py
+    │   └── indicators.py
+    ├── trading/
+    │   ├── __init__.py
+    │   ├── agent.py
+    │   ├── signal_reevaluator.py
+    │   ├── stop_adjuster.py
+    │   ├── paper_trading.py
+    │   ├── portfolio.py
+    │   ├── orphan_cleaner.py
+    │   └── ...
+    ├── prompts/
+    │   ├── __init__.py
+    │   └── deepseek_client.py
+    ├── dashboard/
+    │   ├── __init__.py
+    │   ├── app.py
+    │   ├── streamlit_app.py
+    │   ├── ml_dashboard.py
+    │   ├── pages/
+    │   │   ├── overview.py
+    │   │   └── backtesting.py
+    │   └── components/
+    │       ├── charts.py
+    │       └── metrics.py
+    ├── ml/
+    │   ├── __init__.py
+    │   ├── dataset_generator.py
+    │   ├── lstm_validator.py
+    │   ├── online_learning.py
+    │   ├── simple_validator.py
+    │   └── optimization/
+    │       └── __init__.py
+    ├── strategies/
+    │   ├── __init__.py
+    │   ├── base_strategy.py
+    │   ├── signal_types.py
+    │   ├── trend_following.py
+    │   ├── mean_reversion.py
+    │   ├── breakout.py
+    │   └── swing.py
+    ├── sentiment/
+    │   ├── __init__.py
+    │   ├── llm_analyzer.py
+    │   ├── news_fetcher.py
+    │   └── sentiment_signals.py
+    ├── filters/
+    │   ├── __init__.py
+    │   ├── volatility_filter.py
+    │   ├── time_filter.py
+    │   ├── market_condition_filter.py
+    │   └── fundamental_filter.py
+    └── utils/
+        ├── __init__.py
+        └── helpers.py
