@@ -22,8 +22,8 @@ from dotenv import load_dotenv
 # Carregar variaveis de ambiente
 load_dotenv()
 
-from logger import get_logger
-from config import settings
+from src.core.logger import get_logger
+from src.core.config import settings
 
 logger = get_logger(__name__)
 

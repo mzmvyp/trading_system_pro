@@ -14,14 +14,14 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-from logger import get_logger
+from src.core.logger import get_logger
 
 # Setup logger
 logger = get_logger(__name__)
 
 # Online Learning - registra resultados para retreino do modelo
 try:
-    from ml_online_learning import add_trade_result
+    from src.ml.online_learning import add_trade_result
     ML_ONLINE_LEARNING_ENABLED = True
 except ImportError:
     ML_ONLINE_LEARNING_ENABLED = False
@@ -109,7 +109,7 @@ class RealPaperTradingSystem:
         # CRÍTICO: Iniciar monitoramento apenas em modo PAPER (fora do lock)
         # Em modo REAL, a Binance gerencia stop loss/take profit
         try:
-            from config import settings
+            from src.core.config import settings
             if settings.trading_mode == "paper":
                 if len(self.positions) > 0 and not self.is_monitoring:
                     logger.warning(f"[CRITICO] Posicoes abertas encontradas mas monitoramento nao esta ativo. Iniciando monitoramento...")
@@ -267,7 +267,7 @@ class RealPaperTradingSystem:
             # CALCULO DE TAMANHO DE POSICAO BASEADO EM RISCO
             # O tamanho da posicao eh calculado para que a perda no stop loss seja
             # exatamente a porcentagem configurada do capital
-            from config import settings
+            from src.core.config import settings
 
             if position_size is None:
                 if stop_loss and stop_loss != entry_price:

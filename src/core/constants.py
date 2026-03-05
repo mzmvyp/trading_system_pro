@@ -41,20 +41,19 @@ TIMEFRAMES = {
 MULTI_TIMEFRAME_LIST = ["5m", "15m", "1h", "4h", "1d"]
 
 # Risk Management
-# CORRIGIDO: Valores sincronizados com config.py
 MIN_CONFIDENCE = 7
 MAX_CONFIDENCE = 10
 DEFAULT_CONFIDENCE = 5
 
-BASE_RISK_PERCENTAGE = 0.01  # 1% (sincronizado com config.py)
-MAX_RISK_PER_TRADE = 0.02   # 2% (sincronizado com config.py)
-MAX_DRAWDOWN = 0.15          # 15% (sincronizado com config.py)
-MAX_EXPOSURE = 0.50          # 50% (sincronizado com config.py)
-MAX_DAILY_TRADES = 3         # 3 trades por dia (sincronizado com config.py)
+BASE_RISK_PERCENTAGE = 0.01
+MAX_RISK_PER_TRADE = 0.02
+MAX_DRAWDOWN = 0.15
+MAX_EXPOSURE = 0.50
+MAX_DAILY_TRADES = 3
 
 # Position Sizing
-MIN_POSITION_SIZE_PCT = 0.01  # 1%
-CONFIDENCE_RISK_MULTIPLIER = 0.1  # 10% per confidence point
+MIN_POSITION_SIZE_PCT = 0.01
+CONFIDENCE_RISK_MULTIPLIER = 0.1
 
 # Paper Trading
 INITIAL_BALANCE = 10000.0
@@ -90,8 +89,8 @@ MIN_STRUCTURE_POINTS = 3
 STRUCTURE_CONFIRMATION_BARS = 2
 
 # Order Flow
-ORDERBOOK_IMBALANCE_THRESHOLD = 1.5  # 50% more on one side
-CVD_SIGNIFICANT_THRESHOLD = 0.2       # 20% cumulative delta
+ORDERBOOK_IMBALANCE_THRESHOLD = 1.5
+CVD_SIGNIFICANT_THRESHOLD = 0.2
 
 # Backtesting
 BACKTEST_DEFAULT_INTERVAL = "1h"
@@ -110,24 +109,16 @@ PERFORMANCE_REPORT_PREFIX = "performance_report"
 
 # Log Files
 MAIN_LOG_FILE = "logs/trading_bot.log"
-LOG_MAX_BYTES = 10_485_760  # 10MB
+LOG_MAX_BYTES = 10_485_760
 LOG_BACKUP_COUNT = 5
 
-# Top Crypto Pairs (from config.py)
+# Top Crypto Pairs
 TOP_5_PAIRS = [
-    "BTCUSDT",
-    "ETHUSDT",
-    "BNBUSDT",
-    "SOLUSDT",
-    "XRPUSDT"
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"
 ]
 
 TOP_10_PAIRS = TOP_5_PAIRS + [
-    "ADAUSDT",
-    "DOGEUSDT",
-    "AVAXUSDT",
-    "DOTUSDT",
-    "LINKUSDT"
+    "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"
 ]
 
 # Analysis Modes
