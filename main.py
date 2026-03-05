@@ -41,6 +41,44 @@ def get_active_positions():
 
     return active_symbols
 
+
+async def log_monitor_summary(settings, interval_sec: int):
+    """No início de cada ciclo do monitor: posições abertas, saldo, próxima análise."""
+    print("\n" + "-"*60)
+    print("[CICLO] Resumo")
+    print("-"*60)
+    try:
+        if settings.trading_mode == "real":
+            from src.exchange.executor import BinanceFuturesExecutor
+            executor = BinanceFuturesExecutor()
+            balance = await executor.get_balance()
+            positions = await executor.get_all_positions()
+            if isinstance(balance, dict) and "error" not in balance:
+                avail = balance.get("available_balance", 0)
+                total = balance.get("total_balance", avail)
+                print(f"  Saldo testnet: ${total:,.2f} USDT (disponível: ${avail:,.2f})")
+            if isinstance(positions, list):
+                open_pos = [p for p in positions if isinstance(p, dict) and "error" not in p]
+                if open_pos:
+                    for p in open_pos:
+                        sym = p.get("symbol", "?")
+                        side = p.get("side", "?")
+                        amt = p.get("position_amt", 0)
+                        pnl = p.get("unrealized_pnl", 0)
+                        print(f"  Posição: {sym} {side} {abs(amt)} | PnL não realizado: ${pnl:,.2f}")
+                else:
+                    print("  Posições abertas: Nenhuma")
+        else:
+            active = get_active_positions()
+            print(f"  Posições ativas (paper): {active if active else 'Nenhuma'}")
+    except Exception as e:
+        logger.warning(f"Erro ao obter resumo: {e}")
+        print(f"  (resumo indisponível: {e})")
+    next_min = interval_sec // 60
+    print(f"  Próxima análise em {next_min} min")
+    print("-"*60)
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description='Sistema de Trading de Criptomoedas com AGNO Agent'
@@ -116,8 +154,19 @@ async def main():
             
             while True:
                 try:
-                    # Verificar posições ativas (via arquivo state.json)
-                    active_positions = get_active_positions()
+                    await log_monitor_summary(settings, args.interval)
+                    # Verificar posições ativas: em modo real = Binance; em paper = state.json
+                    if settings.trading_mode == "real":
+                        try:
+                            from src.exchange.executor import BinanceFuturesExecutor
+                            exec_real = BinanceFuturesExecutor()
+                            all_pos = await exec_real.get_all_positions()
+                            active_positions = [p["symbol"] for p in all_pos if isinstance(p, dict) and "error" not in p and p.get("symbol")]
+                        except Exception as e:
+                            logger.warning(f"Erro ao obter posições Binance: {e}")
+                            active_positions = get_active_positions()
+                    else:
+                        active_positions = get_active_positions()
                     active_positions_set = set(active_positions)
                     
                     # Detectar posições fechadas (estavam ativas antes, mas não estão mais)
