@@ -824,7 +824,8 @@ def _classify_rsi(rsi: float) -> Dict[str, str]:
             return {"zone": "approaching_overbought", "action_hint": "potential_sell"}
         else:
             return {"zone": "overbought", "action_hint": "potential_sell"}
-    except:
+    except Exception as e:
+        logger.warning(f"Erro em _classify_rsi: {e}")
         return {"zone": "neutral", "action_hint": "wait"}
 
 def _interpret_adx(adx: float) -> str:
@@ -838,7 +839,8 @@ def _interpret_adx(adx: float) -> str:
             return "moderate"
         else:
             return "strong"
-    except:
+    except Exception as e:
+        logger.warning(f"Erro em _interpret_adx: {e}")
         return "no_trend"
 
 def _interpret_macd_momentum(histogram: float, prev_histogram: Optional[float] = None) -> str:
@@ -858,7 +860,8 @@ def _interpret_macd_momentum(histogram: float, prev_histogram: Optional[float] =
             return "accelerating_down"
         else:
             return "decelerating_down"
-    except:
+    except Exception as e:
+        logger.warning(f"Erro em _interpret_macd_momentum: {e}")
         return "neutral"
 
 def _classify_bollinger_position(position: float) -> str:
@@ -874,7 +877,8 @@ def _classify_bollinger_position(position: float) -> str:
             return "above_middle"
         else:
             return "upper_band"
-    except:
+    except Exception as e:
+        logger.warning(f"Erro em _classify_bollinger_position: {e}")
         return "middle"
 
 def _detect_ema_alignment(ema20: float, ema50: float, ema200: Optional[float], price: float) -> str:
@@ -894,7 +898,8 @@ def _detect_ema_alignment(ema20: float, ema50: float, ema200: Optional[float], p
                 return "bearish_stack"
             else:
                 return "mixed"
-    except:
+    except Exception as e:
+        logger.warning(f"Erro em _detect_ema_alignment: {e}")
         return "mixed"
 
 def _interpret_funding_rate(rate: float) -> str:
@@ -910,7 +915,8 @@ def _interpret_funding_rate(rate: float) -> str:
             return "slightly_short"
         else:
             return "crowded_short"
-    except:
+    except Exception as e:
+        logger.warning(f"Erro em _interpret_funding_rate: {e}")
         return "neutral"
 
 def _classify_orderbook_imbalance(imbalance: float) -> str:
@@ -926,7 +932,8 @@ def _classify_orderbook_imbalance(imbalance: float) -> str:
             return "sell_pressure"
         else:
             return "strong_sell_pressure"
-    except:
+    except Exception as e:
+        logger.warning(f"Erro em _classify_orderbook_imbalance: {e}")
         return "neutral"
 
 def _calculate_suggested_stops(atr: float, price: float, signal_type: str = "BUY") -> Dict[str, float]:
@@ -948,7 +955,8 @@ def _calculate_suggested_stops(atr: float, price: float, signal_type: str = "BUY
             "suggested_tp1_pct": tp1_pct,
             "suggested_tp2_pct": tp2_pct
         }
-    except:
+    except Exception as e:
+        logger.warning(f"Erro em _calculate_suggested_stops: {e}")
         return {
             "suggested_stop_pct": 2.0,
             "suggested_tp1_pct": 2.5,
@@ -1703,7 +1711,8 @@ def _get_daily_trades_count() -> int:
         trades = real_paper_trading.get_trade_history()
         daily_trades = [t for t in trades if datetime.fromisoformat(t['timestamp']).date() == today]
         return len(daily_trades)
-    except:
+    except Exception as e:
+        logger.warning(f"Erro em _get_daily_trades_count: {e}")
         return 0
 
 def validate_risk_and_position(

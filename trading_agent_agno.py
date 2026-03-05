@@ -906,23 +906,10 @@ class AgnoTradingAgent:
                 
                 # Se ainda não tem entry_price, usar valores padrão baseados no símbolo
                 if not signal.get("entry_price"):
-                    # Valores padrão aproximados (será substituído quando o sistema coletar preço real)
-                    default_prices = {
-                        "BTCUSDT": 90000,
-                        "ETHUSDT": 3000,
-                        "SOLUSDT": 140,
-                        "BNBUSDT": 600,
-                        "ADAUSDT": 0.5,
-                        "XRPUSDT": 2.0,
-                        "DOGEUSDT": 0.15,
-                        "AVAXUSDT": 40,
-                        "DOTUSDT": 7,
-                        "LINKUSDT": 20
-                    }
-                    default_price = default_prices.get(symbol, 100)
+                    default_price = self._get_default_price(symbol)
                     signal["entry_price"] = default_price
                     logger.warning(f"[FALLBACK] Usando preço padrão para {symbol}: ${default_price}")
-                
+
                 # Calcular stop loss se não tiver
                 if not signal.get("stop_loss") and signal.get("entry_price"):
                     if signal["signal"] == "BUY":
@@ -961,13 +948,7 @@ class AgnoTradingAgent:
                 # CORREÇÃO: Não usar asyncio.run() aqui pois já estamos em um event loop
                 # O preço será obtido no método analyze() antes de chamar _process_agent_response
                 if not signal.get("entry_price"):
-                    # Usar valores padrão baseados no símbolo
-                    default_prices = {
-                        "BTCUSDT": 90000, "ETHUSDT": 3000, "SOLUSDT": 140,
-                        "BNBUSDT": 600, "ADAUSDT": 0.5, "XRPUSDT": 2.0,
-                        "DOGEUSDT": 0.15, "AVAXUSDT": 40, "DOTUSDT": 7, "LINKUSDT": 20
-                    }
-                    signal["entry_price"] = default_prices.get(symbol, 100)
+                    signal["entry_price"] = self._get_default_price(symbol)
                     logger.warning(f"[FALLBACK] Usando preço padrão para {symbol}: ${signal['entry_price']}")
             
             # CORRIGIDO: Stop Loss - melhor extração com validação
@@ -1168,19 +1149,7 @@ class AgnoTradingAgent:
                 # Se ainda não tem entry_price, usar valores padrão baseados no símbolo
                 if not signal.get("entry_price"):
                     # Valores padrão aproximados (será substituído quando o sistema coletar preço real)
-                    default_prices = {
-                        "BTCUSDT": 90000,
-                        "ETHUSDT": 3000,
-                        "SOLUSDT": 140,
-                        "BNBUSDT": 600,
-                        "ADAUSDT": 0.5,
-                        "XRPUSDT": 2.0,
-                        "DOGEUSDT": 0.15,
-                        "AVAXUSDT": 40,
-                        "DOTUSDT": 7,
-                        "LINKUSDT": 20
-                    }
-                    default_price = default_prices.get(symbol, 100)
+                    default_price = self._get_default_price(symbol)
                     signal["entry_price"] = default_price
                     logger.warning(f"[FALLBACK] Usando preço padrão para {symbol}: ${default_price}")
                 
