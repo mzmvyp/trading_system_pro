@@ -278,14 +278,43 @@ def get_current_price(symbol):
 # Função para carregar dados do portfólio (CORRIGIDO: cache reduzido para 2s)
 @st.cache_data(ttl=2)
 def load_portfolio_data():
-    """Carrega dados do portfólio"""
+    """Carrega dados do portfólio (paper: state.json; real: Binance API)"""
     try:
         if os.path.exists("portfolio/state.json"):
             with open("portfolio/state.json", "r", encoding='utf-8') as f:
                 return json.load(f)
     except Exception as e:
         st.error(f"Erro ao carregar dados: {e}")
+    # Modo REAL (testnet/produção): usar dados da Binance para não mostrar dashboard vazio
+    if os.getenv("TRADING_MODE", "").lower() == "real":
+        return load_binance_as_portfolio()
     return None
+
+
+@st.cache_data(ttl=10)
+def load_binance_as_portfolio():
+    """Quando TRADING_MODE=real, monta um 'portfólio' a partir das posições Binance para o dashboard."""
+    data = get_binance_positions()
+    if "error" in data or not data.get("positions"):
+        return None
+    positions = {}
+    for p in data["positions"]:
+        amt = float(p.get("positionAmt", 0))
+        if amt == 0:
+            continue
+        symbol = p.get("symbol", "")
+        key = f"BINANCE_{symbol}"
+        positions[key] = {
+            "symbol": symbol,
+            "entry_price": float(p.get("entryPrice", 0)),
+            "signal": "BUY" if amt > 0 else "SELL",
+            "position_size": abs(amt),
+            "unrealized_pnl": float(p.get("unRealizedProfit", 0)),
+            "mark_price": float(p.get("markPrice", 0)),
+            "status": "OPEN",
+            "source": "BINANCE",
+        }
+    return {"positions": positions, "trade_history": [], "_binance_mode": True}
 
 # Função para carregar histórico de trades
 @st.cache_data(ttl=5)
@@ -448,6 +477,8 @@ with st.sidebar:
 
 # Layout principal
 if portfolio_data:
+    if portfolio_data.get("_binance_mode"):
+        st.info("🔶 **Modo Real (Testnet)** — Posições e saldo da Binance Futures. Use a aba **Binance Futures** para detalhes e ordens.")
     # KPIs principais - Foco em P&L em PORCENTAGEM
     col1, col2, col3, col4 = st.columns(4)
     
@@ -465,7 +496,7 @@ if portfolio_data:
         symbol = position.get("symbol")
         entry_price = position.get("entry_price", 0)
         signal_type = position.get("signal", "BUY")
-        current_price = market_prices.get(symbol, entry_price)
+        current_price = market_prices.get(symbol) or position.get("mark_price") or entry_price
         
         if entry_price > 0:
             if signal_type == "BUY":
