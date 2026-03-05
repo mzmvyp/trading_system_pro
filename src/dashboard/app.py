@@ -275,16 +275,99 @@ def get_current_price(symbol):
         st.error(f"Erro ao obter preço de {symbol}: {e}")
         return None
 
+# Função para converter posições da Binance para formato de portfólio
+def load_binance_as_portfolio():
+    """Converte posições abertas da Binance para o formato do dashboard."""
+    result = get_binance_positions()
+    if result.get("error") or not result.get("positions"):
+        return None
+
+    positions = {}
+    trade_history = []
+
+    for p in result["positions"]:
+        symbol = p.get("symbol", "")
+        amt = float(p.get("positionAmt", 0))
+        entry_price = float(p.get("entryPrice", 0))
+        mark_price = float(p.get("markPrice", 0))
+        unrealized_pnl = float(p.get("unRealizedProfit", 0))
+        leverage = int(float(p.get("leverage", 1)))
+
+        signal = "BUY" if amt > 0 else "SELL"
+        size = abs(amt)
+
+        pnl_percent = 0.0
+        if entry_price > 0:
+            if signal == "BUY":
+                pnl_percent = ((mark_price - entry_price) / entry_price) * 100
+            else:
+                pnl_percent = ((entry_price - mark_price) / entry_price) * 100
+
+        pos_key = f"{symbol}_BINANCE"
+        pos_data = {
+            "symbol": symbol,
+            "signal": signal,
+            "entry_price": entry_price,
+            "position_size": size,
+            "position_value": size * entry_price,
+            "stop_loss": 0,
+            "take_profit_1": 0,
+            "take_profit_2": 0,
+            "confidence": 0,
+            "source": "BINANCE",
+            "status": "OPEN",
+            "operation_type": "SWING_TRADE",
+            "leverage": leverage,
+            "mark_price": mark_price,
+            "unrealized_pnl": unrealized_pnl,
+            "timestamp": datetime.now().isoformat(),
+        }
+        positions[pos_key] = pos_data
+
+        # Adicionar como trade aberto no histórico
+        trade_data = {**pos_data, "trade_id": pos_key}
+        trade_history.append(trade_data)
+
+    balance_data = get_binance_balance()
+    total_balance = float(balance_data.get("balance", 0)) if not balance_data.get("error") else 0
+
+    return {
+        "positions": positions,
+        "trade_history": trade_history,
+        "capital": total_balance,
+        "initial_capital": total_balance,
+        "_source": "binance",
+    }
+
+
 # Função para carregar dados do portfólio (CORRIGIDO: cache reduzido para 2s)
 @st.cache_data(ttl=2)
 def load_portfolio_data():
-    """Carrega dados do portfólio"""
+    """Carrega dados do portfólio. Em modo real, usa dados da Binance como fallback."""
     try:
         if os.path.exists("portfolio/state.json"):
             with open("portfolio/state.json", "r", encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+                # Se tem posições no state.json, usar ele
+                if data and data.get("positions"):
+                    return data
+                # Se state.json existe mas sem posições, em modo real buscar Binance
+                trading_mode = os.getenv("TRADING_MODE", "paper").lower()
+                if trading_mode == "real" and data:
+                    binance_data = load_binance_as_portfolio()
+                    if binance_data and binance_data.get("positions"):
+                        return binance_data
+                return data
     except Exception as e:
         st.error(f"Erro ao carregar dados: {e}")
+
+    # Se não existe state.json e estamos em modo real, buscar Binance
+    trading_mode = os.getenv("TRADING_MODE", "paper").lower()
+    if trading_mode == "real":
+        binance_data = load_binance_as_portfolio()
+        if binance_data:
+            return binance_data
+
     return None
 
 # Função para carregar histórico de trades
@@ -435,8 +518,14 @@ with st.sidebar:
     st.markdown("---")
     
     # Informações do sistema
+    # Indicador de modo
+    trading_mode = os.getenv("TRADING_MODE", "paper").lower()
+    if trading_mode == "real":
+        st.warning("🔶 **Modo Real (Testnet)**\nDados da Binance Futures. Aba 'Binance Futures' para detalhes e ordens.")
+    else:
+        st.info("📝 **Modo Paper Trading**\nDados simulados do paper trading.")
+
     st.header("ℹ️ Informações")
-    st.info("Dashboard atualizado em tempo real com dados do paper trading.")
     st.markdown("""
     **Recursos:**
     - 📊 Resumo do portfólio
@@ -465,8 +554,9 @@ if portfolio_data:
         symbol = position.get("symbol")
         entry_price = position.get("entry_price", 0)
         signal_type = position.get("signal", "BUY")
-        current_price = market_prices.get(symbol, entry_price)
-        
+        # Usar mark_price da Binance se disponível, senão preço de mercado
+        current_price = position.get("mark_price") or market_prices.get(symbol, entry_price)
+
         if entry_price > 0:
             if signal_type == "BUY":
                 pnl_percent = ((current_price - entry_price) / entry_price) * 100
@@ -680,8 +770,8 @@ if portfolio_data:
                 }
                 type_display = f"{type_emoji.get(operation_type, '📊')} {operation_type.replace('_', ' ')}"
 
-                # Obter preço atual e calcular P&L
-                current_price = market_prices.get(symbol, entry_price)
+                # Obter preço atual — usar mark_price da Binance se disponível
+                current_price = position.get("mark_price") or market_prices.get(symbol, entry_price)
                 if signal_type == "BUY":
                     pnl_percent = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
                 else:  # SELL
