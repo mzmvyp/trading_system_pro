@@ -1,0 +1,17 @@
+.git
+.env
+__pycache__
+*.pyc
+*.pyo
+tests/
+docs/
+.vscode/
+.idea/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+deepseek_logs/
+signals/
+paper_trades/
+logs/
+portfolio/
