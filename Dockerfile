@@ -47,6 +47,7 @@ COPY --chown=appuser:appuser . .
 USER root
 RUN mkdir -p /app/data/models /app/data/datasets /app/data/backups /app/logs /app/ml_models \
     /app/paper_trades /app/portfolio /app/simulation_logs \
+    /app/signals /app/deepseek_logs /app/real_orders \
     && chown -R appuser:appuser /app
 USER appuser
 
@@ -55,4 +56,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "from src.core.config import settings; print('ok')" || exit 1
 
 EXPOSE 8501 8502
-CMD ["python", "main.py", "--symbol", "BTCUSDT", "--mode", "single"]
+# Padrão: modo monitor (sobe tudo com docker compose)
+CMD ["python", "main.py", "--mode", "monitor"]

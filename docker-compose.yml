@@ -1,46 +1,66 @@
-version: "3.8"
+# Docker Compose: trading_system_pro
+# Uso: docker compose up -d
+# Bot sobe em modo monitor; dashboard em :8501, ML dashboard em :8502
+# Requer .env com BINANCE_*, DEEPSEEK_*, TRADING_MODE, etc.
 
 services:
-  bot:
+  trading_bot:
     build: .
     image: trading_system_pro:latest
     container_name: trading_bot
     env_file: .env
     environment:
-      - TRADING_MODE=paper
-      # Notificações (opcional)
+      - PYTHONPATH=/app:/app/src
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
       - NOTIFICATION_LEVEL=${NOTIFICATION_LEVEL:-info}
+    command: ["python", "main.py", "--mode", "monitor"]
     volumes:
       - ./logs:/app/logs
       - ./portfolio:/app/portfolio
       - ./signals:/app/signals
       - ./data:/app/data
+      - ./paper_trades:/app/paper_trades
+      - ./deepseek_logs:/app/deepseek_logs
+      - ./real_orders:/app/real_orders
     restart: unless-stopped
+    healthcheck:
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+      test: ["CMD", "python", "-c", "from src.core.config import settings; print('ok')"]
 
   dashboard:
     build: .
     image: trading_system_pro:latest
     container_name: trading_dashboard
     env_file: .env
+    environment:
+      - PYTHONPATH=/app:/app/src
     command: ["streamlit", "run", "src/dashboard/streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
     ports:
       - "8501:8501"
     volumes:
       - ./logs:/app/logs
       - ./portfolio:/app/portfolio
+      - ./signals:/app/signals
       - ./data:/app/data
+      - ./paper_trades:/app/paper_trades
+      - ./real_orders:/app/real_orders
     restart: unless-stopped
     depends_on:
-      - bot
+      trading_bot:
+        condition: service_started
 
   ml_dashboard:
     build: .
     image: trading_system_pro:latest
     container_name: trading_ml_dashboard
     env_file: .env
+    environment:
+      - PYTHONPATH=/app:/app/src
     command: ["streamlit", "run", "src/dashboard/ml_dashboard.py", "--server.port=8502", "--server.address=0.0.0.0"]
     ports:
       - "8502:8502"
@@ -49,9 +69,5 @@ services:
       - ./data:/app/data
     restart: unless-stopped
     depends_on:
-      - bot
-
-volumes:
-  logs:
-  portfolio:
-  data:
+      trading_bot:
+        condition: service_started
