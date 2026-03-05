@@ -15,7 +15,7 @@ Data: 2026-01-14
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Any, Set
-from logger import get_logger
+from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 

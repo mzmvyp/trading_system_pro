@@ -57,6 +57,5 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
-*.md
-!README.md
+docs/internal/*.md
 

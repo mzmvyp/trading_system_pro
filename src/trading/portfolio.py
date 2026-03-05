@@ -4,7 +4,7 @@ CORRIGIDO: Usa real_paper_trading ao invés de paper_trading
 """
 
 import argparse
-from real_paper_trading import real_paper_trading as paper_trading
+from src.trading.paper_trading import real_paper_trading as paper_trading
 from datetime import datetime
 
 def show_portfolio():

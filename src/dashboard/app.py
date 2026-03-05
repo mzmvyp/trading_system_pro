@@ -17,7 +17,7 @@ import hmac
 import hashlib
 import time
 from urllib.parse import urlencode
-from real_paper_trading import real_paper_trading  # Usar instância global
+from src.trading.paper_trading import real_paper_trading  # Usar instância global
 from dotenv import load_dotenv
 
 # Carregar variáveis de ambiente

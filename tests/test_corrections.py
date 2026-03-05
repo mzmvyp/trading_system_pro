@@ -2,7 +2,7 @@
 Script de teste para validar as correções do sistema de trading
 """
 import asyncio
-from agno_tools import get_deepseek_analysis
+from src.prompts.deepseek_prompt import get_deepseek_analysis
 from dotenv import load_dotenv 
 load_dotenv()
 async def test_deepseek_analysis():

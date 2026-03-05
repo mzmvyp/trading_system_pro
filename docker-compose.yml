@@ -1,0 +1,29 @@
+services:
+  bot:
+    build: .
+    container_name: trading-bot
+    command: python main.py --mode monitor
+    env_file: .env
+    volumes:
+      - ./portfolio:/app/portfolio
+      - ./signals:/app/signals
+      - ./logs:/app/logs
+      - ./paper_trades:/app/paper_trades
+      - ./deepseek_logs:/app/deepseek_logs
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    container_name: trading-dashboard
+    command: streamlit run src/dashboard/app.py --server.port=8501 --server.address=0.0.0.0
+    env_file: .env
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./portfolio:/app/portfolio
+      - ./signals:/app/signals
+      - ./logs:/app/logs
+      - ./paper_trades:/app/paper_trades
+    restart: unless-stopped
+    depends_on:
+      - bot

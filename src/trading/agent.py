@@ -13,23 +13,19 @@ import re
 from dotenv import load_dotenv
 
 # CORREÇÃO: Importar logger
-from logger import get_logger
+from src.core.logger import get_logger
 
 # Carregar variáveis de ambiente
 load_dotenv()
 
-# Importar todas as ferramentas
-from agno_tools import (
-    get_market_data,
-    analyze_technical_indicators,
-    analyze_market_sentiment,
-    get_deepseek_analysis,
-    validate_risk_and_position,
-    execute_paper_trade,
-    analyze_multiple_timeframes,
-    analyze_order_flow,
-    backtest_strategy
-)
+# Importar ferramentas dos módulos corretos
+from src.analysis.market_data import get_market_data
+from src.analysis.indicators import analyze_technical_indicators
+from src.analysis.sentiment import analyze_market_sentiment
+from src.analysis.multi_timeframe import analyze_multiple_timeframes
+from src.analysis.order_flow import analyze_order_flow
+from src.prompts.deepseek_prompt import get_deepseek_analysis, execute_paper_trade, backtest_strategy
+from src.trading.risk_manager import validate_risk_and_position
 
 # CORREÇÃO: Criar instância do logger
 logger = get_logger(__name__)
@@ -96,7 +92,7 @@ class AgnoTradingAgent:
     def _load_ml_validator(self):
         """Carrega o validador ML se disponível"""
         try:
-            from simple_signal_validator import SimpleSignalValidator
+            from src.ml.simple_validator import SimpleSignalValidator
             validator = SimpleSignalValidator()
             validator.load_models()
             self.ml_validator = validator
@@ -154,7 +150,7 @@ class AgnoTradingAgent:
             prediction = result.get('prediction', 0)
             
             # Configuracao: threshold de probabilidade para aceitar sinal
-            from config import settings
+            from src.core.config import settings
             ml_threshold = getattr(settings, 'ml_validation_threshold', 0.65)
             ml_required = getattr(settings, 'ml_validation_required', False)
             ml_enabled = getattr(settings, 'ml_validation_enabled', True)
@@ -366,10 +362,10 @@ class AgnoTradingAgent:
         print("="*60)
         
         # Verificar posição e limpar ordens órfãs antes de analisar
-        from config import settings
+        from src.core.config import settings
         if settings.trading_mode == "real":
             try:
-                from binance_futures_executor import BinanceFuturesExecutor
+                from src.exchange.executor import BinanceFuturesExecutor
                 executor = BinanceFuturesExecutor()
                 
                 # 1. Verificar posição existente
@@ -408,7 +404,7 @@ class AgnoTradingAgent:
         try:
             import json
             import os
-            from config import settings
+            from src.core.config import settings
             
             # Verificar última análise do símbolo
             last_analysis_file = f"signals/agno_{symbol}_last_analysis.json"
@@ -486,7 +482,7 @@ class AgnoTradingAgent:
         
         try:
             # Verificar configuração de sinais
-            from config import settings
+            from src.core.config import settings
             
             # OTIMIZAÇÃO: Só gerar sinal DeepSeek se estiver habilitado
             # Isso evita chamadas duplicadas à API quando só queremos sinais AGNO
@@ -554,7 +550,9 @@ class AgnoTradingAgent:
             
             # IMPORTANTE: Adicionar indicadores técnicos ao sinal para validação ML
             try:
-                from agno_tools import analyze_technical_indicators, analyze_order_flow, analyze_multiple_timeframes
+                from src.analysis.indicators import analyze_technical_indicators
+                from src.analysis.order_flow import analyze_order_flow
+                from src.analysis.multi_timeframe import analyze_multiple_timeframes
                 
                 # Coletar indicadores técnicos
                 tech_data = await analyze_technical_indicators(symbol)
@@ -640,7 +638,7 @@ class AgnoTradingAgent:
                             # MODO REAL: Executar na Binance Futures
                             # IMPORTANTE: Passar position_size=None para que o executor calcule
                             # baseado no saldo REAL disponível na Binance
-                            from binance_futures_executor import BinanceFuturesExecutor
+                            from src.exchange.executor import BinanceFuturesExecutor
                             executor = BinanceFuturesExecutor()
                             execution_result = await executor.execute_signal(agno_signal, position_size=None)
                             if execution_result.get("success"):
@@ -906,23 +904,10 @@ class AgnoTradingAgent:
                 
                 # Se ainda não tem entry_price, usar valores padrão baseados no símbolo
                 if not signal.get("entry_price"):
-                    # Valores padrão aproximados (será substituído quando o sistema coletar preço real)
-                    default_prices = {
-                        "BTCUSDT": 90000,
-                        "ETHUSDT": 3000,
-                        "SOLUSDT": 140,
-                        "BNBUSDT": 600,
-                        "ADAUSDT": 0.5,
-                        "XRPUSDT": 2.0,
-                        "DOGEUSDT": 0.15,
-                        "AVAXUSDT": 40,
-                        "DOTUSDT": 7,
-                        "LINKUSDT": 20
-                    }
-                    default_price = default_prices.get(symbol, 100)
+                    default_price = self._get_default_price(symbol)
                     signal["entry_price"] = default_price
                     logger.warning(f"[FALLBACK] Usando preço padrão para {symbol}: ${default_price}")
-                
+
                 # Calcular stop loss se não tiver
                 if not signal.get("stop_loss") and signal.get("entry_price"):
                     if signal["signal"] == "BUY":
@@ -961,13 +946,7 @@ class AgnoTradingAgent:
                 # CORREÇÃO: Não usar asyncio.run() aqui pois já estamos em um event loop
                 # O preço será obtido no método analyze() antes de chamar _process_agent_response
                 if not signal.get("entry_price"):
-                    # Usar valores padrão baseados no símbolo
-                    default_prices = {
-                        "BTCUSDT": 90000, "ETHUSDT": 3000, "SOLUSDT": 140,
-                        "BNBUSDT": 600, "ADAUSDT": 0.5, "XRPUSDT": 2.0,
-                        "DOGEUSDT": 0.15, "AVAXUSDT": 40, "DOTUSDT": 7, "LINKUSDT": 20
-                    }
-                    signal["entry_price"] = default_prices.get(symbol, 100)
+                    signal["entry_price"] = self._get_default_price(symbol)
                     logger.warning(f"[FALLBACK] Usando preço padrão para {symbol}: ${signal['entry_price']}")
             
             # CORRIGIDO: Stop Loss - melhor extração com validação
@@ -1168,19 +1147,7 @@ class AgnoTradingAgent:
                 # Se ainda não tem entry_price, usar valores padrão baseados no símbolo
                 if not signal.get("entry_price"):
                     # Valores padrão aproximados (será substituído quando o sistema coletar preço real)
-                    default_prices = {
-                        "BTCUSDT": 90000,
-                        "ETHUSDT": 3000,
-                        "SOLUSDT": 140,
-                        "BNBUSDT": 600,
-                        "ADAUSDT": 0.5,
-                        "XRPUSDT": 2.0,
-                        "DOGEUSDT": 0.15,
-                        "AVAXUSDT": 40,
-                        "DOTUSDT": 7,
-                        "LINKUSDT": 20
-                    }
-                    default_price = default_prices.get(symbol, 100)
+                    default_price = self._get_default_price(symbol)
                     signal["entry_price"] = default_price
                     logger.warning(f"[FALLBACK] Usando preço padrão para {symbol}: ${default_price}")
                 
