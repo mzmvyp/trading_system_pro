@@ -154,7 +154,7 @@ class AgnoTradingAgent:
             prediction = result.get('prediction', 0)
             
             # Configuracao: threshold de probabilidade para aceitar sinal
-            from config import settings
+            from src.core.config import settings
             ml_threshold = getattr(settings, 'ml_validation_threshold', 0.65)
             ml_required = getattr(settings, 'ml_validation_required', False)
             ml_enabled = getattr(settings, 'ml_validation_enabled', True)
@@ -366,7 +366,7 @@ class AgnoTradingAgent:
         print("="*60)
         
         # Verificar posição e limpar ordens órfãs antes de analisar
-        from config import settings
+        from src.core.config import settings
         if settings.trading_mode == "real":
             try:
                 from src.exchange.executor import BinanceFuturesExecutor
@@ -408,7 +408,7 @@ class AgnoTradingAgent:
         try:
             import json
             import os
-            from config import settings
+            from src.core.config import settings
             
             # Verificar última análise do símbolo
             last_analysis_file = f"signals/agno_{symbol}_last_analysis.json"
@@ -486,7 +486,7 @@ class AgnoTradingAgent:
         
         try:
             # Verificar configuração de sinais
-            from config import settings
+            from src.core.config import settings
             
             # OTIMIZAÇÃO: Só gerar sinal DeepSeek se estiver habilitado
             # Isso evita chamadas duplicadas à API quando só queremos sinais AGNO

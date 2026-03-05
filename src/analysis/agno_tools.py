@@ -1771,7 +1771,7 @@ def validate_risk_and_position(
         
         # CORRIGIDO: Validar confiança antes de executar
         # UNIFICADO: Sempre usar escala 0-10, mínimo 7 para executar
-        from config import settings
+        from src.core.config import settings
         
         # Normalizar confiança para escala 0-10 se necessário
         # Se confiança for <= 5, pode ser escala antiga (0-5), converter para 0-10
