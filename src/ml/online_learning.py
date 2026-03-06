@@ -196,7 +196,7 @@ class OnlineLearningManager:
             
         try:
             # Carregar modelo atual
-            from simple_signal_validator import SimpleSignalValidator
+            from src.ml.simple_validator import SimpleSignalValidator
             current_validator = SimpleSignalValidator()
             current_validator.load_models()
             
