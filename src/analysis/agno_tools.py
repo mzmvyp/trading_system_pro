@@ -1729,39 +1729,30 @@ def validate_risk_and_position(
                 "risk_level": "low"
             }
         
-        # MODIFICADO: Verificar se já existe posição aberta para este símbolo E FONTE
-        # Permite duas posições do mesmo símbolo se forem de fontes diferentes (DEEPSEEK vs AGNO)
+        # CORRIGIDO: Verificar se já existe QUALQUER posição aberta para este símbolo
+        # NÃO permite long e short ao mesmo tempo no mesmo símbolo (de qualquer fonte)
         try:
             import json
             import os
-            signal_source = signal.get("source", "UNKNOWN")  # DEEPSEEK ou AGNO
-            
+            signal_source = signal.get("source", "UNKNOWN")
+            signal_type = signal.get("signal", "")
+
             if os.path.exists("portfolio/state.json"):
                 with open("portfolio/state.json", "r", encoding='utf-8') as f:
                     state = json.load(f)
                     positions = state.get("positions", {})
-                    
-                    # Verificar se existe posição para este símbolo E fonte
-                    # Chaves possíveis: SYMBOL_DEEPSEEK, SYMBOL_AGNO, SYMBOL_DEEPSEEK_SHORT, SYMBOL_AGNO_SHORT
-                    signal_type = signal.get("signal", "")
-                    
-                    if signal_type == "BUY":
-                        position_key = f"{symbol}_{signal_source}"
-                    elif signal_type == "SELL":
-                        position_key = f"{symbol}_{signal_source}_SHORT"
-                    else:
-                        position_key = None
-                    
-                    if position_key and position_key in positions:
-                        existing_position = positions[position_key]
-                        if existing_position.get("status") == "OPEN":
+
+                    # Verificar TODAS as posições abertas para este símbolo (qualquer fonte, qualquer direção)
+                    for pos_key, pos in positions.items():
+                        if pos.get("status") == "OPEN" and pos.get("symbol") == symbol:
+                            existing_signal = pos.get("signal", "UNKNOWN")
+                            existing_source = pos.get("source", "UNKNOWN")
                             return {
                                 "can_execute": False,
-                                "reason": f"Ja existe uma posicao {signal_type} {signal_source} aberta para {symbol}. Feche a posicao existente antes de abrir uma nova.",
+                                "reason": f"Ja existe posicao {existing_signal} ({existing_source}) aberta para {symbol}. Feche antes de abrir nova.",
                                 "risk_level": "medium"
                             }
         except Exception as e:
-            # Se houver erro ao verificar, continuar (não bloquear)
             logger.warning(f"Erro ao verificar posicoes existentes: {e}")
             pass
         
