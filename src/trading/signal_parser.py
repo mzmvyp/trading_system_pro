@@ -12,11 +12,13 @@ from src.core.logger import get_logger
 logger = get_logger(__name__)
 
 # Default prices for fallback when market data unavailable
+# NOTE: These are rough fallback values only used when all API calls fail.
+# The system should always prefer live prices from Binance.
 DEFAULT_PRICES = {
-    "BTCUSDT": 90000, "ETHUSDT": 3000, "SOLUSDT": 140,
-    "BNBUSDT": 600, "ADAUSDT": 0.5, "XRPUSDT": 2.0,
-    "DOGEUSDT": 0.15, "AVAXUSDT": 40, "DOTUSDT": 7,
-    "LINKUSDT": 20, "PAXGUSDT": 2700
+    "BTCUSDT": 95000, "ETHUSDT": 2500, "SOLUSDT": 150,
+    "BNBUSDT": 650, "ADAUSDT": 0.70, "XRPUSDT": 2.50,
+    "DOGEUSDT": 0.25, "AVAXUSDT": 35, "DOTUSDT": 7,
+    "LINKUSDT": 18, "PAXGUSDT": 2900
 }
 
 

@@ -26,8 +26,25 @@ def _calculate_current_drawdown() -> float:
 
 
 def _calculate_total_exposure() -> float:
-    """Calcula a exposição total atual."""
-    return 0.0
+    """Calcula a exposição total atual baseado nas posições abertas."""
+    try:
+        if not os.path.exists("portfolio/state.json"):
+            return 0.0
+        with open("portfolio/state.json", "r", encoding='utf-8') as f:
+            state = json.load(f)
+        positions = state.get("positions", {})
+        total_value = sum(
+            p.get("position_value", p.get("position_size", 0) * p.get("entry_price", 0))
+            for p in positions.values()
+            if p.get("status") == "OPEN"
+        )
+        capital = state.get("capital", state.get("initial_capital", 10000.0))
+        if capital <= 0:
+            return 0.0
+        return total_value / capital
+    except Exception as e:
+        logger.warning(f"Erro ao calcular exposição: {e}")
+        return 0.0
 
 
 def _get_daily_trades_count() -> int:
@@ -148,7 +165,18 @@ def validate_risk_and_position(
         elif current_drawdown > 0.15:
             logger.warning(f"[RISCO] Drawdown elevado ({current_drawdown:.2%}), reduzindo tamanho de posição")
 
-        logger.info(f"[P&L MODE] Sistema em modo P&L - sem restrições de capital")
+        total_exposure = _calculate_total_exposure()
+        max_exposure_allowed = 0.80
+        if total_exposure > max_exposure_allowed:
+            return {
+                "can_execute": False,
+                "reason": f"Exposição total muito alta: {total_exposure:.0%} (máximo {max_exposure_allowed:.0%})",
+                "risk_level": "high"
+            }
+        elif total_exposure > 0.50:
+            logger.warning(f"[RISCO] Exposição elevada ({total_exposure:.0%}), considere reduzir posições")
+
+        logger.info(f"[P&L MODE] Exposição atual: {total_exposure:.0%}")
 
         daily_trades = _get_daily_trades_count()
         if daily_trades >= 5:

@@ -151,7 +151,8 @@ async def main():
             
             # Rastrear posições anteriores para detectar fechamentos
             previous_positions = set()
-            
+            _cleanup_cycle = 0  # Contador para limpeza periódica de ordens órfãs
+
             while True:
                 try:
                     await log_monitor_summary(settings, args.interval)
@@ -168,12 +169,33 @@ async def main():
                     else:
                         active_positions = get_active_positions()
                     active_positions_set = set(active_positions)
-                    
+
                     # Detectar posições fechadas (estavam ativas antes, mas não estão mais)
                     closed_positions = previous_positions - active_positions_set
                     if closed_positions:
                         print(f"\n[POSICAO FECHADA] Detectado fechamento: {closed_positions}")
                         print("[GERANDO NOVO SINAL] Analisando para gerar novo sinal...")
+
+                        # CORRIGIDO: Cancelar ordens órfãs das posições fechadas
+                        if settings.trading_mode == "real":
+                            try:
+                                from src.exchange.executor import BinanceFuturesExecutor
+                                exec_cleanup = BinanceFuturesExecutor()
+                                for sym in closed_positions:
+                                    await exec_cleanup.cancel_all_orders(sym)
+                                    print(f"[LIMPEZA] Ordens de {sym} canceladas (posicao fechada)")
+                            except Exception as e:
+                                logger.warning(f"Erro ao limpar ordens de posicoes fechadas: {e}")
+
+                    # Limpeza periódica de ordens órfãs (a cada 6 ciclos ~30 min com interval=300s)
+                    _cleanup_cycle += 1
+                    if settings.trading_mode == "real" and _cleanup_cycle >= 6:
+                        _cleanup_cycle = 0
+                        try:
+                            from src.trading.orphan_cleaner import cleanup_orphan_orders
+                            await cleanup_orphan_orders()
+                        except Exception as e:
+                            logger.warning(f"Erro na limpeza periodica de ordens orfas: {e}")
                     
                     print(f"\n[POSICOES] Posicoes ativas: {active_positions if active_positions else 'Nenhuma'}")
                     print(f"[MODO] Trading Mode: {settings.trading_mode.upper()}")

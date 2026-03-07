@@ -300,10 +300,20 @@ class RealPaperTradingSystem:
             # Calcular valor da posição (apenas para tracking, não deduz do saldo)
             position_value = position_size * entry_price
             
-            # MODIFICADO: Verificar se já existe posição aberta para este símbolo E FONTE
-            # Permite duas posições do mesmo símbolo se forem de fontes diferentes (DEEPSEEK vs AGNO)
+            # CORRIGIDO: Verificar se já existe QUALQUER posição aberta para este símbolo
+            # NÃO permite long e short ao mesmo tempo (de qualquer fonte)
             signal_source = signal.get("source", "UNKNOWN")  # DEEPSEEK ou AGNO
-            
+
+            # Verificar TODAS as posições abertas para este símbolo
+            for pos_key, pos in self.positions.items():
+                if pos.get("status") == "OPEN" and pos.get("symbol") == symbol:
+                    existing_signal = pos.get("signal", "UNKNOWN")
+                    existing_source = pos.get("source", "UNKNOWN")
+                    return {
+                        "success": False,
+                        "error": f"Ja existe posicao {existing_signal} ({existing_source}) aberta para {symbol}. Feche antes de abrir nova."
+                    }
+
             # Determinar chave da posição baseada em símbolo, fonte e tipo de sinal
             if signal_type == "BUY":
                 position_key = f"{symbol}_{signal_source}"
@@ -311,15 +321,6 @@ class RealPaperTradingSystem:
                 position_key = f"{symbol}_{signal_source}_SHORT"
             else:
                 position_key = None
-            
-            if position_key and position_key in self.positions:
-                existing_position = self.positions[position_key]
-                if existing_position.get("status") == "OPEN":
-                    existing_signal = existing_position.get("signal", "UNKNOWN")
-                    return {
-                        "success": False,
-                        "error": f"Ja existe uma posicao {existing_signal} {signal_source} aberta para {symbol}. Feche a posicao existente antes de abrir uma nova."
-                    }
             
             # REMOVIDO: Verificação de saldo - sistema agora foca apenas em P&L
             
@@ -509,6 +510,30 @@ class RealPaperTradingSystem:
                     except Exception as e:
                         logger.warning(f"Erro ao verificar timeout para {position_key}: {e}")
 
+                    # Trailing stop: ajustar SL dinamicamente após TP1
+                    if position.get("trailing_stop_active"):
+                        if signal_type == "BUY":
+                            highest = position.get("trailing_stop_highest", current_price)
+                            if current_price > highest:
+                                position["trailing_stop_highest"] = current_price
+                                highest = current_price
+                            # Trailing stop = 50% da distância entre entrada e máximo atingido
+                            trail_distance = (highest - entry_price) * 0.5
+                            new_sl = highest - trail_distance
+                            if new_sl > position.get("stop_loss", 0):
+                                position["stop_loss"] = new_sl
+                                logger.debug(f"[TRAILING] {clean_symbol}: SL ajustado para ${new_sl:.2f} (máx: ${highest:.2f})")
+                        else:  # SELL
+                            lowest = position.get("trailing_stop_lowest", current_price)
+                            if current_price < lowest:
+                                position["trailing_stop_lowest"] = current_price
+                                lowest = current_price
+                            trail_distance = (entry_price - lowest) * 0.5
+                            new_sl = lowest + trail_distance
+                            if new_sl < position.get("stop_loss", float('inf')):
+                                position["stop_loss"] = new_sl
+                                logger.debug(f"[TRAILING] {clean_symbol}: SL ajustado para ${new_sl:.2f} (mín: ${lowest:.2f})")
+
                     # Verificar stop loss
                     if position.get("stop_loss"):
                         sl = position["stop_loss"]
@@ -614,6 +639,15 @@ class RealPaperTradingSystem:
             position["tp1_partial_closed"] = True
             position["partial_close_price"] = current_price
             position["partial_close_pnl_percent"] = weighted_pnl_percent  # Guardar P&L ponderado
+
+            # BREAK-EVEN: Mover stop loss para preço de entrada após TP1
+            position["original_stop_loss"] = position.get("stop_loss", 0)
+            position["stop_loss"] = entry_price
+            # Ativar trailing stop para a parte restante
+            position["trailing_stop_active"] = True
+            position["trailing_stop_highest"] = current_price if signal_type == "BUY" else None
+            position["trailing_stop_lowest"] = current_price if signal_type == "SELL" else None
+            logger.info(f"[BREAK-EVEN] {symbol}: SL movido para entrada ${entry_price:.2f}, trailing stop ativado")
             
             # Salvar estado
             self._save_state()

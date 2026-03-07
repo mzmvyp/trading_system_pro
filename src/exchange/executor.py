@@ -478,7 +478,7 @@ class BinanceFuturesExecutor:
 
     async def close_position(self, symbol: str) -> Dict[str, Any]:
         """
-        Fecha posição aberta (usa ordem de mercado).
+        Fecha posição aberta e cancela todas as ordens pendentes (SL/TP).
 
         Args:
             symbol: Símbolo para fechar
@@ -501,6 +501,13 @@ class BinanceFuturesExecutor:
 
         # Fechar com ordem de mercado
         result = await self.place_market_order(symbol, close_side, quantity, reduce_only=True)
+
+        # CORRIGIDO: Cancelar TODAS as ordens pendentes (SL, TP1, TP2) após fechar posição
+        try:
+            cancel_result = await self.cancel_all_orders(symbol)
+            logger.info(f"[CLOSE] Ordens pendentes de {symbol} canceladas apos fechamento")
+        except Exception as e:
+            logger.warning(f"[CLOSE] Erro ao cancelar ordens de {symbol}: {e}")
 
         return result
 

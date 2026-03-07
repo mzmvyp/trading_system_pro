@@ -63,6 +63,9 @@ async def analyze_market_sentiment(symbol: str = "BTCUSDT") -> Dict[str, Any]:
         elif open_interest < 10000000:
             sentiment_score -= 1; confidence += 0.1
 
+        # Cap confidence before final determination
+        confidence = min(confidence, 1.0)
+
         # Determine final sentiment
         if sentiment_score >= 3:
             sentiment = "very_positive"
@@ -78,7 +81,7 @@ async def analyze_market_sentiment(symbol: str = "BTCUSDT") -> Dict[str, Any]:
             final_confidence = min(0.9, confidence)
         else:
             sentiment = "neutral"
-            final_confidence = confidence
+            final_confidence = min(0.8, confidence)
 
         return {
             "symbol": symbol,
