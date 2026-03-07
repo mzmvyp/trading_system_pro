@@ -300,10 +300,20 @@ class RealPaperTradingSystem:
             # Calcular valor da posição (apenas para tracking, não deduz do saldo)
             position_value = position_size * entry_price
             
-            # MODIFICADO: Verificar se já existe posição aberta para este símbolo E FONTE
-            # Permite duas posições do mesmo símbolo se forem de fontes diferentes (DEEPSEEK vs AGNO)
+            # CORRIGIDO: Verificar se já existe QUALQUER posição aberta para este símbolo
+            # NÃO permite long e short ao mesmo tempo (de qualquer fonte)
             signal_source = signal.get("source", "UNKNOWN")  # DEEPSEEK ou AGNO
-            
+
+            # Verificar TODAS as posições abertas para este símbolo
+            for pos_key, pos in self.positions.items():
+                if pos.get("status") == "OPEN" and pos.get("symbol") == symbol:
+                    existing_signal = pos.get("signal", "UNKNOWN")
+                    existing_source = pos.get("source", "UNKNOWN")
+                    return {
+                        "success": False,
+                        "error": f"Ja existe posicao {existing_signal} ({existing_source}) aberta para {symbol}. Feche antes de abrir nova."
+                    }
+
             # Determinar chave da posição baseada em símbolo, fonte e tipo de sinal
             if signal_type == "BUY":
                 position_key = f"{symbol}_{signal_source}"
@@ -311,15 +321,6 @@ class RealPaperTradingSystem:
                 position_key = f"{symbol}_{signal_source}_SHORT"
             else:
                 position_key = None
-            
-            if position_key and position_key in self.positions:
-                existing_position = self.positions[position_key]
-                if existing_position.get("status") == "OPEN":
-                    existing_signal = existing_position.get("signal", "UNKNOWN")
-                    return {
-                        "success": False,
-                        "error": f"Ja existe uma posicao {existing_signal} {signal_source} aberta para {symbol}. Feche a posicao existente antes de abrir uma nova."
-                    }
             
             # REMOVIDO: Verificação de saldo - sistema agora foca apenas em P&L
             
