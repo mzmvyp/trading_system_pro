@@ -45,7 +45,7 @@ class OrphanOrderCleaner:
         try:
             # Criar executor se não fornecido
             if executor is None:
-                from binance_futures_executor import BinanceFuturesExecutor
+                from src.exchange.executor import BinanceFuturesExecutor
                 executor = BinanceFuturesExecutor()
             
             # 1. Obter todas as posições abertas
@@ -172,7 +172,7 @@ class OrphanOrderCleaner:
         """
         try:
             if executor is None:
-                from binance_futures_executor import BinanceFuturesExecutor
+                from src.exchange.executor import BinanceFuturesExecutor
                 executor = BinanceFuturesExecutor()
                 
             result = await executor.cancel_all_orders(symbol)

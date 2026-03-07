@@ -404,6 +404,27 @@ class BinanceFuturesExecutor:
 
         return result
 
+    async def _place_algo_order(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,  # STOP_MARKET ou TAKE_PROFIT_MARKET
+        quantity: float,
+        trigger_price: float
+    ) -> Dict[str, Any]:
+        """Coloca ordem condicional via Algo Order API (exigido para SL/TP na testnet e produção)."""
+        params = {
+            "algoType": "CONDITIONAL",
+            "symbol": symbol,
+            "side": side,
+            "type": order_type,
+            "quantity": quantity,
+            "triggerPrice": trigger_price,
+            "reduceOnly": "true",
+            "workingType": "CONTRACT_PRICE"
+        }
+        return await self._request("POST", "/fapi/v1/algoOrder", params, signed=True)
+
     async def place_stop_loss(
         self,
         symbol: str,
@@ -412,33 +433,15 @@ class BinanceFuturesExecutor:
         stop_price: float
     ) -> Dict[str, Any]:
         """
-        Coloca Stop Loss.
-
-        Args:
-            symbol: Símbolo
-            side: BUY (para fechar SHORT) ou SELL (para fechar LONG)
-            quantity: Quantidade
-            stop_price: Preço de ativação do stop
-
-        Returns:
-            Resultado da ordem
+        Coloca Stop Loss (via Algo Order API).
         """
         symbol_info = await self.get_symbol_info(symbol)
         if symbol_info:
             quantity = self._round_quantity(quantity, symbol_info.get("quantity_precision", 3))
             stop_price = self._round_price(stop_price, symbol_info.get("price_precision", 2))
 
-        params = {
-            "symbol": symbol,
-            "side": side,
-            "type": "STOP_MARKET",
-            "quantity": quantity,
-            "stopPrice": stop_price,
-            "reduceOnly": "true"
-        }
-
         logger.warning(f"[STOP LOSS] {side} {quantity} {symbol} @ trigger ${stop_price}")
-        result = await self._request("POST", "/fapi/v1/order", params, signed=True)
+        result = await self._place_algo_order(symbol, side, "STOP_MARKET", quantity, stop_price)
 
         self._log_order(symbol, "STOP_LOSS", side, quantity, result, stop_price)
 
@@ -452,33 +455,17 @@ class BinanceFuturesExecutor:
         take_profit_price: float
     ) -> Dict[str, Any]:
         """
-        Coloca Take Profit.
-
-        Args:
-            symbol: Símbolo
-            side: BUY (para fechar SHORT) ou SELL (para fechar LONG)
-            quantity: Quantidade
-            take_profit_price: Preço de ativação do take profit
-
-        Returns:
-            Resultado da ordem
+        Coloca Take Profit (via Algo Order API).
         """
         symbol_info = await self.get_symbol_info(symbol)
         if symbol_info:
             quantity = self._round_quantity(quantity, symbol_info.get("quantity_precision", 3))
             take_profit_price = self._round_price(take_profit_price, symbol_info.get("price_precision", 2))
 
-        params = {
-            "symbol": symbol,
-            "side": side,
-            "type": "TAKE_PROFIT_MARKET",
-            "quantity": quantity,
-            "stopPrice": take_profit_price,
-            "reduceOnly": "true"
-        }
-
         logger.warning(f"[TAKE PROFIT] {side} {quantity} {symbol} @ trigger ${take_profit_price}")
-        result = await self._request("POST", "/fapi/v1/order", params, signed=True)
+        result = await self._place_algo_order(
+            symbol, side, "TAKE_PROFIT_MARKET", quantity, take_profit_price
+        )
 
         self._log_order(symbol, "TAKE_PROFIT", side, quantity, result, take_profit_price)
 
@@ -675,12 +662,15 @@ class BinanceFuturesExecutor:
             # 8. Determinar lado oposto para Stop Loss e Take Profit
             close_side = "SELL" if signal_type == "BUY" else "BUY"
 
-            # 9. Colocar Stop Loss
+            def _order_id(r: dict) -> Optional[Any]:
+                return r.get("orderId") or r.get("algoId")
+
+            # 9. Colocar Stop Loss (Algo Order API)
             sl_order = await self.place_stop_loss(symbol, close_side, position_size, stop_loss)
             if "error" in sl_order:
                 logger.error(f"Erro ao colocar Stop Loss: {sl_order}")
             else:
-                logger.info(f"[STOP LOSS] Colocado: Order ID {sl_order.get('orderId')}")
+                logger.info(f"[STOP LOSS] Colocado: ID {_order_id(sl_order)}")
 
             # 10. Colocar Take Profit 1 (50% da posição)
             tp1_size = self._round_quantity(position_size * 0.5, symbol_info.get("quantity_precision", 3))
@@ -688,7 +678,7 @@ class BinanceFuturesExecutor:
             if "error" in tp1_order:
                 logger.error(f"Erro ao colocar Take Profit 1: {tp1_order}")
             else:
-                logger.info(f"[TAKE PROFIT 1] Colocado: Order ID {tp1_order.get('orderId')}")
+                logger.info(f"[TAKE PROFIT 1] Colocado: ID {_order_id(tp1_order)}")
 
             # 11. Colocar Take Profit 2 (50% restante)
             tp2_size = self._round_quantity(position_size - tp1_size, symbol_info.get("quantity_precision", 3))
@@ -696,9 +686,9 @@ class BinanceFuturesExecutor:
             if "error" in tp2_order:
                 logger.error(f"Erro ao colocar Take Profit 2: {tp2_order}")
             else:
-                logger.info(f"[TAKE PROFIT 2] Colocado: Order ID {tp2_order.get('orderId')}")
+                logger.info(f"[TAKE PROFIT 2] Colocado: ID {_order_id(tp2_order)}")
 
-            # 12. Registrar execução completa
+            # 12. Registrar execução completa (algo orders retornam algoId, ordem normal orderId)
             execution_record = {
                 "timestamp": datetime.now().isoformat(),
                 "symbol": symbol,
@@ -711,9 +701,9 @@ class BinanceFuturesExecutor:
                 "take_profit_1": take_profit_1,
                 "take_profit_2": take_profit_2,
                 "main_order_id": main_order.get("orderId"),
-                "sl_order_id": sl_order.get("orderId") if "orderId" in sl_order else None,
-                "tp1_order_id": tp1_order.get("orderId") if "orderId" in tp1_order else None,
-                "tp2_order_id": tp2_order.get("orderId") if "orderId" in tp2_order else None,
+                "sl_order_id": _order_id(sl_order),
+                "tp1_order_id": _order_id(tp1_order),
+                "tp2_order_id": _order_id(tp2_order),
                 "status": "OPEN"
             }
 

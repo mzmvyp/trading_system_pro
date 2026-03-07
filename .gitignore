@@ -40,7 +40,13 @@ venv.bak/
 logs/
 *.log
 
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
 # Data directories
+data/
 deepseek_logs/
 ml_dataset/
 ml_models/
@@ -49,6 +55,8 @@ real_orders/
 simulation_logs/
 portfolio/
 signals/
+*.pkl
+*.joblib
 
 # OS
 .DS_Store
@@ -57,5 +65,11 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
-docs/internal/*.md
+*.md
+!README.md
+!docs/*.md
+
+# Phase 7 cleanup (deploy prompts)
+CONSOLIDATION_PROMPT.md
+CURSOR_DOCKER_DEPLOY.md
 
