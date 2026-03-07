@@ -196,7 +196,24 @@ async def main():
                             await cleanup_orphan_orders()
                         except Exception as e:
                             logger.warning(f"Erro na limpeza periodica de ordens orfas: {e}")
-                    
+
+                    # MONITORAMENTO DE POSIÇÕES: verificar SL, circuit breaker, reavaliação
+                    if settings.trading_mode == "real" and active_positions:
+                        try:
+                            from src.trading.position_monitor import get_monitor
+                            from src.exchange.executor import BinanceFuturesExecutor
+                            monitor = get_monitor()
+                            exec_monitor = BinanceFuturesExecutor()
+
+                            # Verificar saúde (SL ativo, circuit breaker)
+                            health = await monitor.check_all_positions(exec_monitor)
+
+                            # Reavaliar posições (análise técnica) - a cada 2 ciclos para não sobrecarregar
+                            if _cleanup_cycle % 2 == 0:
+                                await monitor.reevaluate_positions(exec_monitor, agent)
+                        except Exception as e:
+                            logger.warning(f"Erro no monitoramento de posicoes: {e}")
+
                     print(f"\n[POSICOES] Posicoes ativas: {active_positions if active_positions else 'Nenhuma'}")
                     print(f"[MODO] Trading Mode: {settings.trading_mode.upper()}")
                     
