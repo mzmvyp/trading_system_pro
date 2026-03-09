@@ -446,6 +446,10 @@ with st.sidebar:
     - 📉 Análise de resultados
     """)
 
+    st.markdown("---")
+    st.markdown("**Paginas:**")
+    st.page_link("src/dashboard/pages/signal_analytics.py", label="📊 Signal Analytics", icon="📊")
+
 # Layout principal
 if portfolio_data:
     # KPIs principais - Foco em P&L em PORCENTAGEM
