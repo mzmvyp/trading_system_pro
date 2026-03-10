@@ -72,8 +72,9 @@ class Settings(BaseSettings):
     # DEPRECATED: min_confidence_0_5 removido - sempre usar escala 0-10
     
     # Configurações de Intervalo de Análise
-    # CORRIGIDO: Aumentado para evitar overtrading
-    min_analysis_interval_hours: float = 2.0  # Mínimo 2 horas entre análises do mesmo símbolo (aumentado de 1h)
+    # CORRIGIDO: Aumentado para 4h para evitar overtrading severo
+    # Análise dos 267 sinais mostrou que sinais a cada 2-7min destruíam performance
+    min_analysis_interval_hours: float = 4.0  # Mínimo 4 horas entre análises do mesmo símbolo (aumentado de 2h)
     
     # Top 10 criptomoedas para análise
     top_crypto_pairs: list = [

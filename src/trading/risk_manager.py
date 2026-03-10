@@ -63,10 +63,12 @@ def _get_daily_trades_count() -> int:
 def validate_risk_and_position(
     signal: Dict[str, Any],
     symbol: str,
-    account_balance: float = None
+    account_balance: float = None,
+    _trend_data: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
     Valida risco e calcula tamanho de posição apropriado com circuit breakers.
+    Inclui filtro de tendência dinâmico e validação de R:R.
     """
     try:
         if account_balance is None:
@@ -79,31 +81,63 @@ def validate_risk_and_position(
                 "risk_level": "low"
             }
 
-        # Check existing position
+        # Check existing position - verifica TODAS as posições do símbolo
         try:
-            signal_source = signal.get("source", "UNKNOWN")
             if os.path.exists("portfolio/state.json"):
                 with open("portfolio/state.json", "r", encoding='utf-8') as f:
                     state = json.load(f)
                     positions = state.get("positions", {})
-                    signal_type = signal.get("signal", "")
-                    if signal_type == "BUY":
-                        position_key = f"{symbol}_{signal_source}"
-                    elif signal_type == "SELL":
-                        position_key = f"{symbol}_{signal_source}_SHORT"
-                    else:
-                        position_key = None
-
-                    if position_key and position_key in positions:
-                        existing_position = positions[position_key]
-                        if existing_position.get("status") == "OPEN":
+                    for pos_key, pos in positions.items():
+                        if pos.get("status") == "OPEN" and pos.get("symbol") == symbol:
+                            existing_signal = pos.get("signal", "UNKNOWN")
+                            existing_source = pos.get("source", "UNKNOWN")
                             return {
                                 "can_execute": False,
-                                "reason": f"Ja existe uma posicao {signal_type} {signal_source} aberta para {symbol}.",
+                                "reason": f"Ja existe posicao {existing_signal} ({existing_source}) aberta para {symbol}. Feche antes de abrir nova.",
                                 "risk_level": "medium"
                             }
         except Exception as e:
             logger.warning(f"Erro ao verificar posicoes existentes: {e}")
+
+        # Filtro de tendência dinâmico (EMA 50/200 no 4h)
+        signal_type = signal.get("signal", "").upper()
+        if _trend_data and signal_type in ("BUY", "SELL"):
+            allow_long = _trend_data.get("allow_long", True)
+            allow_short = _trend_data.get("allow_short", True)
+            trend_desc = _trend_data.get("description", "")
+            trend = _trend_data.get("trend", "UNKNOWN")
+
+            if signal_type == "BUY" and not allow_long:
+                return {
+                    "can_execute": False,
+                    "reason": f"Sinal BUY bloqueado pelo filtro de tendencia: {trend_desc}",
+                    "risk_level": "medium",
+                    "trend": trend
+                }
+            if signal_type == "SELL" and not allow_short:
+                return {
+                    "can_execute": False,
+                    "reason": f"Sinal SELL bloqueado pelo filtro de tendencia: {trend_desc}",
+                    "risk_level": "medium",
+                    "trend": trend
+                }
+
+        # Validação de R:R mínimo
+        entry_rr = signal.get('entry_price', 0)
+        sl_rr = signal.get('stop_loss', 0)
+        tp1_rr = signal.get('tp1') or signal.get('take_profit_1') or signal.get('target_1', 0)
+        if entry_rr and sl_rr and tp1_rr:
+            risk_d = abs(entry_rr - sl_rr)
+            reward_d = abs(tp1_rr - entry_rr)
+            if risk_d > 0:
+                rr = reward_d / risk_d
+                if rr < 1.5:
+                    return {
+                        "can_execute": False,
+                        "reason": f"Risk:Reward inadequado: {rr:.2f}:1 (minimo 1.5:1)",
+                        "risk_level": "high",
+                        "rr_ratio": rr
+                    }
 
         entry_price = signal.get('entry_price', 0)
         stop_loss = signal.get('stop_loss', 0)
@@ -179,10 +213,10 @@ def validate_risk_and_position(
         logger.info(f"[P&L MODE] Exposição atual: {total_exposure:.0%}")
 
         daily_trades = _get_daily_trades_count()
-        if daily_trades >= 5:
+        if daily_trades >= 3:
             return {
                 "can_execute": False,
-                "reason": f"Limite diário de trades atingido: {daily_trades} (máximo 5)",
+                "reason": f"Limite diário de trades atingido: {daily_trades} (máximo 3)",
                 "risk_level": "medium"
             }
 
