@@ -39,7 +39,11 @@ class AgnoTradingAgent:
     """
     Agent de trading que usa AGNO para orquestrar análises
     """
-    
+
+    # Cooldown em memória - impossível de bypassar (compartilhado entre instâncias)
+    _last_analysis_time: Dict[str, datetime] = {}
+    _last_signal_cache: Dict[str, Dict[str, Any]] = {}  # Último sinal gerado por símbolo
+
     def __init__(self, paper_trading: bool = True):
         """
         Inicializa o agent de trading.
@@ -405,48 +409,60 @@ class AgnoTradingAgent:
         
         # A verificação de posição existente no paper trading será feita em validate_risk_and_position()
         
-        # CORRIGIDO: Verificar última análise (1 hora) antes de enviar para DeepSeek
+        # ========================================
+        # COOLDOWN ROBUSTO: Memória + Arquivo
+        # Impede análise repetida do mesmo símbolo
+        # ========================================
+        from src.core.config import settings
+        min_interval = settings.min_analysis_interval_hours
+
+        # 1. Verificação em MEMÓRIA (impossível de bypassar)
+        now = datetime.now()
+        if symbol in AgnoTradingAgent._last_analysis_time:
+            last_time = AgnoTradingAgent._last_analysis_time[symbol]
+            hours_since = (now - last_time).total_seconds() / 3600
+            if hours_since < min_interval:
+                remaining = int((min_interval - hours_since) * 60)
+                print(f"[COOLDOWN] {symbol}: ultima analise ha {int(hours_since*60)}min. Proximo em {remaining}min (intervalo {min_interval}h)")
+                return {
+                    "symbol": symbol,
+                    "signal": "NO_SIGNAL",
+                    "confidence": 0,
+                    "reason": f"Cooldown ativo: ultima analise ha {int(hours_since*60)} minutos (minimo {min_interval}h)",
+                    "timestamp": now.isoformat()
+                }
+
+        # 2. Verificação em ARQUIVO (para persistir entre restarts)
         try:
-            import json
-            import os
-            from src.core.config import settings
-            
-            # Verificar última análise do símbolo
             last_analysis_file = f"signals/agno_{symbol}_last_analysis.json"
             if os.path.exists(last_analysis_file):
                 with open(last_analysis_file, "r", encoding='utf-8') as f:
                     last_analysis = json.load(f)
                     last_timestamp_str = last_analysis.get("timestamp")
                     if last_timestamp_str:
-                        # Parse timestamp (suporta com e sem timezone)
                         try:
                             last_timestamp = datetime.fromisoformat(last_timestamp_str.replace('Z', '+00:00'))
                         except ValueError:
-                            # Tentar sem timezone
                             last_timestamp = datetime.fromisoformat(last_timestamp_str)
-                        
-                        # Se não tem timezone, assumir local
-                        if last_timestamp.tzinfo is None:
-                            last_timestamp = last_timestamp.replace(tzinfo=datetime.now().astimezone().tzinfo)
-                        
-                        now = datetime.now(last_timestamp.tzinfo)
-                        time_since_last = now - last_timestamp
-                        hours_since_last = time_since_last.total_seconds() / 3600
-                        min_interval = settings.min_analysis_interval_hours
-                        
-                        if hours_since_last < min_interval:
-                            remaining_minutes = int((min_interval - hours_since_last) * 60)
-                            print(f"[AVISO] Ultima analise de {symbol} foi ha {int(hours_since_last*60)} minutos. Aguardando {min_interval}h (restam {remaining_minutes} minutos).")
+
+                        if last_timestamp.tzinfo is not None:
+                            last_timestamp = last_timestamp.replace(tzinfo=None)
+
+                        hours_since = (now - last_timestamp).total_seconds() / 3600
+                        if hours_since < min_interval:
+                            # Atualizar cache em memória também
+                            AgnoTradingAgent._last_analysis_time[symbol] = last_timestamp
+                            remaining = int((min_interval - hours_since) * 60)
+                            print(f"[COOLDOWN] {symbol}: ultima analise ha {int(hours_since*60)}min (arquivo). Proximo em {remaining}min")
                             return {
                                 "symbol": symbol,
                                 "signal": "NO_SIGNAL",
                                 "confidence": 0,
-                                "reason": f"Ultima analise ha {int(hours_since_last*60)} minutos (minimo {min_interval}h)",
-                                "timestamp": datetime.now().isoformat()
+                                "reason": f"Cooldown ativo: ultima analise ha {int(hours_since*60)} minutos (minimo {min_interval}h)",
+                                "timestamp": now.isoformat()
                             }
         except Exception as e:
-            # Se houver erro, continuar com análise (não bloquear)
-            logger.warning(f"Erro ao verificar ultima analise: {e}")
+            logger.warning(f"Erro ao verificar ultima analise em arquivo: {e}")
         
         # Prompt para o agent
         # CORRIGIDO: get_deepseek_analysis() agora retorna o sinal JSON diretamente
@@ -673,15 +689,15 @@ class AgnoTradingAgent:
             # Retornar o sinal AGNO como principal (para compatibilidade)
             signal = agno_signal
             
-            # CORRIGIDO: Salvar timestamp da última análise
+            # Salvar timestamp da última análise (MEMÓRIA + ARQUIVO)
+            analysis_time = datetime.now()
+            AgnoTradingAgent._last_analysis_time[symbol] = analysis_time
             try:
-                import json
-                import os
                 last_analysis_file = f"signals/agno_{symbol}_last_analysis.json"
                 with open(last_analysis_file, "w", encoding='utf-8') as f:
                     json.dump({
                         "symbol": symbol,
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": analysis_time.isoformat(),
                         "signal": signal.get("signal", "NO_SIGNAL"),
                         "confidence": signal.get("confidence", 0)
                     }, f, indent=2)
@@ -1223,13 +1239,36 @@ class AgnoTradingAgent:
         return signal
     
     def _save_signal(self, signal: Dict[str, Any]):
-        """Salva sinal em arquivo JSON"""
+        """Salva sinal em arquivo JSON com deduplicação."""
+        symbol = signal.get('symbol', 'UNKNOWN')
+        signal_type = signal.get('signal', 'UNKNOWN')
+        source = signal.get('source', 'UNKNOWN')
+
+        # Deduplicação: não salvar se sinal é idêntico ao último para este símbolo+source
+        cache_key = f"{symbol}_{source}"
+        last = AgnoTradingAgent._last_signal_cache.get(cache_key)
+        if last:
+            # Comparar campos relevantes (ignorar timestamp)
+            same_signal = (
+                last.get('signal') == signal_type
+                and last.get('entry_price') == signal.get('entry_price')
+                and last.get('stop_loss') == signal.get('stop_loss')
+                and last.get('tp1', last.get('take_profit_1')) == signal.get('tp1', signal.get('take_profit_1'))
+            )
+            if same_signal:
+                logger.info(f"[DEDUP] Sinal duplicado ignorado: {signal_type} {symbol} ({source})")
+                print(f"[DEDUP] Sinal duplicado ignorado: {signal_type} {symbol} ({source})")
+                return
+
+        # Salvar no cache
+        AgnoTradingAgent._last_signal_cache[cache_key] = signal
+
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"signals/agno_{signal['symbol']}_{timestamp}.json"
-        
+        filename = f"signals/agno_{symbol}_{timestamp}.json"
+
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(signal, f, indent=2, ensure_ascii=False, default=str)
-        
+
         print(f"[SALVO] Sinal salvo: {filename}")
     
     def _save_deepseek_response(self, symbol: str, prompt: str, response: Any, analysis_data: Dict[str, Any] = None):
