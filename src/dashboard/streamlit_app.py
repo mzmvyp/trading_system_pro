@@ -833,62 +833,121 @@ if portfolio_data:
             st.info("ℹ️ Nenhuma posição aberta no momento.")
 
     with tab3:
-        st.header("📜 Histórico de Trades e Sinais")
+        st.header("📜 Histórico de Sinais - Avaliados contra Binance Real")
+        st.markdown("Cada sinal é verificado contra **klines reais da Binance (producao)** para calcular se SL, TP1 ou TP2 foi atingido.")
 
-        if trade_history:
-            # Preparar dados para tabela
-            history_list = []
-            for trade in trade_history:
-                pnl_percent = get_pnl_percent(trade)
-                entry = trade.get("entry_price", 0)
-                sl = trade.get("stop_loss", 0)
-                tp1 = trade.get("take_profit_1", 0)
-                tp2 = trade.get("take_profit_2", 0)
-                sig_type = trade.get("signal", "N/A")
-                source = trade.get("source", trade.get("_source_file", "N/A"))
-                confidence = trade.get("confidence", "")
-                status = trade.get("status", "N/A")
+        try:
+            from src.trading.signal_tracker import evaluate_all_signals, get_performance_summary
 
-                # Icone de direcao
-                dir_icon = "🟢 LONG" if sig_type == "BUY" else "🔴 SHORT" if sig_type == "SELL" else sig_type
+            @st.cache_data(ttl=120)
+            def _load_hist_evaluations():
+                return evaluate_all_signals()
 
-                history_list.append({
-                    "Data": trade.get("timestamp", "N/A")[:16] if trade.get("timestamp") else "N/A",
-                    "Simbolo": trade.get("symbol", "N/A"),
-                    "Fonte": source.upper(),
-                    "Direcao": dir_icon,
-                    "Conf.": confidence if confidence else "-",
-                    "Entry": f"${entry:,.4f}" if entry else "-",
-                    "SL": f"${sl:,.4f}" if sl else "-",
-                    "TP1": f"${tp1:,.4f}" if tp1 else "-",
-                    "TP2": f"${tp2:,.4f}" if tp2 else "-",
-                    "Status": status,
-                    "P&L": f"{pnl_percent:+.2f}%" if pnl_percent != 0 else "-",
-                })
+            with st.spinner("Avaliando sinais contra dados reais da Binance..."):
+                hist_evals = _load_hist_evaluations()
 
-            df_history = pd.DataFrame(history_list)
+            if not hist_evals:
+                st.info("Nenhum sinal BUY/SELL encontrado em signals/")
+            else:
+                hist_summary = get_performance_summary(hist_evals)
 
-            # Filtros
-            col_f1, col_f2, col_f3 = st.columns(3)
-            with col_f1:
-                sources_avail = df_history["Fonte"].unique().tolist()
-                filter_src = st.multiselect("Fonte", sources_avail, default=sources_avail, key="hist_src")
-            with col_f2:
-                dirs_avail = df_history["Direcao"].unique().tolist()
-                filter_dir = st.multiselect("Direcao", dirs_avail, default=dirs_avail, key="hist_dir")
-            with col_f3:
-                status_avail = df_history["Status"].unique().tolist()
-                filter_status = st.multiselect("Status", status_avail, default=status_avail, key="hist_status")
+                # KPIs no topo
+                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
+                c1.metric("Total", hist_summary.get("total_signals", 0))
+                c2.metric("Fechados", hist_summary.get("closed", 0))
+                c3.metric("Ativos", hist_summary.get("active", 0))
+                wr = hist_summary.get("win_rate", 0)
+                c4.metric("Win Rate", f"{wr:.0f}%")
+                tpnl = hist_summary.get("total_pnl", 0)
+                c5.metric("PnL Total", f"{tpnl:+.2f}%", delta=f"{tpnl:+.2f}%")
+                c6.metric("SL", hist_summary.get("sl_hits", 0))
+                c7.metric("TP1", hist_summary.get("tp1_hits", 0))
+                c8.metric("TP2", hist_summary.get("tp2_hits", 0))
 
-            mask = (
-                df_history["Fonte"].isin(filter_src) &
-                df_history["Direcao"].isin(filter_dir) &
-                df_history["Status"].isin(filter_status)
-            )
-            st.dataframe(df_history[mask], use_container_width=True, hide_index=True, height=500)
-            st.caption(f"Total: {mask.sum()} sinais/trades")
-        else:
-            st.info("ℹ️ Nenhum trade ou sinal registrado ainda.")
+                st.markdown("---")
+
+                # Tabela completa
+                history_list = []
+                for ev in hist_evals:
+                    sig_type = ev.get("signal", "")
+                    dir_icon = "🟢 LONG" if sig_type == "BUY" else "🔴 SHORT" if sig_type == "SELL" else sig_type
+                    outcome = ev.get("outcome", "")
+                    pnl = ev.get("pnl_percent", 0)
+                    entry = ev.get("entry_price", 0)
+                    sl = ev.get("stop_loss", 0)
+                    tp1 = ev.get("take_profit_1", 0)
+                    tp2 = ev.get("take_profit_2", 0)
+                    exit_p = ev.get("exit_price", 0)
+                    dur = ev.get("duration_hours", 0)
+
+                    # Icone de resultado
+                    outcome_display = {
+                        "TP2_HIT": "✅ TP2",
+                        "TP1_HIT": "✅ TP1",
+                        "SL_HIT": "❌ SL",
+                        "ACTIVE": "⏳ Ativo",
+                        "EXPIRED": "⏰ Expirado",
+                        "PENDING": "⏳ Pendente",
+                        "NO_DATA": "❓ Sem dados",
+                        "INVALID": "⚠️ Invalido",
+                    }.get(outcome, outcome)
+
+                    history_list.append({
+                        "Data": ev.get("timestamp", "")[:16],
+                        "Simbolo": ev.get("symbol", ""),
+                        "Fonte": ev.get("source", ""),
+                        "Direcao": dir_icon,
+                        "Conf.": ev.get("confidence", ""),
+                        "Entry": f"${entry:,.4f}" if entry else "-",
+                        "SL": f"${sl:,.4f}" if sl else "-",
+                        "TP1": f"${tp1:,.4f}" if tp1 else "-",
+                        "TP2": f"${tp2:,.4f}" if tp2 else "-",
+                        "Resultado": outcome_display,
+                        "Exit": f"${exit_p:,.4f}" if exit_p else "-",
+                        "PnL %": round(pnl, 2) if pnl else 0,
+                        "Duracao": f"{dur:.1f}h" if dur else "-",
+                    })
+
+                df_history = pd.DataFrame(history_list)
+
+                # Filtros
+                col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+                with col_f1:
+                    sources_avail = df_history["Fonte"].unique().tolist()
+                    filter_src = st.multiselect("Fonte", sources_avail, default=sources_avail, key="hist_src")
+                with col_f2:
+                    dirs_avail = df_history["Direcao"].unique().tolist()
+                    filter_dir = st.multiselect("Direcao", dirs_avail, default=dirs_avail, key="hist_dir")
+                with col_f3:
+                    results_avail = df_history["Resultado"].unique().tolist()
+                    filter_result = st.multiselect("Resultado", results_avail, default=results_avail, key="hist_result")
+                with col_f4:
+                    symbols_avail = sorted(df_history["Simbolo"].unique().tolist())
+                    filter_sym = st.multiselect("Simbolo", symbols_avail, default=symbols_avail, key="hist_sym")
+
+                mask = (
+                    df_history["Fonte"].isin(filter_src) &
+                    df_history["Direcao"].isin(filter_dir) &
+                    df_history["Resultado"].isin(filter_result) &
+                    df_history["Simbolo"].isin(filter_sym)
+                )
+                df_filtered = df_history[mask]
+                st.dataframe(df_filtered, use_container_width=True, hide_index=True, height=500)
+
+                # Resumo filtrado
+                filtered_pnl = df_filtered["PnL %"].sum()
+                filtered_wins = len(df_filtered[df_filtered["PnL %"] > 0])
+                filtered_total = len(df_filtered[df_filtered["PnL %"] != 0])
+                filtered_wr = (filtered_wins / filtered_total * 100) if filtered_total > 0 else 0
+                st.caption(
+                    f"Mostrando {len(df_filtered)} de {len(df_history)} sinais | "
+                    f"PnL filtrado: {filtered_pnl:+.2f}% | Win Rate filtrado: {filtered_wr:.0f}%"
+                )
+
+        except Exception as e:
+            st.error(f"Erro ao carregar avaliacao de sinais: {e}")
+            import traceback
+            st.code(traceback.format_exc())
 
     with tab4:
         st.header("📊 Signal Analytics - Performance Real")
