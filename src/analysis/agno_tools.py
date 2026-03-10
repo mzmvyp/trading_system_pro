@@ -1709,7 +1709,8 @@ def _get_daily_trades_count() -> int:
 def validate_risk_and_position(
     signal: Dict[str, Any],
     symbol: str,
-    account_balance: float = None
+    account_balance: float = None,
+    _trend_data: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
     Valida risco e calcula tamanho de posição apropriado com circuit breakers.
@@ -1755,7 +1756,75 @@ def validate_risk_and_position(
         except Exception as e:
             logger.warning(f"Erro ao verificar posicoes existentes: {e}")
             pass
-        
+
+        # ========================================
+        # FILTRO DE TENDÊNCIA DINÂMICO (EMA 50/200 no 4h)
+        # Bloqueia sinais contra a tendência dominante.
+        # Se adapta automaticamente: quando mercado virar bullish,
+        # permite longs de novo. Zona neutra permite ambas direções.
+        # ========================================
+        signal_type = signal.get("signal", "").upper()
+        if _trend_data and signal_type in ("BUY", "SELL"):
+            trend = _trend_data.get("trend", "UNKNOWN")
+            allow_long = _trend_data.get("allow_long", True)
+            allow_short = _trend_data.get("allow_short", True)
+            trend_desc = _trend_data.get("description", "")
+
+            if signal_type == "BUY" and not allow_long:
+                logger.warning(f"[TREND FILTER] BLOQUEADO BUY {symbol}: {trend_desc}")
+                return {
+                    "can_execute": False,
+                    "reason": f"Sinal BUY bloqueado pelo filtro de tendencia: {trend_desc}. "
+                              f"EMA50 < EMA200 no 4h indica tendencia de baixa.",
+                    "risk_level": "medium",
+                    "trend": trend
+                }
+
+            if signal_type == "SELL" and not allow_short:
+                logger.warning(f"[TREND FILTER] BLOQUEADO SELL {symbol}: {trend_desc}")
+                return {
+                    "can_execute": False,
+                    "reason": f"Sinal SELL bloqueado pelo filtro de tendencia: {trend_desc}. "
+                              f"EMA50 > EMA200 no 4h indica tendencia de alta.",
+                    "risk_level": "medium",
+                    "trend": trend
+                }
+
+            logger.info(f"[TREND FILTER] {signal_type} {symbol} permitido: {trend_desc}")
+
+        # ========================================
+        # VALIDAÇÃO DE RISK:REWARD MÍNIMO (2:1)
+        # Rejeita sinais onde o potencial de ganho não compensa o risco.
+        # Usa TP1 como referência (TP2 é bônus).
+        # ========================================
+        entry_price_rr = signal.get('entry_price', 0)
+        stop_loss_rr = signal.get('stop_loss', 0)
+        tp1 = signal.get('tp1') or signal.get('take_profit_1') or signal.get('target_1', 0)
+        tp2 = signal.get('tp2') or signal.get('take_profit_2') or signal.get('target_2', 0)
+
+        if entry_price_rr and stop_loss_rr and tp1:
+            risk_distance = abs(entry_price_rr - stop_loss_rr)
+            reward_distance_tp1 = abs(tp1 - entry_price_rr)
+
+            if risk_distance > 0:
+                rr_ratio = reward_distance_tp1 / risk_distance
+
+                if rr_ratio < 1.5:
+                    # R:R menor que 1.5:1 = muito ruim, bloquear
+                    logger.warning(f"[R:R] BLOQUEADO {symbol}: R:R = {rr_ratio:.2f}:1 (minimo 1.5:1)")
+                    return {
+                        "can_execute": False,
+                        "reason": f"Risk:Reward inadequado: {rr_ratio:.2f}:1 (minimo 1.5:1). "
+                                  f"Risco={risk_distance:.2f}, Reward(TP1)={reward_distance_tp1:.2f}",
+                        "risk_level": "high",
+                        "rr_ratio": rr_ratio
+                    }
+                elif rr_ratio < 2.0:
+                    # R:R entre 1.5 e 2.0 = aceitável mas não ideal
+                    logger.info(f"[R:R] {symbol}: R:R = {rr_ratio:.2f}:1 (aceitavel, ideal >= 2:1)")
+                else:
+                    logger.info(f"[R:R] {symbol}: R:R = {rr_ratio:.2f}:1 (bom)")
+
         entry_price = signal.get('entry_price', 0)
         stop_loss = signal.get('stop_loss', 0)
         confidence = signal.get('confidence', 0)
@@ -1836,10 +1905,10 @@ def validate_risk_and_position(
         
         # Circuit Breaker 4: Verificar limite diário de trades
         daily_trades = _get_daily_trades_count()
-        if daily_trades >= 5:  # Máximo 5 trades por dia
+        if daily_trades >= 3:  # Máximo 3 trades por dia (reduzido de 5 - overtrading detectado)
             return {
                 "can_execute": False,
-                "reason": f"Limite diário de trades atingido: {daily_trades} (máximo 5)",
+                "reason": f"Limite diário de trades atingido: {daily_trades} (máximo 3)",
                 "risk_level": "medium"
             }
         

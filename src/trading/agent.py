@@ -30,6 +30,7 @@ from src.analysis.agno_tools import (
     analyze_order_flow,
     backtest_strategy
 )
+from src.trading.trend_filter import get_trend
 
 # CORREÇÃO: Criar instância do logger
 logger = get_logger(__name__)
@@ -527,7 +528,13 @@ class AgnoTradingAgent:
                     
                     # Executar se for sinal válido
                     if deepseek_signal.get("signal") in ["BUY", "SELL"]:
-                        validation = validate_risk_and_position(deepseek_signal, symbol)
+                        # Obter tendência dinâmica para filtro
+                        try:
+                            trend_data = await get_trend(symbol)
+                        except Exception as e:
+                            logger.warning(f"[TREND] Erro ao obter tendência: {e}")
+                            trend_data = None
+                        validation = validate_risk_and_position(deepseek_signal, symbol, _trend_data=trend_data)
                         if validation.get("can_execute"):
                             logger.info(f"[DEEPSEEK] Executando sinal {deepseek_signal.get('signal')} para {symbol}")
                             position_size = validation.get("recommended_position_size", validation.get("position_size"))
@@ -630,7 +637,13 @@ class AgnoTradingAgent:
                         logger.warning(f"[ML] ATENCAO: Executando sem confluencia (prob: {ml_prob:.1%})")
                         print(f"[ML] ⚠️ Sem confluencia (prob: {ml_prob:.1%}) - Verifique configuracao ML")
                     
-                    validation = validate_risk_and_position(agno_signal, symbol)
+                    # Obter tendência dinâmica para filtro
+                    try:
+                        trend_data = await get_trend(symbol)
+                    except Exception as e:
+                        logger.warning(f"[TREND] Erro ao obter tendência: {e}")
+                        trend_data = None
+                    validation = validate_risk_and_position(agno_signal, symbol, _trend_data=trend_data)
                     if validation.get("can_execute"):
                         logger.info(f"[AGNO] Validando e executando sinal {agno_signal.get('signal')} para {symbol}")
                         position_size = validation.get("recommended_position_size", validation.get("position_size"))
