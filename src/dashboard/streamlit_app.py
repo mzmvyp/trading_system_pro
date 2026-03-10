@@ -519,7 +519,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("**Paginas:**")
-    st.page_link("src/dashboard/pages/signal_analytics.py", label="📊 Signal Analytics", icon="📊")
+    st.page_link("pages/signal_analytics.py", label="📊 Signal Analytics", icon="📊")
 
 # Layout principal
 if portfolio_data:
