@@ -290,14 +290,84 @@ def load_portfolio_data():
 # Função para carregar histórico de trades
 @st.cache_data(ttl=5)
 def load_trade_history():
-    """Carrega histórico de trades"""
+    """Carrega histórico de trades - Paper + Real (sinais e execution records)"""
+    trades = []
+
+    # 1. Paper trading: portfolio/state.json
     try:
         state = load_portfolio_data()
         if state and "trade_history" in state:
-            return state["trade_history"]
-    except Exception as e:
-        st.error(f"Erro ao carregar histórico: {e}")
-    return []
+            trades.extend(state["trade_history"])
+    except Exception:
+        pass
+
+    # 2. Real trading: execution records em real_orders/
+    try:
+        exec_files = glob.glob("real_orders/execution_*.json")
+        for filepath in exec_files:
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    record = json.load(f)
+                    # Converter execution record para formato de trade
+                    trades.append({
+                        "trade_id": record.get("main_order_id", os.path.basename(filepath)),
+                        "symbol": record.get("symbol", ""),
+                        "signal": record.get("signal", ""),
+                        "source": record.get("source", "UNKNOWN"),
+                        "entry_price": record.get("entry_price", 0),
+                        "stop_loss": record.get("stop_loss", 0),
+                        "take_profit_1": record.get("take_profit_1", 0),
+                        "take_profit_2": record.get("take_profit_2", 0),
+                        "position_size": record.get("position_size", 0),
+                        "status": record.get("status", "OPEN"),
+                        "timestamp": record.get("timestamp", ""),
+                        "leverage": record.get("leverage", 20),
+                        "_source_file": "real_orders",
+                    })
+            except (json.JSONDecodeError, IOError):
+                continue
+    except Exception:
+        pass
+
+    # 3. Sinais salvos em signals/ (para trades que não têm execution record)
+    try:
+        signal_files = glob.glob("signals/agno_*_*.json")
+        signal_files = [f for f in signal_files if "_last_analysis" not in f]
+        existing_symbols_ts = {(t.get("symbol", ""), t.get("timestamp", "")[:16]) for t in trades}
+
+        for filepath in signal_files:
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    sig = json.load(f)
+                    sig_type = sig.get("signal", "")
+                    if sig_type not in ("BUY", "SELL"):
+                        continue
+                    # Evitar duplicatas
+                    key = (sig.get("symbol", ""), sig.get("timestamp", "")[:16])
+                    if key in existing_symbols_ts:
+                        continue
+                    trades.append({
+                        "trade_id": os.path.basename(filepath).replace(".json", ""),
+                        "symbol": sig.get("symbol", ""),
+                        "signal": sig_type,
+                        "source": sig.get("source", "UNKNOWN"),
+                        "entry_price": sig.get("entry_price", 0),
+                        "stop_loss": sig.get("stop_loss", 0),
+                        "take_profit_1": sig.get("take_profit_1", 0),
+                        "take_profit_2": sig.get("take_profit_2", 0),
+                        "confidence": sig.get("confidence", 0),
+                        "status": "SIGNAL",
+                        "timestamp": sig.get("timestamp", ""),
+                        "_source_file": "signals",
+                    })
+            except (json.JSONDecodeError, IOError):
+                continue
+    except Exception:
+        pass
+
+    # Ordenar por timestamp (mais recente primeiro)
+    trades.sort(key=lambda t: t.get("timestamp", ""), reverse=True)
+    return trades
 
 @st.cache_data(ttl=5)
 def load_last_signals():
@@ -515,7 +585,7 @@ if portfolio_data:
     st.markdown("---")
     
     # Tabs
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📈 Overview", "💰 Posições Abertas", "📜 Histórico", "📉 Análise", "💹 Preços de Mercado", "🔍 Monitor Sistema", "🔶 Binance Futures"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["📈 Overview", "💰 Posições Abertas", "📜 Histórico", "📊 Signal Analytics", "📉 Análise", "💹 Preços de Mercado", "🔍 Monitor Sistema", "🔶 Binance Futures"])
     
     with tab1:
         st.header("📈 Visão Geral do Portfólio")
@@ -732,29 +802,215 @@ if portfolio_data:
             st.info("ℹ️ Nenhuma posição aberta no momento.")
     
     with tab3:
-        st.header("📜 Histórico de Trades")
-        
+        st.header("📜 Histórico de Trades e Sinais")
+
         if trade_history:
             # Preparar dados para tabela
             history_list = []
             for trade in trade_history:
                 pnl_percent = get_pnl_percent(trade)
+                entry = trade.get("entry_price", 0)
+                sl = trade.get("stop_loss", 0)
+                tp1 = trade.get("take_profit_1", 0)
+                tp2 = trade.get("take_profit_2", 0)
+                sig_type = trade.get("signal", "N/A")
+                source = trade.get("source", trade.get("_source_file", "N/A"))
+                confidence = trade.get("confidence", "")
+                status = trade.get("status", "N/A")
+
+                # Icone de direcao
+                dir_icon = "🟢 LONG" if sig_type == "BUY" else "🔴 SHORT" if sig_type == "SELL" else sig_type
+
                 history_list.append({
-                    "ID": trade.get("trade_id", "N/A"),
-                    "Símbolo": trade.get("symbol", "N/A"),
-                    "Tipo": trade.get("signal", "N/A"),
-                    "Entrada": f"${trade.get('entry_price', 0):,.2f}",
-                    "Status": trade.get("status", "N/A"),
-                    "P&L": f"{pnl_percent:+.2f}%" if pnl_percent != 0 else "N/A",
-                    "Data": trade.get("timestamp", "N/A")[:19] if trade.get("timestamp") else "N/A"
+                    "Data": trade.get("timestamp", "N/A")[:16] if trade.get("timestamp") else "N/A",
+                    "Simbolo": trade.get("symbol", "N/A"),
+                    "Fonte": source.upper(),
+                    "Direcao": dir_icon,
+                    "Conf.": confidence if confidence else "-",
+                    "Entry": f"${entry:,.4f}" if entry else "-",
+                    "SL": f"${sl:,.4f}" if sl else "-",
+                    "TP1": f"${tp1:,.4f}" if tp1 else "-",
+                    "TP2": f"${tp2:,.4f}" if tp2 else "-",
+                    "Status": status,
+                    "P&L": f"{pnl_percent:+.2f}%" if pnl_percent != 0 else "-",
                 })
-            
+
             df_history = pd.DataFrame(history_list)
-            st.dataframe(df_history, use_container_width=True, hide_index=True)
+
+            # Filtros
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                sources_avail = df_history["Fonte"].unique().tolist()
+                filter_src = st.multiselect("Fonte", sources_avail, default=sources_avail, key="hist_src")
+            with col_f2:
+                dirs_avail = df_history["Direcao"].unique().tolist()
+                filter_dir = st.multiselect("Direcao", dirs_avail, default=dirs_avail, key="hist_dir")
+            with col_f3:
+                status_avail = df_history["Status"].unique().tolist()
+                filter_status = st.multiselect("Status", status_avail, default=status_avail, key="hist_status")
+
+            mask = (
+                df_history["Fonte"].isin(filter_src) &
+                df_history["Direcao"].isin(filter_dir) &
+                df_history["Status"].isin(filter_status)
+            )
+            st.dataframe(df_history[mask], use_container_width=True, hide_index=True, height=500)
+            st.caption(f"Total: {mask.sum()} sinais/trades")
         else:
-            st.info("ℹ️ Nenhum trade registrado ainda.")
-    
+            st.info("ℹ️ Nenhum trade ou sinal registrado ainda.")
+
     with tab4:
+        st.header("📊 Signal Analytics - Performance Real")
+        st.markdown("Avalia cada sinal emitido contra dados reais do mercado (Binance klines)")
+
+        try:
+            from src.trading.signal_tracker import evaluate_all_signals, get_performance_summary
+
+            @st.cache_data(ttl=120)
+            def _load_evaluations():
+                return evaluate_all_signals()
+
+            with st.spinner("Buscando dados de mercado..."):
+                evals = _load_evaluations()
+
+            if not evals:
+                st.info("Nenhum sinal BUY/SELL encontrado em signals/")
+            else:
+                summary = get_performance_summary(evals)
+                df_evals = pd.DataFrame(evals)
+
+                # KPIs
+                c1, c2, c3, c4, c5, c6 = st.columns(6)
+                c1.metric("Total Sinais", summary.get("total_signals", 0))
+                c2.metric("Finalizados", summary.get("closed", 0))
+                c3.metric("Ativos", summary.get("active", 0))
+                c4.metric("Win Rate", f"{summary.get('win_rate', 0):.1f}%")
+                total_pnl = summary.get("total_pnl", 0)
+                c5.metric("PnL Total", f"{total_pnl:+.2f}%", delta=f"{total_pnl:+.2f}%")
+                c6.metric("Profit Factor", f"{summary.get('profit_factor', 0):.2f}")
+
+                c1, c2, c3, c4, c5, c6 = st.columns(6)
+                c1.metric("Avg Win", f"{summary.get('avg_win', 0):.2f}%")
+                c2.metric("Avg Loss", f"{summary.get('avg_loss', 0):.2f}%")
+                c3.metric("Expectancy", f"{summary.get('expectancy', 0):.3f}%")
+                c4.metric("SL Hit", summary.get("sl_hits", 0))
+                c5.metric("TP1 Hit", summary.get("tp1_hits", 0))
+                c6.metric("TP2 Hit", summary.get("tp2_hits", 0))
+
+                st.markdown("---")
+
+                # Tabs internas
+                stab1, stab2, stab3, stab4 = st.tabs(["📋 Sinais", "📈 Por Fonte", "🎯 Por Simbolo", "📊 Graficos"])
+
+                with stab1:
+                    # Tabela completa de sinais
+                    display_cols = ["timestamp", "symbol", "source", "signal", "confidence",
+                                    "entry_price", "stop_loss", "take_profit_1", "take_profit_2",
+                                    "outcome", "exit_price", "pnl_percent", "duration_hours"]
+                    available_cols = [c for c in display_cols if c in df_evals.columns]
+                    disp = df_evals[available_cols].copy()
+                    disp.columns = [c.replace("_", " ").title() for c in available_cols]
+                    st.dataframe(disp, use_container_width=True, hide_index=True, height=400)
+
+                with stab2:
+                    # Performance por fonte
+                    for source in df_evals["source"].unique():
+                        src_evals = [e for e in evals if e.get("source") == source]
+                        src_sum = get_performance_summary(src_evals)
+                        st.markdown(f"**{source}**: {src_sum.get('closed', 0)} trades | "
+                                    f"Win Rate: {src_sum.get('win_rate', 0):.1f}% | "
+                                    f"PnL: {src_sum.get('total_pnl', 0):+.2f}% | "
+                                    f"PF: {src_sum.get('profit_factor', 0):.2f} | "
+                                    f"SL: {src_sum.get('sl_hits', 0)} TP1: {src_sum.get('tp1_hits', 0)} TP2: {src_sum.get('tp2_hits', 0)}")
+
+                    # Long vs Short
+                    st.markdown("---")
+                    for direction, label in [("BUY", "LONG"), ("SELL", "SHORT")]:
+                        dir_evals = [e for e in evals if e.get("signal") == direction]
+                        dir_sum = get_performance_summary(dir_evals)
+                        st.markdown(f"**{label}**: {dir_sum.get('closed', 0)} trades | "
+                                    f"Win Rate: {dir_sum.get('win_rate', 0):.1f}% | "
+                                    f"PnL: {dir_sum.get('total_pnl', 0):+.2f}% | "
+                                    f"PF: {dir_sum.get('profit_factor', 0):.2f}")
+
+                with stab3:
+                    # Performance por simbolo
+                    sym_rows = []
+                    for sym in sorted(df_evals["symbol"].unique()):
+                        sym_evals = [e for e in evals if e.get("symbol") == sym]
+                        sym_sum = get_performance_summary(sym_evals)
+                        sym_rows.append({
+                            "Simbolo": sym,
+                            "Trades": sym_sum.get("closed", 0),
+                            "Win Rate": f"{sym_sum.get('win_rate', 0):.0f}%",
+                            "PnL %": round(sym_sum.get("total_pnl", 0), 2),
+                            "PF": round(sym_sum.get("profit_factor", 0), 2),
+                            "SL": sym_sum.get("sl_hits", 0),
+                            "TP1": sym_sum.get("tp1_hits", 0),
+                            "TP2": sym_sum.get("tp2_hits", 0),
+                        })
+                    if sym_rows:
+                        df_sym = pd.DataFrame(sym_rows)
+                        st.dataframe(df_sym, use_container_width=True, hide_index=True)
+
+                        # Bar chart PnL por simbolo
+                        fig_bar = px.bar(df_sym, x="Simbolo", y="PnL %",
+                                         color="PnL %",
+                                         color_continuous_scale=["#ff4444", "#ffff00", "#00cc00"],
+                                         title="PnL por Simbolo")
+                        fig_bar.update_layout(template="plotly_dark", height=350)
+                        st.plotly_chart(fig_bar, use_container_width=True)
+
+                with stab4:
+                    closed_evals = df_evals[df_evals["outcome"].isin(["SL_HIT", "TP1_HIT", "TP2_HIT", "EXPIRED"])]
+                    if not closed_evals.empty:
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            # PnL acumulado
+                            sorted_c = closed_evals.sort_values("timestamp")
+                            sorted_c["cum_pnl"] = sorted_c["pnl_percent"].cumsum()
+                            fig_cum = go.Figure()
+                            fig_cum.add_trace(go.Scatter(
+                                x=sorted_c["timestamp"], y=sorted_c["cum_pnl"],
+                                mode="lines+markers", fill="tozeroy",
+                                line=dict(color="#00ccff", width=2),
+                                fillcolor="rgba(0,204,255,0.1)"
+                            ))
+                            fig_cum.update_layout(title="PnL Acumulado", template="plotly_dark", height=350)
+                            fig_cum.add_hline(y=0, line_dash="dash", line_color="gray")
+                            st.plotly_chart(fig_cum, use_container_width=True)
+
+                        with col2:
+                            # Pie chart outcomes
+                            oc = closed_evals["outcome"].value_counts()
+                            colors_map = {"TP2_HIT": "#00ff00", "TP1_HIT": "#00cc00",
+                                          "SL_HIT": "#ff4444", "EXPIRED": "#888888"}
+                            fig_pie = px.pie(names=oc.index, values=oc.values,
+                                             title="Distribuicao de Resultados",
+                                             color=oc.index, color_discrete_map=colors_map)
+                            fig_pie.update_layout(template="plotly_dark", height=350)
+                            st.plotly_chart(fig_pie, use_container_width=True)
+
+                        # Confianca vs PnL
+                        if "confidence" in closed_evals.columns:
+                            fig_scatter = px.scatter(
+                                closed_evals, x="confidence", y="pnl_percent",
+                                color="outcome", hover_data=["symbol", "source", "signal"],
+                                color_discrete_map=colors_map,
+                                title="Confianca vs PnL")
+                            fig_scatter.update_layout(template="plotly_dark", height=350)
+                            fig_scatter.add_hline(y=0, line_dash="dash", line_color="gray")
+                            st.plotly_chart(fig_scatter, use_container_width=True)
+                    else:
+                        st.info("Nenhum sinal finalizado ainda para graficos.")
+
+        except ImportError as e:
+            st.error(f"Erro ao importar signal_tracker: {e}")
+        except Exception as e:
+            st.error(f"Erro ao carregar analytics: {e}")
+
+    with tab5:
         st.header("📉 Análise Detalhada")
         
         if len(closed_trades) > 0:
@@ -814,7 +1070,7 @@ if portfolio_data:
         else:
             st.info("ℹ️ Não há trades fechados para análise.")
 
-    with tab5:
+    with tab6:
         st.header("💹 Preços de Mercado em Tempo Real")
         
         # Obter preços atuais
@@ -856,7 +1112,7 @@ if portfolio_data:
     # =====================
     # NOVA ABA: MONITOR DO SISTEMA
     # =====================
-    with tab6:
+    with tab7:
         st.header("🔍 Monitor do Sistema de Sinais")
         st.markdown("Acompanhe se o sistema está gerando sinais corretamente para todos os 10 pares monitorados.")
 
@@ -1094,9 +1350,9 @@ if portfolio_data:
             st.metric("❓ Sem Sinal", no_signal)
 
     # ============================================================
-    # TAB 7: BINANCE FUTURES
+    # TAB 8: BINANCE FUTURES
     # ============================================================
-    with tab7:
+    with tab8:
         st.header("🔶 Binance Futures - Posições Reais")
         
         # Verificar configuração
