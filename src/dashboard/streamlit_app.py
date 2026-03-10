@@ -2,23 +2,24 @@
 Dashboard Streamlit para Monitoramento de Paper Trading
 """
 
-import streamlit as st
-import pandas as pd
-import json
-import plotly.graph_objects as go
-import plotly.express as px
-from datetime import datetime
-import os
-from pathlib import Path
-import requests
-import glob
 import asyncio
-import hmac
+import glob
 import hashlib
+import hmac
+import json
+import os
 import time
+from datetime import datetime
 from urllib.parse import urlencode
-from src.trading.paper_trading import real_paper_trading  # Usar instância global
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import requests
+import streamlit as st
 from dotenv import load_dotenv
+
+from src.trading.paper_trading import real_paper_trading  # Usar instância global
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -44,14 +45,14 @@ def get_binance_config():
     use_testnet = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
     api_key = os.getenv("BINANCE_API_KEY", "")
     api_secret = os.getenv("BINANCE_SECRET_KEY", "")
-    
+
     if use_testnet:
         base_url = "https://testnet.binancefuture.com"
         mode = "TESTNET"
     else:
         base_url = "https://fapi.binance.com"
         mode = "PRODUÇÃO"
-    
+
     return {
         "base_url": base_url,
         "api_key": api_key,
@@ -74,19 +75,19 @@ def binance_signature(params: dict, secret: str) -> str:
 def get_binance_positions():
     """Obtém posições abertas na Binance Futures"""
     config = get_binance_config()
-    
+
     if not config["api_key"] or not config["api_secret"]:
         return {"error": "API keys não configuradas", "positions": []}
-    
+
     try:
         params = {"timestamp": int(time.time() * 1000)}
         params["signature"] = binance_signature(params, config["api_secret"])
-        
+
         headers = {"X-MBX-APIKEY": config["api_key"]}
         url = f"{config['base_url']}/fapi/v2/positionRisk"
-        
+
         response = requests.get(url, params=params, headers=headers, timeout=10)
-        
+
         if response.status_code == 200:
             all_positions = response.json()
             # Filtrar apenas posições com quantidade != 0
@@ -101,19 +102,19 @@ def get_binance_positions():
 def get_binance_open_orders():
     """Obtém ordens abertas na Binance Futures"""
     config = get_binance_config()
-    
+
     if not config["api_key"] or not config["api_secret"]:
         return {"error": "API keys não configuradas", "orders": []}
-    
+
     try:
         params = {"timestamp": int(time.time() * 1000)}
         params["signature"] = binance_signature(params, config["api_secret"])
-        
+
         headers = {"X-MBX-APIKEY": config["api_key"]}
         url = f"{config['base_url']}/fapi/v1/openOrders"
-        
+
         response = requests.get(url, params=params, headers=headers, timeout=10)
-        
+
         if response.status_code == 200:
             return {"orders": response.json(), "mode": config["mode"]}
         else:
@@ -124,37 +125,37 @@ def get_binance_open_orders():
 def close_binance_position(symbol: str) -> dict:
     """Fecha posição aberta na Binance Futures com ordem de mercado"""
     config = get_binance_config()
-    
+
     if not config["api_key"] or not config["api_secret"]:
         return {"success": False, "error": "API keys não configuradas"}
-    
+
     try:
         # 1. Obter posição atual
         positions_data = get_binance_positions()
         if "error" in positions_data:
             return {"success": False, "error": positions_data["error"]}
-        
+
         # Encontrar posição do símbolo
         position = None
         for pos in positions_data.get("positions", []):
             if pos.get("symbol") == symbol:
                 position = pos
                 break
-        
+
         if not position:
             return {"success": False, "error": f"Nenhuma posição aberta para {symbol}"}
-        
+
         position_amt = float(position.get("positionAmt", 0))
         if position_amt == 0:
             return {"success": False, "error": f"Posição de {symbol} já está fechada"}
-        
+
         # 2. Determinar lado oposto
         close_side = "SELL" if position_amt > 0 else "BUY"
         quantity = abs(position_amt)
-        
+
         # 3. Cancelar ordens abertas do símbolo primeiro
         cancel_result = cancel_binance_orders(symbol)
-        
+
         # 4. Enviar ordem de mercado para fechar
         params = {
             "symbol": symbol,
@@ -165,12 +166,12 @@ def close_binance_position(symbol: str) -> dict:
             "timestamp": int(time.time() * 1000)
         }
         params["signature"] = binance_signature(params, config["api_secret"])
-        
+
         headers = {"X-MBX-APIKEY": config["api_key"]}
         url = f"{config['base_url']}/fapi/v1/order"
-        
+
         response = requests.post(url, params=params, headers=headers, timeout=10)
-        
+
         if response.status_code == 200:
             order = response.json()
             return {
@@ -188,22 +189,22 @@ def close_binance_position(symbol: str) -> dict:
 def cancel_binance_orders(symbol: str) -> dict:
     """Cancela todas as ordens abertas de um símbolo"""
     config = get_binance_config()
-    
+
     if not config["api_key"] or not config["api_secret"]:
         return {"success": False, "error": "API keys não configuradas"}
-    
+
     try:
         params = {
             "symbol": symbol,
             "timestamp": int(time.time() * 1000)
         }
         params["signature"] = binance_signature(params, config["api_secret"])
-        
+
         headers = {"X-MBX-APIKEY": config["api_key"]}
         url = f"{config['base_url']}/fapi/v1/allOpenOrders"
-        
+
         response = requests.delete(url, params=params, headers=headers, timeout=10)
-        
+
         if response.status_code == 200:
             return {"success": True, "canceled": response.json().get("code", 0) == 200}
         else:
@@ -216,19 +217,19 @@ def cancel_binance_orders(symbol: str) -> dict:
 def get_binance_balance():
     """Obtém saldo da conta Binance Futures"""
     config = get_binance_config()
-    
+
     if not config["api_key"] or not config["api_secret"]:
         return {"error": "API keys não configuradas"}
-    
+
     try:
         params = {"timestamp": int(time.time() * 1000)}
         params["signature"] = binance_signature(params, config["api_secret"])
-        
+
         headers = {"X-MBX-APIKEY": config["api_key"]}
         url = f"{config['base_url']}/fapi/v2/balance"
-        
+
         response = requests.get(url, params=params, headers=headers, timeout=10)
-        
+
         if response.status_code == 200:
             balances = response.json()
             # Encontrar USDT
@@ -408,7 +409,7 @@ def load_last_signals():
                     if signals_by_pair[symbol][source] is None:
                         signals_by_pair[symbol][source] = signal
 
-        except Exception as e:
+        except Exception:
             continue
 
     return signals_by_pair
@@ -436,7 +437,7 @@ def load_last_analysis_timestamps():
                         "signal": data.get("signal"),
                         "confidence": data.get("confidence", 0)
                     }
-            except:
+            except Exception:
                 pass
 
     return analysis_times
@@ -447,10 +448,10 @@ def get_market_prices():
     """Obtém preços atuais dos principais pares de criptomoedas"""
     symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "MATICUSDT"]
     prices = {}
-    
+
     for symbol in symbols:
         try:
-            response = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price", params={'symbol': symbol}, timeout=5)
+            response = requests.get("https://fapi.binance.com/fapi/v1/ticker/price", params={'symbol': symbol}, timeout=5)
             if response.status_code == 200:
                 data = response.json()
                 # Verificar se a chave 'price' existe e se é válida
@@ -469,10 +470,10 @@ def get_market_prices():
         except requests.exceptions.RequestException:
             # Erro de conexão/timeout, pular este símbolo
             continue
-        except Exception as e:
+        except Exception:
             # Outro erro, pular este símbolo silenciosamente
             continue
-    
+
     return prices
 
 # Carregar dados
@@ -482,28 +483,28 @@ trade_history = load_trade_history()
 # Sidebar - Controles
 with st.sidebar:
     st.header("⚙️ Controles")
-    
+
     # Botão para iniciar análise contínua
     st.subheader("🚀 Sistema de Trading")
     if st.button("▶️ Iniciar Análise Contínua", type="primary", use_container_width=True):
         st.info("📡 Iniciando análise contínua...")
         st.code("python main.py --symbol BTCUSDT --mode monitor --paper", language="bash")
         st.warning("⚠️ Execute este comando no terminal para iniciar a análise contínua")
-    
+
     if st.button("⏹️ Parar Análise", use_container_width=True):
         st.info("⏹️ Comando para parar será executado")
-    
+
     st.markdown("---")
-    
+
     # Auto-refresh
     auto_refresh = st.checkbox("🔄 Auto-refresh (5s)", value=False)
-    
+
     # Botão de refresh manual
     if st.button("🔄 Atualizar Agora"):
         st.rerun()
-    
+
     st.markdown("---")
-    
+
     # Informações do sistema
     st.header("ℹ️ Informações")
     st.info("Dashboard atualizado em tempo real com dados do paper trading.")
@@ -524,72 +525,72 @@ with st.sidebar:
 if portfolio_data:
     # KPIs principais - Foco em P&L em PORCENTAGEM
     col1, col2, col3, col4 = st.columns(4)
-    
+
     # Calcular P&L acumulado em % (soma de todos os trades fechados)
     closed_trades = [t for t in trade_history if t.get("status") in ["CLOSED", "CLOSED_PARTIAL"]]
     realized_pnl_percent = sum([get_pnl_percent(t) for t in closed_trades])
-    
+
     # Calcular P&L médio não realizado (posições abertas)
     open_positions = portfolio_data.get("positions", {})
     unrealized_pnl_percent = 0.0
     market_prices = get_market_prices()
-    
+
     open_pnl_list = []
     for pos_key, position in open_positions.items():
         symbol = position.get("symbol")
         entry_price = position.get("entry_price", 0)
         signal_type = position.get("signal", "BUY")
         current_price = market_prices.get(symbol, entry_price)
-        
+
         if entry_price > 0:
             if signal_type == "BUY":
                 pnl_percent = ((current_price - entry_price) / entry_price) * 100
             else:  # SELL
                 pnl_percent = ((entry_price - current_price) / entry_price) * 100
             open_pnl_list.append(pnl_percent)
-    
+
     if open_pnl_list:
         unrealized_pnl_percent = sum(open_pnl_list) / len(open_pnl_list)
-    
+
     # P&L total acumulado (soma de todos os trades fechados)
     total_pnl_percent = realized_pnl_percent
-    
+
     with col1:
         st.metric(
             "💰 P&L Acumulado",
             f"{realized_pnl_percent:+.2f}%",
             delta="Trades fechados"
         )
-    
+
     with col2:
         st.metric(
             "📈 P&L Médio Aberto",
             f"{unrealized_pnl_percent:+.2f}%",
             delta="Posições abertas"
         )
-    
+
     with col3:
         st.metric(
             "💵 P&L Total",
             f"{total_pnl_percent:+.2f}%",
             delta=f"{'✅' if total_pnl_percent >= 0 else '❌'}"
         )
-    
+
     with col4:
         open_count = len(open_positions)
         st.metric(
             "📊 Posições Abertas",
             open_count
         )
-    
+
     st.markdown("---")
-    
+
     # Tabs
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["📈 Overview", "💰 Posições Abertas", "📜 Histórico", "📊 Signal Analytics", "📉 Análise", "💹 Preços de Mercado", "🔍 Monitor Sistema", "🔶 Binance Futures"])
-    
+
     with tab1:
         st.header("📈 Visão Geral do Portfólio")
-        
+
         # Calcular estatísticas (apenas %)
         closed_trades = [t for t in trade_history if t.get("status") in ["CLOSED", "CLOSED_PARTIAL"]]
         open_trades = [t for t in trade_history if t.get("status") == "OPEN"]
@@ -597,29 +598,29 @@ if portfolio_data:
         losing_trades = len([t for t in closed_trades if get_pnl_percent(t) < 0])
         win_rate = (winning_trades / len(closed_trades) * 100) if closed_trades else 0
         total_pnl_percent = sum([get_pnl_percent(t) for t in closed_trades])
-        
+
         # Métricas de performance
         col1, col2, col3, col4, col5 = st.columns(5)
-        
+
         with col1:
             st.metric("🎯 Win Rate", f"{win_rate:.1f}%")
-        
+
         with col2:
             st.metric("✅ Trades Ganhadores", winning_trades)
-        
+
         with col3:
             st.metric("❌ Trades Perdedores", losing_trades)
-        
+
         with col4:
             st.metric("💰 P&L Acumulado", f"{total_pnl_percent:+.2f}%")
-        
+
         with col5:
             st.metric("📊 Trades Abertos", len(open_trades))
-        
+
         # Mostrar detalhes dos trades fechados
         if closed_trades:
             st.subheader("📋 Últimos Trades Fechados")
-            
+
             closed_list = []
             for trade in closed_trades[-10:]:  # Últimos 10 trades
                 entry_price = trade.get('entry_price', 0)
@@ -628,12 +629,12 @@ if portfolio_data:
                 take_profit_2 = trade.get('take_profit_2', 0)
                 position_size = trade.get('position_size', 0)
                 position_value = trade.get('position_value', 0)
-                
+
                 # Calcular diferenças percentuais
                 sl_diff = ((stop_loss - entry_price) / entry_price * 100) if entry_price > 0 else 0
                 tp1_diff = ((take_profit_1 - entry_price) / entry_price * 100) if entry_price > 0 else 0
                 tp2_diff = ((take_profit_2 - entry_price) / entry_price * 100) if entry_price > 0 else 0
-                
+
                 pnl_percent = get_pnl_percent(trade)
                 closed_list.append({
                     "Data": trade.get("timestamp", "N/A")[:16],
@@ -645,14 +646,14 @@ if portfolio_data:
                     "P&L": f"{pnl_percent:+.2f}%",
                     "Motivo": trade.get('close_reason', 'N/A')
                 })
-            
+
             df_closed = pd.DataFrame(closed_list)
             st.dataframe(df_closed, use_container_width=True, hide_index=True)
-        
+
         # Mostrar posições abertas no overview também
         if open_trades:
             st.subheader("🔄 Posições Abertas Atualmente")
-            
+
             open_list = []
             for trade in open_trades:
                 entry_price = trade.get('entry_price', 0)
@@ -661,12 +662,12 @@ if portfolio_data:
                 take_profit_2 = trade.get('take_profit_2', 0)
                 position_size = trade.get('position_size', 0)
                 position_value = trade.get('position_value', 0)
-                
+
                 # Calcular diferenças percentuais
                 sl_diff = ((stop_loss - entry_price) / entry_price * 100) if entry_price > 0 else 0
                 tp1_diff = ((take_profit_1 - entry_price) / entry_price * 100) if entry_price > 0 else 0
                 tp2_diff = ((take_profit_2 - entry_price) / entry_price * 100) if entry_price > 0 else 0
-                
+
                 open_list.append({
                     "Data": trade.get("timestamp", "N/A")[:16],
                     "Símbolo": trade.get("symbol", "N/A"),
@@ -680,32 +681,32 @@ if portfolio_data:
                     "Take Profit 2": f"${take_profit_2:,.2f} ({tp2_diff:+.1f}%)",
                     "Confiança": f"{trade.get('confidence', 0)}/10"
                 })
-            
+
             df_open = pd.DataFrame(open_list)
             st.dataframe(df_open, use_container_width=True, hide_index=True)
-        
+
         # Gráfico de performance
         if len(trade_history) > 0:
             st.subheader("📊 Performance ao Longo do Tempo")
-            
+
             # Preparar dados para gráfico
             trades_df = pd.DataFrame(trade_history)
             trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'])
             trades_df = trades_df.sort_values('timestamp')
-            
+
             # Verificar se coluna 'pnl_percent' existe e preencher valores nulos
             if 'pnl_percent' not in trades_df.columns:
                 trades_df['pnl_percent'] = 0.0
             else:
                 # Preencher valores nulos com 0 (trades abertos ainda não têm P&L)
                 trades_df['pnl_percent'] = trades_df['pnl_percent'].fillna(0.0)
-            
+
             # Calcular P&L acumulado em % apenas para trades fechados
             trades_df['cumulative_pnl_percent'] = trades_df['pnl_percent'].cumsum()
-            
+
             # Criar gráfico
             fig = go.Figure()
-            
+
             last_pnl = trades_df['cumulative_pnl_percent'].iloc[-1] if len(trades_df) > 0 else 0
             fig.add_trace(go.Scatter(
                 x=trades_df['timestamp'],
@@ -715,7 +716,7 @@ if portfolio_data:
                 line=dict(color='green' if last_pnl >= 0 else 'red', width=2),
                 marker=dict(size=8)
             ))
-            
+
             fig.update_layout(
                 title="Evolução do P&L Acumulado",
                 xaxis_title="Data",
@@ -723,9 +724,9 @@ if portfolio_data:
                 hovermode='x unified',
                 height=400
             )
-            
+
             st.plotly_chart(fig, use_container_width=True)
-    
+
     with tab2:
         st.header("💰 Posições Abertas")
 
@@ -779,7 +780,7 @@ if portfolio_data:
 
                     with col2:
                         # Botão para fechar posição
-                        if st.button(f"❌ Fechar", key=f"close_{position_key}"):
+                        if st.button("❌ Fechar", key=f"close_{position_key}"):
                             # Obter preço atualizado
                             fresh_price = get_current_price(symbol)
                             if fresh_price:
@@ -800,7 +801,7 @@ if portfolio_data:
                     st.markdown("---")
         else:
             st.info("ℹ️ Nenhuma posição aberta no momento.")
-    
+
     with tab3:
         st.header("📜 Histórico de Trades e Sinais")
 
@@ -1012,16 +1013,16 @@ if portfolio_data:
 
     with tab5:
         st.header("📉 Análise Detalhada")
-        
+
         if len(closed_trades) > 0:
             # Estatísticas dos trades fechados
             st.subheader("📊 Estatísticas dos Trades")
 
             # Filtrar apenas trades com P&L válido (em %)
             pnl_percent_values = [get_pnl_percent(t) for t in closed_trades if get_pnl_percent(t) != 0]
-            
+
             col1, col2 = st.columns(2)
-            
+
             with col1:
                 # Distribuição de P&L
                 if pnl_percent_values:
@@ -1034,7 +1035,7 @@ if portfolio_data:
                     st.plotly_chart(fig_pnl, use_container_width=True)
                 else:
                     st.info("Nenhum dado de P&L disponível")
-            
+
             with col2:
                 # Box plot de P&L
                 if pnl_percent_values:
@@ -1051,10 +1052,10 @@ if portfolio_data:
                     st.plotly_chart(fig_box, use_container_width=True)
                 else:
                     st.info("Nenhum dado de P&L disponível")
-            
+
             # Estatísticas descritivas (em %)
             st.subheader("📈 Estatísticas Descritivas")
-            
+
             if pnl_percent_values:
                 stats = {
                     "Média": f"{sum(pnl_percent_values) / len(pnl_percent_values):+.2f}%",
@@ -1065,17 +1066,17 @@ if portfolio_data:
                 }
             else:
                 stats = {"Mensagem": "Nenhum dado disponível"}
-            
+
             st.json(stats)
         else:
             st.info("ℹ️ Não há trades fechados para análise.")
 
     with tab6:
         st.header("💹 Preços de Mercado em Tempo Real")
-        
+
         # Obter preços atuais
         market_prices = get_market_prices()
-        
+
         if market_prices:
             # Criar DataFrame com preços
             prices_data = []
@@ -1085,17 +1086,17 @@ if portfolio_data:
                     "Preço Atual": f"${price:,.2f}" if price >= 1 else f"${price:.6f}",
                     "Preço Numérico": price
                 })
-            
+
             df_prices = pd.DataFrame(prices_data)
             df_prices = df_prices.sort_values("Preço Numérico", ascending=False)
-            
+
             # Mostrar tabela
             st.dataframe(
-                df_prices[["Par", "Preço Atual"]], 
-                use_container_width=True, 
+                df_prices[["Par", "Preço Atual"]],
+                use_container_width=True,
                 hide_index=True
             )
-            
+
             # Gráfico de barras
             fig_prices = px.bar(
                 df_prices,
@@ -1233,7 +1234,7 @@ if portfolio_data:
                         else:
                             days = minutes // 1440
                             row["Última Análise"] = f"há {days}d"
-                    except:
+                    except Exception:
                         row["Última Análise"] = timestamp[:16]
 
             # Status geral
@@ -1354,28 +1355,28 @@ if portfolio_data:
     # ============================================================
     with tab8:
         st.header("🔶 Binance Futures - Posições Reais")
-        
+
         # Verificar configuração
         config = get_binance_config()
-        
+
         # Indicador de modo
         if config["testnet"]:
             st.info(f"🧪 **Modo: TESTNET** - Conectado a {config['base_url']}")
         else:
             st.warning(f"⚠️ **Modo: PRODUÇÃO** - Conectado a {config['base_url']} - ORDENS REAIS!")
-        
+
         # Botão de atualização
         col_refresh, col_info = st.columns([1, 3])
         with col_refresh:
             if st.button("🔄 Atualizar Binance", key="refresh_binance"):
                 st.cache_data.clear()
                 st.rerun()
-        
+
         # Obter dados
         balance_data = get_binance_balance()
         positions_data = get_binance_positions()
         orders_data = get_binance_open_orders()
-        
+
         # Mostrar saldo
         st.subheader("💰 Saldo da Conta")
         if "error" in balance_data:
@@ -1388,11 +1389,11 @@ if portfolio_data:
                 st.metric("✅ Disponível", f"${balance_data.get('available', 0):,.2f} USDT")
             with col3:
                 unrealized = balance_data.get('unrealized_pnl', 0)
-                st.metric("📊 P&L Não Realizado", f"${unrealized:,.2f}", 
+                st.metric("📊 P&L Não Realizado", f"${unrealized:,.2f}",
                          delta=f"{unrealized:+,.2f}" if unrealized != 0 else None)
-        
+
         st.markdown("---")
-        
+
         # Mostrar posições
         st.subheader("📊 Posições Abertas")
         if "error" in positions_data:
@@ -1401,7 +1402,7 @@ if portfolio_data:
             st.success("✅ Nenhuma posição aberta na Binance Futures")
         else:
             positions = positions_data["positions"]
-            
+
             # Métricas resumo primeiro
             total_pnl = sum(float(pos.get("unRealizedProfit", 0)) for pos in positions)
             col1, col2, col3, col4 = st.columns(4)
@@ -1417,7 +1418,7 @@ if portfolio_data:
                 # Botão para fechar TODAS as posições
                 if st.button("🚫 Fechar TODAS", key="close_all_positions", type="secondary"):
                     st.session_state["confirm_close_all"] = True
-            
+
             # Confirmar fechamento de todas
             if st.session_state.get("confirm_close_all"):
                 st.warning("⚠️ Tem certeza que deseja fechar TODAS as posições?")
@@ -1439,9 +1440,9 @@ if portfolio_data:
                     if st.button("❌ Não, cancelar", key="confirm_no_all"):
                         st.session_state["confirm_close_all"] = False
                         st.rerun()
-            
+
             st.markdown("---")
-            
+
             # Mostrar cada posição com botão de fechar
             for pos in positions:
                 symbol = pos.get("symbol", "")
@@ -1450,10 +1451,10 @@ if portfolio_data:
                 mark_price = float(pos.get("markPrice", 0))
                 unrealized_pnl = float(pos.get("unRealizedProfit", 0))
                 leverage = pos.get("leverage", "1")
-                
+
                 # Determinar lado
                 side = "LONG 📈" if position_amt > 0 else "SHORT 📉"
-                
+
                 # Calcular ROI
                 if entry_price > 0:
                     if position_amt > 0:  # LONG
@@ -1462,34 +1463,34 @@ if portfolio_data:
                         roi = ((entry_price - mark_price) / entry_price) * 100
                 else:
                     roi = 0
-                
+
                 # Cor do P&L
                 pnl_color = "green" if unrealized_pnl >= 0 else "red"
-                
+
                 # Container para cada posição
                 with st.container():
                     col1, col2, col3, col4, col5, col6 = st.columns([2, 1.5, 1.5, 1.5, 1.5, 1])
-                    
+
                     with col1:
                         st.markdown(f"**{symbol}** {side}")
                         st.caption(f"Tamanho: {abs(position_amt):,.4f} | Alavancagem: {leverage}x")
-                    
+
                     with col2:
                         st.metric("Entry", f"${entry_price:,.4f}")
-                    
+
                     with col3:
                         st.metric("Mark", f"${mark_price:,.4f}")
-                    
+
                     with col4:
                         st.metric("P&L", f"${unrealized_pnl:,.2f}", delta=f"{roi:+.2f}%")
-                    
+
                     with col5:
                         # Mostrar ordens SL/TP
                         orders_for_symbol = [o for o in orders_data.get("orders", []) if o.get("symbol") == symbol]
                         sl_count = len([o for o in orders_for_symbol if "STOP" in o.get("type", "")])
                         tp_count = len([o for o in orders_for_symbol if "TAKE_PROFIT" in o.get("type", "")])
                         st.caption(f"🛑 SL: {sl_count} | 🎯 TP: {tp_count}")
-                    
+
                     with col6:
                         # Botão de fechar
                         btn_key = f"close_{symbol}"
@@ -1503,11 +1504,11 @@ if portfolio_data:
                                     st.rerun()
                                 else:
                                     st.error(f"❌ Erro: {result.get('error')}")
-                    
+
                     st.markdown("---")
-        
+
         st.markdown("---")
-        
+
         # Mostrar ordens abertas
         st.subheader("📋 Ordens Abertas (SL/TP)")
         if "error" in orders_data:
@@ -1516,7 +1517,7 @@ if portfolio_data:
             st.info("ℹ️ Nenhuma ordem aberta")
         else:
             orders = orders_data["orders"]
-            
+
             # Agrupar por símbolo
             orders_by_symbol = {}
             for order in orders:
@@ -1524,7 +1525,7 @@ if portfolio_data:
                 if symbol not in orders_by_symbol:
                     orders_by_symbol[symbol] = []
                 orders_by_symbol[symbol].append(order)
-            
+
             # Criar DataFrame
             orders_list = []
             for order in orders:
@@ -1532,7 +1533,7 @@ if portfolio_data:
                 side = order.get("side", "")
                 quantity = float(order.get("origQty", 0))
                 stop_price = float(order.get("stopPrice", 0))
-                
+
                 # Ícone baseado no tipo
                 if "STOP" in order_type:
                     type_icon = "🛑 Stop Loss"
@@ -1540,7 +1541,7 @@ if portfolio_data:
                     type_icon = "🎯 Take Profit"
                 else:
                     type_icon = order_type
-                
+
                 orders_list.append({
                     "Símbolo": order.get("symbol", ""),
                     "Tipo": type_icon,
@@ -1549,10 +1550,10 @@ if portfolio_data:
                     "Trigger": f"${stop_price:,.4f}" if stop_price > 0 else "-",
                     "Status": order.get("status", "")
                 })
-            
+
             df_orders = pd.DataFrame(orders_list)
             st.dataframe(df_orders, use_container_width=True, hide_index=True)
-            
+
             st.caption(f"Total: {len(orders)} ordens abertas")
 
 else:

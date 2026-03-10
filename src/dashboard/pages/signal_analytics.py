@@ -6,19 +6,20 @@ Avalia TODOS os sinais emitidos contra dados reais de mercado.
 Mostra metricas completas de performance por fonte, direcao, simbolo.
 """
 
-import streamlit as st
-import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
 import sys
 from pathlib import Path
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
 
 # Adicionar raiz do projeto ao path
 root = Path(__file__).resolve().parent.parent.parent.parent
 if str(root) not in sys.path:
     sys.path.insert(0, str(root))
 
-from src.trading.signal_tracker import evaluate_all_signals, get_performance_summary
+from src.trading.signal_tracker import evaluate_all_signals, get_performance_summary  # noqa: E402
 
 st.set_page_config(page_title="Signal Analytics", page_icon="📊", layout="wide")
 

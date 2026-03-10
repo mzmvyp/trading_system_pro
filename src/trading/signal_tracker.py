@@ -8,12 +8,14 @@ Le sinais salvos em signals/ e verifica contra dados reais da Binance:
 - Agrega performance por source, direction, symbol
 """
 
+import glob
 import json
 import os
-import glob
+from datetime import datetime
+from typing import Dict, List
+
 import requests
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
+
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
