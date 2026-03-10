@@ -11,7 +11,8 @@ Verifica saúde das posições em tempo real:
 import json
 import os
 from datetime import datetime
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
+
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
