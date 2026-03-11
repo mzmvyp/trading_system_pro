@@ -90,9 +90,9 @@ async def main():
     )
     parser.add_argument(
         '--mode',
-        choices=['single', 'monitor', 'top5', 'top10'],
+        choices=['single', 'monitor', 'top5', 'top10', 'cleanup'],
         default='single',
-        help='Modo de operação'
+        help='Modo de operação (cleanup = limpar ordens órfãs imediatamente)'
     )
     parser.add_argument(
         '--interval',
@@ -187,9 +187,9 @@ async def main():
                             except Exception as e:
                                 logger.warning(f"Erro ao limpar ordens de posicoes fechadas: {e}")
 
-                    # Limpeza periódica de ordens órfãs (a cada 6 ciclos ~30 min com interval=300s)
+                    # Limpeza periódica de ordens órfãs (a cada 2 ciclos ~30 min com interval=900s)
                     _cleanup_cycle += 1
-                    if settings.trading_mode == "real" and _cleanup_cycle >= 6:
+                    if settings.trading_mode == "real" and _cleanup_cycle >= 2:
                         _cleanup_cycle = 0
                         try:
                             from src.trading.orphan_cleaner import cleanup_orphan_orders
@@ -291,6 +291,15 @@ async def main():
                 print(f"\n[{i}/{len(symbols)}] Analisando {symbol}...")
                 await agent.analyze(symbol)
                 await asyncio.sleep(5)  # Pausa entre análises
+
+        elif args.mode == 'cleanup':
+            # Limpeza imediata de ordens órfãs e excessivas
+            print("\n" + "=" * 60)
+            print("[CLEANUP] Limpeza imediata de ordens orfas e excessivas")
+            print("=" * 60)
+            from src.trading.orphan_cleaner import cleanup_orphan_orders
+            result = await cleanup_orphan_orders()
+            print(f"\nResultado: {result}")
 
     except KeyboardInterrupt:
         logger.info("Sistema interrompido pelo usuário")
