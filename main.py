@@ -97,8 +97,8 @@ async def main():
     parser.add_argument(
         '--interval',
         type=int,
-        default=300,
-        help='Intervalo para monitoramento em segundos'
+        default=900,
+        help='Intervalo para monitoramento em segundos (default: 900s = 15min)'
     )
     parser.add_argument(
         '--paper',
