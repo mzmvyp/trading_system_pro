@@ -43,16 +43,90 @@ class OnlineLearningManager:
     """
     Gerenciador de Online Learning para o validador de sinais.
     Permite que o modelo melhore continuamente com novos dados.
+    Auto-seed: ao inicializar, verifica se há sinais avaliados para popular o buffer.
     """
-    
-    def __init__(self):
+
+    def __init__(self, auto_seed: bool = False):
         self.buffer: List[Dict] = []
         self.performance_history: List[Dict] = []
-        
+
         Path(CONFIG["model_dir"]).mkdir(exist_ok=True)
         self._load_buffer()
         self._load_performance_history()
+
+        # Auto-seed: se o buffer esta vazio e há sinais avaliados, popular automaticamente
+        if auto_seed and len(self.buffer) == 0:
+            self._auto_seed()
         
+    def _auto_seed(self):
+        """Automaticamente popula buffer com sinais avaliados se buffer vazio"""
+        try:
+            from src.trading.signal_tracker import evaluate_all_signals
+            evaluations = evaluate_all_signals()
+            finalized = [e for e in evaluations
+                         if e.get('outcome') in ('SL_HIT', 'TP1_HIT', 'TP2_HIT')]
+            if finalized:
+                print(f"[OL-AUTO] {len(finalized)} sinais finalizados encontrados. Populando buffer...")
+                for ev in finalized:
+                    outcome = ev.get('outcome', '')
+                    result_map = {'TP1_HIT': 'TP1', 'TP2_HIT': 'TP2', 'SL_HIT': 'SL'}
+                    result = result_map.get(outcome, 'SL')
+                    signal_data = {
+                        'symbol': ev.get('symbol', ''),
+                        'signal': ev.get('signal', ''),
+                        'entry_price': ev.get('entry_price', 0),
+                        'stop_loss': ev.get('stop_loss', 0),
+                        'take_profit_1': ev.get('take_profit_1', 0),
+                        'confidence': ev.get('confidence', 5),
+                        'indicators': ev.get('indicators', {}),
+                        'trend': ev.get('trend', 'neutral'),
+                        'sentiment': ev.get('sentiment', 'neutral'),
+                        'rsi': ev.get('rsi', ev.get('indicators', {}).get('rsi', 50)),
+                        'macd_histogram': ev.get('macd_histogram', ev.get('indicators', {}).get('macd_histogram', 0)),
+                        'adx': ev.get('adx', ev.get('indicators', {}).get('adx', 25)),
+                        'atr': ev.get('atr', ev.get('indicators', {}).get('atr', 0)),
+                        'bb_position': ev.get('bb_position', ev.get('indicators', {}).get('bb_position', 0.5)),
+                        'cvd': ev.get('cvd', ev.get('indicators', {}).get('cvd', 0)),
+                        'orderbook_imbalance': ev.get('orderbook_imbalance', ev.get('indicators', {}).get('orderbook_imbalance', 0.5)),
+                        'bullish_tf_count': ev.get('bullish_tf_count', 0),
+                        'bearish_tf_count': ev.get('bearish_tf_count', 0),
+                    }
+                    self.add_signal_result(signal_data, result, ev.get('pnl_percent', 0), _batch_mode=True)
+                self._save_buffer()
+                print(f"[OL-AUTO] Buffer populado com {len(self.buffer)} amostras")
+        except Exception as e:
+            print(f"[OL-AUTO] Erro no auto-seed: {e}")
+
+    def ensure_model_exists(self) -> bool:
+        """
+        Verifica se existe um modelo treinado. Se nao, tenta criar um.
+        Retorna True se modelo existe (ou foi criado com sucesso).
+        """
+        models_path = os.path.join(CONFIG["model_dir"], "signal_validators.pkl")
+        if os.path.exists(models_path):
+            return True
+
+        print("[OL] Nenhum modelo encontrado. Tentando criar modelo inicial...")
+
+        # Primeiro: tentar treino completo via bootstrap (melhor qualidade)
+        try:
+            from src.ml.train_from_signals import run_training_pipeline
+            success = run_training_pipeline()
+            if success:
+                print("[OL] Modelo inicial criado via training pipeline!")
+                return True
+        except Exception as e:
+            print(f"[OL] Training pipeline falhou: {e}")
+
+        # Fallback: se temos dados no buffer, treinar com eles
+        if len(self.buffer) >= 10:
+            print(f"[OL] Tentando criar modelo a partir do buffer ({len(self.buffer)} amostras)...")
+            result = self.retrain()
+            return result.get("success", False)
+
+        print("[OL] Sem dados suficientes para criar modelo inicial.")
+        return False
+
     def _load_buffer(self):
         """Carrega buffer de dados pendentes"""
         if os.path.exists(CONFIG["buffer_file"]):
@@ -187,142 +261,198 @@ class OnlineLearningManager:
     def retrain(self) -> Dict:
         """
         Retreina o modelo com novos dados.
-        
+        Se nao existe modelo anterior, cria do zero (primeiro treinamento).
+        Usa TODOS os dados do buffer + dataset original (se existir).
+
         Returns:
             Dict com resultados do retreino
         """
         print("\n" + "="*60)
         print("ONLINE LEARNING - RETREINAMENTO")
         print("="*60)
-        
+
         if len(self.buffer) < 10:
             print(f"[OL] Dados insuficientes para retreino ({len(self.buffer)} < 10)")
             return {"success": False, "reason": "Dados insuficientes"}
-            
+
         try:
-            # Carregar modelo atual
+            # Tentar carregar modelo atual (pode nao existir ainda)
             from src.ml.simple_validator import SimpleSignalValidator
-            current_validator = SimpleSignalValidator()
-            current_validator.load_models()
-            
-            # Preparar novos dados
+            current_validator = None
+            has_current_model = False
+
+            try:
+                current_validator = SimpleSignalValidator()
+                current_validator.load_models()
+                has_current_model = True
+                print(f"[OL] Modelo atual carregado: {current_validator.best_model_name}")
+            except (FileNotFoundError, EOFError, Exception) as e:
+                print(f"[OL] Nenhum modelo existente encontrado ({e}). Criando modelo inicial...")
+                has_current_model = False
+
+            # Preparar novos dados do buffer
             new_df = pd.DataFrame(self.buffer)
-            
-            # CORRIGIDO: Sincronizar features com simple_signal_validator.py
-            # Usando as mesmas 16 features para consistência entre treino e retreino
+
             feature_cols = [
                 'rsi', 'macd_histogram', 'adx', 'atr', 'bb_position',
                 'cvd', 'orderbook_imbalance', 'bullish_tf_count', 'bearish_tf_count',
                 'confidence', 'trend_encoded', 'sentiment_encoded', 'signal_encoded',
                 'risk_distance_pct', 'reward_distance_pct', 'risk_reward_ratio'
             ]
-            
+
             available_cols = [col for col in feature_cols if col in new_df.columns]
-            
+
             X_new = new_df[available_cols].fillna(0).values
             y_new = new_df['target'].values
-            
-            print(f"[OL] Novos dados: {len(X_new)} amostras")
+
+            print(f"[OL] Novos dados do buffer: {len(X_new)} amostras")
             print(f"[OL] Distribuicao: {sum(y_new)} TP, {len(y_new)-sum(y_new)} SL")
-            
-            # Carregar dados originais de treino
+
+            # Carregar dados originais de treino (se existir)
             train_path = "ml_dataset/dataset_train_latest.csv"
             if os.path.exists(train_path):
                 original_df = pd.read_csv(train_path)
-                X_orig = original_df[available_cols].fillna(0).values
-                y_orig = original_df['target'].values
-                
-                # Combinar dados
-                X_combined = np.vstack([X_orig, X_new])
-                y_combined = np.hstack([y_orig, y_new])
-                
-                print(f"[OL] Dados combinados: {len(X_combined)} amostras")
+                orig_available = [col for col in available_cols if col in original_df.columns]
+                if orig_available and 'target' in original_df.columns:
+                    X_orig = original_df[orig_available].fillna(0).values
+                    y_orig = original_df['target'].values
+                    X_combined = np.vstack([X_orig, X_new])
+                    y_combined = np.hstack([y_orig, y_new])
+                    print(f"[OL] Dados combinados: {len(X_orig)} originais + {len(X_new)} buffer = {len(X_combined)} total")
+                else:
+                    X_combined = X_new
+                    y_combined = y_new
             else:
                 X_combined = X_new
                 y_combined = y_new
-                
+                print(f"[OL] Sem dataset original. Treinando apenas com buffer ({len(X_combined)} amostras)")
+
+            # Verificar variancia de classes
+            unique_classes = np.unique(y_combined)
+            if len(unique_classes) < 2:
+                print(f"[OL] AVISO: Apenas uma classe nos dados ({unique_classes}). Adicionando dados sinteticos...")
+                # Adicionar pelo menos 1 exemplo da classe faltante para evitar erro
+                minority_class = 0 if 1 in unique_classes else 1
+                synthetic = np.median(X_combined, axis=0).reshape(1, -1)
+                X_combined = np.vstack([X_combined, synthetic])
+                y_combined = np.hstack([y_combined, [minority_class]])
+
             # Split para validacao
             n = len(X_combined)
             split_idx = int(n * (1 - CONFIG["validation_split"]))
-            
+            split_idx = max(split_idx, 1)  # Garantir pelo menos 1 amostra no treino
+
             X_train, X_val = X_combined[:split_idx], X_combined[split_idx:]
             y_train, y_val = y_combined[:split_idx], y_combined[split_idx:]
-            
-            # Treinar novo modelo
+
+            # Treinar ensemble de modelos
             scaler = StandardScaler()
             X_train_scaled = scaler.fit_transform(X_train)
             X_val_scaled = scaler.transform(X_val)
-            
-            # Usar LogisticRegression (melhor modelo atual)
-            new_model = LogisticRegression(
-                max_iter=1000,
-                class_weight='balanced',
-                random_state=42
-            )
-            new_model.fit(X_train_scaled, y_train)
-            
-            # Avaliar
-            y_pred = new_model.predict(X_val_scaled)
-            new_accuracy = accuracy_score(y_val, y_pred)
-            new_f1 = f1_score(y_val, y_pred, zero_division=0)
-            
-            print(f"[OL] Novo modelo - Accuracy: {new_accuracy:.1%}, F1: {new_f1:.3f}")
-            
-            # Comparar com modelo atual
-            current_model = current_validator.models.get(current_validator.best_model_name)
-            if current_model:
-                # Reescalar com o scaler atual
-                X_val_current = current_validator.scaler.transform(X_val)
-                y_pred_current = current_model.predict(X_val_current)
-                current_accuracy = accuracy_score(y_val, y_pred_current)
-                current_f1 = f1_score(y_val, y_pred_current, zero_division=0)
-                
-                print(f"[OL] Modelo atual - Accuracy: {current_accuracy:.1%}, F1: {current_f1:.3f}")
-                
-                improvement = new_f1 - current_f1
-                print(f"[OL] Melhoria F1: {improvement:+.3f}")
-                
-                if improvement >= CONFIG["min_improvement"]:
-                    # Salvar novo modelo
-                    self._save_new_model(new_model, scaler, available_cols)
-                    
-                    # Limpar buffer
-                    self.buffer = []
-                    self._save_buffer()
-                    
-                    # Registrar performance
-                    self._record_performance(new_accuracy, new_f1, len(X_combined))
-                    
-                    print(f"[OL] Novo modelo salvo com sucesso!")
-                    
-                    return {
-                        "success": True,
-                        "new_accuracy": new_accuracy,
-                        "new_f1": new_f1,
-                        "improvement": improvement,
-                        "samples_used": len(X_combined)
-                    }
+
+            models_to_train = {
+                "LogisticRegression": LogisticRegression(
+                    max_iter=1000, class_weight='balanced', random_state=42
+                ),
+                "RandomForest": RandomForestClassifier(
+                    n_estimators=100, max_depth=5, class_weight='balanced', random_state=42
+                ),
+                "GradientBoosting": GradientBoostingClassifier(
+                    n_estimators=100, max_depth=3, random_state=42
+                ),
+            }
+
+            best_model = None
+            best_model_name = None
+            best_f1 = -1
+            best_accuracy = 0
+            trained_models = {}
+
+            for name, model in models_to_train.items():
+                try:
+                    model.fit(X_train_scaled, y_train)
+                    trained_models[name] = model
+
+                    y_pred = model.predict(X_val_scaled)
+                    acc = accuracy_score(y_val, y_pred)
+                    f1 = f1_score(y_val, y_pred, zero_division=0)
+                    print(f"[OL]   {name}: Accuracy={acc:.1%}, F1={f1:.3f}")
+
+                    if f1 > best_f1:
+                        best_f1 = f1
+                        best_accuracy = acc
+                        best_model = model
+                        best_model_name = name
+                except Exception as e:
+                    print(f"[OL]   {name}: ERRO - {e}")
+
+            if best_model is None:
+                return {"success": False, "reason": "Nenhum modelo treinado com sucesso"}
+
+            new_accuracy = best_accuracy
+            new_f1 = best_f1
+
+            print(f"\n[OL] Melhor modelo: {best_model_name} (Accuracy={new_accuracy:.1%}, F1={new_f1:.3f})")
+
+            # Comparar com modelo atual (se existir)
+            should_save = False
+            improvement = 0.0
+
+            if has_current_model:
+                current_model = current_validator.models.get(current_validator.best_model_name)
+                if current_model:
+                    try:
+                        X_val_current = current_validator.scaler.transform(X_val)
+                        y_pred_current = current_model.predict(X_val_current)
+                        current_f1 = f1_score(y_val, y_pred_current, zero_division=0)
+
+                        improvement = new_f1 - current_f1
+                        print(f"[OL] Modelo atual F1: {current_f1:.3f} | Novo F1: {new_f1:.3f} | Melhoria: {improvement:+.3f}")
+
+                        should_save = improvement >= CONFIG["min_improvement"]
+                    except Exception as e:
+                        print(f"[OL] Erro ao comparar com modelo atual: {e}. Salvando novo modelo.")
+                        should_save = True
                 else:
-                    print(f"[OL] Modelo nao melhorou suficiente. Mantendo atual.")
-                    return {
-                        "success": False,
-                        "reason": "Sem melhoria suficiente",
-                        "improvement": improvement
-                    }
+                    should_save = True
             else:
-                # Nao tem modelo atual, salvar novo
-                self._save_new_model(new_model, scaler, available_cols)
+                # Primeiro modelo: sempre salvar
+                should_save = True
+                print(f"[OL] Primeiro treinamento - salvando modelo inicial")
+
+            if should_save:
+                # Salvar TODOS os modelos treinados (nao so o melhor)
+                self._save_new_model_ensemble(trained_models, best_model_name, scaler, available_cols, new_accuracy, new_f1)
+
+                # Salvar dataset combinado para retreinos futuros
+                self._save_combined_dataset(X_combined, y_combined, available_cols)
+
+                # Limpar buffer
                 self.buffer = []
                 self._save_buffer()
+
+                # Registrar performance
                 self._record_performance(new_accuracy, new_f1, len(X_combined))
-                
+
+                print(f"[OL] Novo modelo salvo com sucesso!")
+
                 return {
                     "success": True,
                     "new_accuracy": new_accuracy,
                     "new_f1": new_f1,
-                    "samples_used": len(X_combined)
+                    "improvement": improvement,
+                    "samples_used": len(X_combined),
+                    "best_model": best_model_name,
+                    "first_training": not has_current_model
                 }
-                
+            else:
+                print(f"[OL] Modelo nao melhorou suficiente. Mantendo atual.")
+                return {
+                    "success": False,
+                    "reason": "Sem melhoria suficiente",
+                    "improvement": improvement
+                }
+
         except Exception as e:
             print(f"[OL] Erro no retreino: {e}")
             import traceback
@@ -330,39 +460,54 @@ class OnlineLearningManager:
             return {"success": False, "error": str(e)}
             
     def _save_new_model(self, model, scaler, feature_columns):
-        """Salva o novo modelo treinado"""
-        # Salvar modelo
+        """Salva o novo modelo treinado (compatibilidade)"""
+        self._save_new_model_ensemble(
+            {"LogisticRegression": model}, "LogisticRegression",
+            scaler, feature_columns, 0, 0
+        )
+
+    def _save_new_model_ensemble(self, trained_models, best_model_name, scaler, feature_columns, accuracy, f1):
+        """Salva ensemble de modelos treinados"""
         models_path = os.path.join(CONFIG["model_dir"], "signal_validators.pkl")
-        
-        # Carregar modelos existentes e atualizar
-        models = {}
-        if os.path.exists(models_path):
-            with open(models_path, 'rb') as f:
-                models = pickle.load(f)
-                
-        models['LogisticRegression'] = model
-        
+
         with open(models_path, 'wb') as f:
-            pickle.dump(models, f)
-            
+            pickle.dump(trained_models, f)
+
         # Salvar scaler
         scaler_path = os.path.join(CONFIG["model_dir"], "scaler_simple.pkl")
         with open(scaler_path, 'wb') as f:
             pickle.dump(scaler, f)
-            
+
         # Atualizar metadata
         info_path = os.path.join(CONFIG["model_dir"], "model_info_simple.json")
         info = {}
         if os.path.exists(info_path):
-            with open(info_path, 'r') as f:
-                info = json.load(f)
-                
+            try:
+                with open(info_path, 'r') as f:
+                    info = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+
         info['last_retrain'] = datetime.now().isoformat()
         info['retrain_count'] = info.get('retrain_count', 0) + 1
         info['feature_columns'] = feature_columns
-        
+        info['best_model'] = best_model_name
+        info['best_accuracy'] = accuracy
+        info['best_f1'] = f1
+
         with open(info_path, 'w') as f:
             json.dump(info, f, indent=2, default=str)
+
+    def _save_combined_dataset(self, X, y, feature_columns):
+        """Salva dataset combinado para retreinos futuros"""
+        try:
+            os.makedirs("ml_dataset", exist_ok=True)
+            df = pd.DataFrame(X, columns=feature_columns)
+            df['target'] = y
+            df.to_csv("ml_dataset/dataset_train_latest.csv", index=False)
+            print(f"[OL] Dataset atualizado: {len(df)} amostras salvas em ml_dataset/dataset_train_latest.csv")
+        except Exception as e:
+            print(f"[OL] Erro ao salvar dataset: {e}")
             
     def _record_performance(self, accuracy: float, f1: float, n_samples: int):
         """Registra performance do modelo"""
