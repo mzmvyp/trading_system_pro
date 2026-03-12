@@ -356,7 +356,7 @@ def load_portfolio_data():
                     if data and data.get("positions"):
                         return data
                     # Se state.json existe mas sem posições, em modo real buscar Binance
-                    trading_mode = os.getenv("TRADING_MODE", "paper").lower()
+                    trading_mode = os.getenv("TRADING_MODE", "paper").strip().lower()
                     if trading_mode == "real" and data:
                         binance_data = load_binance_as_portfolio()
                         if binance_data and binance_data.get("positions"):
@@ -368,7 +368,7 @@ def load_portfolio_data():
             st.error(f"Erro ao carregar dados: {e}")
 
     # Se não existe state.json e estamos em modo real, buscar Binance
-    trading_mode = os.getenv("TRADING_MODE", "paper").lower()
+    trading_mode = os.getenv("TRADING_MODE", "paper").strip().lower()
     if trading_mode == "real":
         binance_data = load_binance_as_portfolio()
         if binance_data:
@@ -525,7 +525,7 @@ with st.sidebar:
     
     # Informações do sistema
     # Indicador de modo
-    trading_mode = os.getenv("TRADING_MODE", "paper").lower()
+    trading_mode = os.getenv("TRADING_MODE", "paper").strip().lower()
     if trading_mode == "real":
         st.warning("🔶 **Modo Real (Testnet)**\nDados da Binance Futures. Aba 'Binance Futures' para detalhes e ordens.")
     else:
@@ -1392,7 +1392,18 @@ if portfolio_data:
             st.caption(f"Total: {len(orders)} ordens abertas")
 
 else:
-    st.warning("⚠️ Nenhum dado de portfólio encontrado. Execute alguns trades primeiro!")
+    trading_mode = os.getenv("TRADING_MODE", "paper").strip().lower()
+    if trading_mode == "real":
+        binance_result = load_binance_as_portfolio()
+        if binance_result and binance_result.get("error"):
+            st.error(f"⚠️ Erro ao consultar Binance API: {binance_result['error']}\n\nVerifique as chaves de API e a conexão de rede.")
+        elif binance_result and not binance_result.get("positions"):
+            testnet_label = "Testnet" if os.getenv("BINANCE_TESTNET", "false").strip().lower() == "true" else "Mainnet"
+            st.info(f"📡 Modo Real ({testnet_label}) - Nenhuma posição aberta na Binance.\n\nUse a aba 'Binance Futures' para ver detalhes da conta.")
+        else:
+            st.warning("⚠️ Nenhum dado de portfólio encontrado. Verifique a configuração do TRADING_MODE e chaves de API.")
+    else:
+        st.warning("⚠️ Nenhum dado de portfólio encontrado. Execute o bot primeiro:\n\n`python main.py --mode monitor --paper`")
 
 # Footer
 st.markdown("---")
