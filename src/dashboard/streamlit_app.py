@@ -704,146 +704,248 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["📈 Overview", "💰
 with tab1:
     st.header("📈 Visão Geral do Portfólio")
 
-    if not portfolio_data and not trade_history:
-        st.info("📡 Nenhum dado de portfólio ainda. Os dados aparecerão aqui quando o bot executar trades.\n\nVeja a aba **📜 Histórico** e **📊 Signal Analytics** para sinais já gerados.")
-    else:
-        pass  # Continue with normal display below
-
-    # Calcular estatísticas (apenas %)
+    # Calcular estatísticas de trades paper/real (apenas %)
     closed_trades = [t for t in trade_history if t.get("status") in ["CLOSED", "CLOSED_PARTIAL"]]
     open_trades = [t for t in trade_history if t.get("status") == "OPEN"]
-    winning_trades = len([t for t in closed_trades if get_pnl_percent(t) > 0])
-    losing_trades = len([t for t in closed_trades if get_pnl_percent(t) < 0])
-    win_rate = (winning_trades / len(closed_trades) * 100) if closed_trades else 0
-    total_pnl_percent = sum([get_pnl_percent(t) for t in closed_trades])
 
-    # Métricas de performance
-    col1, col2, col3, col4, col5 = st.columns(5)
+    # Se não tem trades paper/real, usar dados do signal_tracker como fonte principal
+    _overview_from_signals = False
+    if not closed_trades and not open_trades:
+        try:
+            from src.trading.signal_tracker import evaluate_all_signals, get_performance_summary
 
-    with col1:
-        st.metric("🎯 Win Rate", f"{win_rate:.1f}%")
+            @st.cache_data(ttl=120)
+            def _load_overview_evals():
+                return evaluate_all_signals()
 
-    with col2:
-        st.metric("✅ Trades Ganhadores", winning_trades)
+            overview_evals = _load_overview_evals()
+            if overview_evals:
+                _overview_from_signals = True
+                overview_summary = get_performance_summary(overview_evals)
 
-    with col3:
-        st.metric("❌ Trades Perdedores", losing_trades)
+                st.caption("📡 Dados baseados em sinais avaliados contra Binance real (sem trades paper/real ativos)")
 
-    with col4:
-        st.metric("💰 P&L Acumulado", f"{total_pnl_percent:+.2f}%")
+                # KPIs dos sinais avaliados
+                col1, col2, col3, col4, col5 = st.columns(5)
+                with col1:
+                    wr = overview_summary.get("win_rate", 0)
+                    st.metric("🎯 Win Rate", f"{wr:.0f}%")
+                with col2:
+                    st.metric("✅ TP Hits", overview_summary.get("tp1_hits", 0) + overview_summary.get("tp2_hits", 0))
+                with col3:
+                    st.metric("❌ SL Hits", overview_summary.get("sl_hits", 0))
+                with col4:
+                    tpnl = overview_summary.get("total_pnl", 0)
+                    st.metric("💰 P&L Total", f"{tpnl:+.2f}%", delta=f"{'✅' if tpnl >= 0 else '❌'}")
+                with col5:
+                    st.metric("📊 Total Sinais", overview_summary.get("total_signals", 0))
 
-    with col5:
-        st.metric("📊 Trades Abertos", len(open_trades))
+                st.markdown("---")
 
-    # Mostrar detalhes dos trades fechados
-    if closed_trades:
-        st.subheader("📋 Últimos Trades Fechados")
+                # Tabela dos últimos sinais avaliados
+                closed_evals = [e for e in overview_evals if e.get("outcome") in ("TP1_HIT", "TP2_HIT", "SL_HIT")]
+                active_evals = [e for e in overview_evals if e.get("outcome") == "ACTIVE"]
 
-        closed_list = []
-        for trade in closed_trades[-10:]:  # Últimos 10 trades
-            entry_price = trade.get('entry_price', 0)
-            stop_loss = trade.get('stop_loss', 0)
-            take_profit_1 = trade.get('take_profit_1', 0)
-            take_profit_2 = trade.get('take_profit_2', 0)
-            position_size = trade.get('position_size', 0)
-            position_value = trade.get('position_value', 0)
+                if closed_evals:
+                    st.subheader("📋 Últimos Sinais Fechados")
+                    closed_signal_list = []
+                    for ev in closed_evals[-10:]:
+                        sig_type = ev.get("signal", "")
+                        dir_icon = "🟢 LONG" if sig_type == "BUY" else "🔴 SHORT"
+                        outcome = ev.get("outcome", "")
+                        outcome_display = {"TP2_HIT": "✅ TP2", "TP1_HIT": "✅ TP1", "SL_HIT": "❌ SL"}.get(outcome, outcome)
+                        pnl = ev.get("pnl_percent", 0)
+                        closed_signal_list.append({
+                            "Data": ev.get("timestamp", "")[:16],
+                            "Símbolo": ev.get("symbol", ""),
+                            "Fonte": ev.get("source", ""),
+                            "Direção": dir_icon,
+                            "Entrada": f"${ev.get('entry_price', 0):,.4f}",
+                            "Resultado": outcome_display,
+                            "P&L": f"{pnl:+.2f}%",
+                            "Duração": f"{ev.get('duration_hours', 0):.1f}h",
+                        })
+                    st.dataframe(pd.DataFrame(closed_signal_list), use_container_width=True, hide_index=True)
 
-            # Calcular diferenças percentuais
-            sl_diff = ((stop_loss - entry_price) / entry_price * 100) if entry_price > 0 else 0
-            tp1_diff = ((take_profit_1 - entry_price) / entry_price * 100) if entry_price > 0 else 0
-            tp2_diff = ((take_profit_2 - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                if active_evals:
+                    st.subheader("🔄 Sinais Ativos")
+                    active_signal_list = []
+                    for ev in active_evals:
+                        sig_type = ev.get("signal", "")
+                        dir_icon = "🟢 LONG" if sig_type == "BUY" else "🔴 SHORT"
+                        active_signal_list.append({
+                            "Data": ev.get("timestamp", "")[:16],
+                            "Símbolo": ev.get("symbol", ""),
+                            "Fonte": ev.get("source", ""),
+                            "Direção": dir_icon,
+                            "Entrada": f"${ev.get('entry_price', 0):,.4f}",
+                            "SL": f"${ev.get('stop_loss', 0):,.4f}",
+                            "TP1": f"${ev.get('take_profit_1', 0):,.4f}",
+                            "TP2": f"${ev.get('take_profit_2', 0):,.4f}",
+                        })
+                    st.dataframe(pd.DataFrame(active_signal_list), use_container_width=True, hide_index=True)
 
-            pnl_percent = get_pnl_percent(trade)
-            closed_list.append({
-                "Data": trade.get("timestamp", "N/A")[:16],
-                "Símbolo": trade.get("symbol", "N/A"),
-                "Fonte": trade.get("source", "UNKNOWN"),
-                "Tipo": trade.get("signal", "N/A"),
-                "Entrada": f"${entry_price:,.2f}",
-                "Saída": f"${trade.get('close_price', 0):,.2f}" if trade.get('close_price') else "N/A",
-                "P&L": f"{pnl_percent:+.2f}%",
-                "Motivo": trade.get('close_reason', 'N/A')
-            })
+                # Gráfico de P&L acumulado dos sinais
+                pnl_values = [e.get("pnl_percent", 0) for e in overview_evals if e.get("outcome") in ("TP1_HIT", "TP2_HIT", "SL_HIT")]
+                if pnl_values:
+                    st.subheader("📊 Performance ao Longo do Tempo")
+                    import numpy as np
+                    cumulative = list(np.cumsum(pnl_values))
+                    fig = go.Figure()
+                    last_pnl = cumulative[-1] if cumulative else 0
+                    fig.add_trace(go.Scatter(
+                        y=cumulative,
+                        mode='lines+markers',
+                        name='P&L Acumulado',
+                        line=dict(color='green' if last_pnl >= 0 else 'red', width=2),
+                        marker=dict(size=8)
+                    ))
+                    fig.update_layout(
+                        title="Evolução do P&L Acumulado (Sinais)",
+                        xaxis_title="Trade #",
+                        yaxis_title="P&L Acumulado (%)",
+                        hovermode='x unified',
+                        height=400
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("📡 Nenhum sinal encontrado ainda. Execute o bot para gerar sinais.")
+        except Exception as e:
+            st.warning(f"Erro ao carregar sinais: {e}")
 
-        df_closed = pd.DataFrame(closed_list)
-        st.dataframe(df_closed, use_container_width=True, hide_index=True)
+    if not _overview_from_signals:
+        # Mostrar dados de trades paper/real normalmente
+        winning_trades = len([t for t in closed_trades if get_pnl_percent(t) > 0])
+        losing_trades = len([t for t in closed_trades if get_pnl_percent(t) < 0])
+        win_rate = (winning_trades / len(closed_trades) * 100) if closed_trades else 0
+        total_pnl_percent = sum([get_pnl_percent(t) for t in closed_trades])
 
-    # Mostrar posições abertas no overview também
-    if open_trades:
-        st.subheader("🔄 Posições Abertas Atualmente")
+        # Métricas de performance
+        col1, col2, col3, col4, col5 = st.columns(5)
 
-        open_list = []
-        for trade in open_trades:
-            entry_price = trade.get('entry_price', 0)
-            stop_loss = trade.get('stop_loss', 0)
-            take_profit_1 = trade.get('take_profit_1', 0)
-            take_profit_2 = trade.get('take_profit_2', 0)
-            position_size = trade.get('position_size', 0)
-            position_value = trade.get('position_value', 0)
+        with col1:
+            st.metric("🎯 Win Rate", f"{win_rate:.1f}%")
 
-            # Calcular diferenças percentuais
-            sl_diff = ((stop_loss - entry_price) / entry_price * 100) if entry_price > 0 else 0
-            tp1_diff = ((take_profit_1 - entry_price) / entry_price * 100) if entry_price > 0 else 0
-            tp2_diff = ((take_profit_2 - entry_price) / entry_price * 100) if entry_price > 0 else 0
+        with col2:
+            st.metric("✅ Trades Ganhadores", winning_trades)
 
-            open_list.append({
-                "Data": trade.get("timestamp", "N/A")[:16],
-                "Símbolo": trade.get("symbol", "N/A"),
-                "Fonte": trade.get("source", "UNKNOWN"),  # DEEPSEEK ou AGNO
-                "Tipo": trade.get("signal", "N/A"),
-                "Entrada": f"${entry_price:,.2f}",
-                "Tamanho": f"{position_size:.6f}",
-                "Valor": f"${position_value:,.2f}",
-                "Stop Loss": f"${stop_loss:,.2f} ({sl_diff:+.1f}%)",
-                "Take Profit 1": f"${take_profit_1:,.2f} ({tp1_diff:+.1f}%)",
-                "Take Profit 2": f"${take_profit_2:,.2f} ({tp2_diff:+.1f}%)",
-                "Confiança": f"{trade.get('confidence', 0)}/10"
-            })
+        with col3:
+            st.metric("❌ Trades Perdedores", losing_trades)
 
-        df_open = pd.DataFrame(open_list)
-        st.dataframe(df_open, use_container_width=True, hide_index=True)
+        with col4:
+            st.metric("💰 P&L Acumulado", f"{total_pnl_percent:+.2f}%")
 
-    # Gráfico de performance
-    if len(trade_history) > 0:
-        st.subheader("📊 Performance ao Longo do Tempo")
+        with col5:
+            st.metric("📊 Trades Abertos", len(open_trades))
 
-        # Preparar dados para gráfico
-        trades_df = pd.DataFrame(trade_history)
-        trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'])
-        trades_df = trades_df.sort_values('timestamp')
+        # Mostrar detalhes dos trades fechados
+        if closed_trades:
+            st.subheader("📋 Últimos Trades Fechados")
 
-        # Verificar se coluna 'pnl_percent' existe e preencher valores nulos
-        if 'pnl_percent' not in trades_df.columns:
-            trades_df['pnl_percent'] = 0.0
-        else:
-            # Preencher valores nulos com 0 (trades abertos ainda não têm P&L)
-            trades_df['pnl_percent'] = trades_df['pnl_percent'].fillna(0.0)
+            closed_list = []
+            for trade in closed_trades[-10:]:  # Últimos 10 trades
+                entry_price = trade.get('entry_price', 0)
+                stop_loss = trade.get('stop_loss', 0)
+                take_profit_1 = trade.get('take_profit_1', 0)
+                take_profit_2 = trade.get('take_profit_2', 0)
+                position_size = trade.get('position_size', 0)
+                position_value = trade.get('position_value', 0)
 
-        # Calcular P&L acumulado em % apenas para trades fechados
-        trades_df['cumulative_pnl_percent'] = trades_df['pnl_percent'].cumsum()
+                # Calcular diferenças percentuais
+                sl_diff = ((stop_loss - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                tp1_diff = ((take_profit_1 - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                tp2_diff = ((take_profit_2 - entry_price) / entry_price * 100) if entry_price > 0 else 0
 
-        # Criar gráfico
-        fig = go.Figure()
+                pnl_percent = get_pnl_percent(trade)
+                closed_list.append({
+                    "Data": trade.get("timestamp", "N/A")[:16],
+                    "Símbolo": trade.get("symbol", "N/A"),
+                    "Fonte": trade.get("source", "UNKNOWN"),
+                    "Tipo": trade.get("signal", "N/A"),
+                    "Entrada": f"${entry_price:,.2f}",
+                    "Saída": f"${trade.get('close_price', 0):,.2f}" if trade.get('close_price') else "N/A",
+                    "P&L": f"{pnl_percent:+.2f}%",
+                    "Motivo": trade.get('close_reason', 'N/A')
+                })
 
-        last_pnl = trades_df['cumulative_pnl_percent'].iloc[-1] if len(trades_df) > 0 else 0
-        fig.add_trace(go.Scatter(
-            x=trades_df['timestamp'],
-            y=trades_df['cumulative_pnl_percent'],
-            mode='lines+markers',
-            name='P&L Acumulado',
-            line=dict(color='green' if last_pnl >= 0 else 'red', width=2),
-            marker=dict(size=8)
-        ))
+            df_closed = pd.DataFrame(closed_list)
+            st.dataframe(df_closed, use_container_width=True, hide_index=True)
 
-        fig.update_layout(
-            title="Evolução do P&L Acumulado",
-            xaxis_title="Data",
-            yaxis_title="P&L Acumulado (%)",
-            hovermode='x unified',
-            height=400
-        )
+        # Mostrar posições abertas no overview também
+        if open_trades:
+            st.subheader("🔄 Posições Abertas Atualmente")
 
-        st.plotly_chart(fig, use_container_width=True)
+            open_list = []
+            for trade in open_trades:
+                entry_price = trade.get('entry_price', 0)
+                stop_loss = trade.get('stop_loss', 0)
+                take_profit_1 = trade.get('take_profit_1', 0)
+                take_profit_2 = trade.get('take_profit_2', 0)
+                position_size = trade.get('position_size', 0)
+                position_value = trade.get('position_value', 0)
+
+                # Calcular diferenças percentuais
+                sl_diff = ((stop_loss - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                tp1_diff = ((take_profit_1 - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                tp2_diff = ((take_profit_2 - entry_price) / entry_price * 100) if entry_price > 0 else 0
+
+                open_list.append({
+                    "Data": trade.get("timestamp", "N/A")[:16],
+                    "Símbolo": trade.get("symbol", "N/A"),
+                    "Fonte": trade.get("source", "UNKNOWN"),
+                    "Tipo": trade.get("signal", "N/A"),
+                    "Entrada": f"${entry_price:,.2f}",
+                    "Tamanho": f"{position_size:.6f}",
+                    "Valor": f"${position_value:,.2f}",
+                    "Stop Loss": f"${stop_loss:,.2f} ({sl_diff:+.1f}%)",
+                    "Take Profit 1": f"${take_profit_1:,.2f} ({tp1_diff:+.1f}%)",
+                    "Take Profit 2": f"${take_profit_2:,.2f} ({tp2_diff:+.1f}%)",
+                    "Confiança": f"{trade.get('confidence', 0)}/10"
+                })
+
+            df_open = pd.DataFrame(open_list)
+            st.dataframe(df_open, use_container_width=True, hide_index=True)
+
+        # Gráfico de performance
+        if len(trade_history) > 0:
+            st.subheader("📊 Performance ao Longo do Tempo")
+
+            # Preparar dados para gráfico
+            trades_df = pd.DataFrame(trade_history)
+            trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'])
+            trades_df = trades_df.sort_values('timestamp')
+
+            # Verificar se coluna 'pnl_percent' existe e preencher valores nulos
+            if 'pnl_percent' not in trades_df.columns:
+                trades_df['pnl_percent'] = 0.0
+            else:
+                trades_df['pnl_percent'] = trades_df['pnl_percent'].fillna(0.0)
+
+            # Calcular P&L acumulado em % apenas para trades fechados
+            trades_df['cumulative_pnl_percent'] = trades_df['pnl_percent'].cumsum()
+
+            # Criar gráfico
+            fig = go.Figure()
+
+            last_pnl = trades_df['cumulative_pnl_percent'].iloc[-1] if len(trades_df) > 0 else 0
+            fig.add_trace(go.Scatter(
+                x=trades_df['timestamp'],
+                y=trades_df['cumulative_pnl_percent'],
+                mode='lines+markers',
+                name='P&L Acumulado',
+                line=dict(color='green' if last_pnl >= 0 else 'red', width=2),
+                marker=dict(size=8)
+            ))
+
+            fig.update_layout(
+                title="Evolução do P&L Acumulado",
+                xaxis_title="Data",
+                yaxis_title="P&L Acumulado (%)",
+                hovermode='x unified',
+                height=400
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
     st.header("💰 Posições Abertas")
@@ -1191,62 +1293,67 @@ with tab4:
 with tab5:
     st.header("📉 Análise Detalhada")
 
+    # Tentar usar signal_tracker se não tem trades paper/real fechados
+    _analysis_pnl_values = []
     if len(closed_trades) > 0:
-        # Estatísticas dos trades fechados
-        st.subheader("📊 Estatísticas dos Trades")
+        _analysis_pnl_values = [get_pnl_percent(t) for t in closed_trades if get_pnl_percent(t) != 0]
+    else:
+        try:
+            from src.trading.signal_tracker import evaluate_all_signals
 
-        # Filtrar apenas trades com P&L válido (em %)
-        pnl_percent_values = [get_pnl_percent(t) for t in closed_trades if get_pnl_percent(t) != 0]
+            @st.cache_data(ttl=120)
+            def _load_analysis_evals():
+                return evaluate_all_signals()
+
+            analysis_evals = _load_analysis_evals()
+            if analysis_evals:
+                closed_signal_evals = [e for e in analysis_evals if e.get("outcome") in ("TP1_HIT", "TP2_HIT", "SL_HIT")]
+                _analysis_pnl_values = [e.get("pnl_percent", 0) for e in closed_signal_evals if e.get("pnl_percent", 0) != 0]
+                if _analysis_pnl_values:
+                    st.caption("📡 Dados baseados em sinais avaliados contra Binance real")
+        except Exception:
+            pass
+
+    if _analysis_pnl_values:
+        st.subheader("📊 Estatísticas dos Trades")
 
         col1, col2 = st.columns(2)
 
         with col1:
-            # Distribuição de P&L
-            if pnl_percent_values:
-                fig_pnl = px.histogram(
-                    x=pnl_percent_values,
-                    nbins=20,
-                    title="Distribuição de P&L",
-                    labels={"x": "P&L (%)", "y": "Frequência"}
-                )
-                st.plotly_chart(fig_pnl, use_container_width=True)
-            else:
-                st.info("Nenhum dado de P&L disponível")
+            fig_pnl = px.histogram(
+                x=_analysis_pnl_values,
+                nbins=20,
+                title="Distribuição de P&L",
+                labels={"x": "P&L (%)", "y": "Frequência"}
+            )
+            st.plotly_chart(fig_pnl, use_container_width=True)
 
         with col2:
-            # Box plot de P&L
-            if pnl_percent_values:
-                fig_box = go.Figure()
-                fig_box.add_trace(go.Box(
-                    y=pnl_percent_values,
-                    name="P&L Distribution",
-                    boxmean='sd'
-                ))
-                fig_box.update_layout(
-                    title="Distribuição de P&L (Box Plot)",
-                    yaxis_title="P&L (%)"
-                )
-                st.plotly_chart(fig_box, use_container_width=True)
-            else:
-                st.info("Nenhum dado de P&L disponível")
+            fig_box = go.Figure()
+            fig_box.add_trace(go.Box(
+                y=_analysis_pnl_values,
+                name="P&L Distribution",
+                boxmean='sd'
+            ))
+            fig_box.update_layout(
+                title="Distribuição de P&L (Box Plot)",
+                yaxis_title="P&L (%)"
+            )
+            st.plotly_chart(fig_box, use_container_width=True)
 
         # Estatísticas descritivas (em %)
         st.subheader("📈 Estatísticas Descritivas")
 
-        if pnl_percent_values:
-            stats = {
-                "Média": f"{sum(pnl_percent_values) / len(pnl_percent_values):+.2f}%",
-                "Mediana": f"{sorted(pnl_percent_values)[len(pnl_percent_values)//2]:+.2f}%",
-                "Máximo": f"{max(pnl_percent_values):+.2f}%",
-                "Mínimo": f"{min(pnl_percent_values):+.2f}%",
-                "Total Acumulado": f"{sum(pnl_percent_values):+.2f}%"
-            }
-        else:
-            stats = {"Mensagem": "Nenhum dado disponível"}
-
+        stats = {
+            "Média": f"{sum(_analysis_pnl_values) / len(_analysis_pnl_values):+.2f}%",
+            "Mediana": f"{sorted(_analysis_pnl_values)[len(_analysis_pnl_values)//2]:+.2f}%",
+            "Máximo": f"{max(_analysis_pnl_values):+.2f}%",
+            "Mínimo": f"{min(_analysis_pnl_values):+.2f}%",
+            "Total Acumulado": f"{sum(_analysis_pnl_values):+.2f}%"
+        }
         st.json(stats)
     else:
-        st.info("ℹ️ Não há trades fechados para análise.")
+        st.info("ℹ️ Não há trades fechados para análise. Os dados aparecerão quando sinais forem avaliados.")
 
 with tab6:
     st.header("💹 Preços de Mercado em Tempo Real")
