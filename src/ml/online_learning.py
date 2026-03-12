@@ -200,10 +200,17 @@ class OnlineLearningManager:
             return {"success": False, "reason": "Dados insuficientes"}
             
         try:
-            # Carregar modelo atual
+            # Carregar modelo atual (se existir); senao primeiro treino
             from src.ml.simple_validator import SimpleSignalValidator
             current_validator = SimpleSignalValidator()
-            current_validator.load_models()
+            models_path = os.path.join(CONFIG["model_dir"], "signal_validators.pkl")
+            if os.path.exists(models_path):
+                current_validator.load_models()
+            else:
+                current_validator.models = {}
+                current_validator.best_model_name = None
+                current_validator.scaler = None
+                print("[OL] Nenhum modelo existente - primeiro treino")
             
             # Preparar novos dados
             new_df = pd.DataFrame(self.buffer)
@@ -360,7 +367,8 @@ class OnlineLearningManager:
         info['last_retrain'] = datetime.now().isoformat()
         info['retrain_count'] = info.get('retrain_count', 0) + 1
         info['feature_columns'] = feature_columns
-        
+        info['best_model'] = 'LogisticRegression'
+
         with open(info_path, 'w') as f:
             json.dump(info, f, indent=2, default=str)
             

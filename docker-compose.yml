@@ -21,6 +21,8 @@ services:
       - ./portfolio:/app/portfolio
       - ./signals:/app/signals
       - ./data:/app/data
+      - ./ml_models:/app/ml_models
+      - ./ml_dataset:/app/ml_dataset
       - ./paper_trades:/app/paper_trades
       - ./deepseek_logs:/app/deepseek_logs
       - ./real_orders:/app/real_orders
@@ -67,6 +69,9 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./signals:/app/signals
+      - ./ml_models:/app/ml_models
+      - ./ml_dataset:/app/ml_dataset
     restart: unless-stopped
     depends_on:
       trading_bot:

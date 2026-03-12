@@ -129,6 +129,10 @@ def main():
         st.metric("Buffer", f"{len(buffer)}/50")
         st.progress(min(len(buffer) / 50, 1.0))
 
+        # Aviso: buffer cheio mas modelo ainda nao treinado (ex.: primeiro uso ou retreino falhou)
+        if len(buffer) >= 50 and (not model_info or not model_info.get("best_model")):
+            st.warning("Buffer cheio e nenhum modelo ativo. Clique em **Forcar Retreino** para treinar o modelo com os sinais do buffer.")
+
         if st.button("📡 Alimentar com Sinais", type="primary", use_container_width=True):
             with st.spinner("Avaliando sinais e populando buffer..."):
                 from src.ml.online_learning import seed_from_evaluated_signals
@@ -145,9 +149,11 @@ def main():
         if st.button("🔄 Forcar Retreino", use_container_width=True):
             from src.ml.online_learning import manual_retrain
             result = manual_retrain()
-            st.write(result)
             if result.get("success"):
+                st.success(f"Modelo treinado! Accuracy: {result.get('new_accuracy', 0):.1%} | F1: {result.get('new_f1', 0):.3f}")
                 st.rerun()
+            else:
+                st.error(result.get("error", result.get("reason", str(result))))
             
     # ================= MAIN CONTENT =================
     
