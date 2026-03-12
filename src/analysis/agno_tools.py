@@ -404,12 +404,11 @@ async def analyze_multiple_timeframes(symbol: str) -> Dict[str, Any]:
 async def analyze_order_flow(symbol: str) -> Dict[str, Any]:
     """
     Análise de fluxo de ordens e delta.
-    CORRIGIDO: Agora async usando BinanceClient.
+    CORRIGIDO: Usa BinanceClient com rate limiter, circuit breaker e retry.
     """
     try:
         from src.exchange.client import BinanceClient
-        import aiohttp
-        
+
         async with BinanceClient() as client:
             # Obter orderbook
             orderbook = await client.get_orderbook(symbol, limit=20)
@@ -421,22 +420,18 @@ async def analyze_order_flow(symbol: str) -> Dict[str, Any]:
             total_volume = bid_volume + ask_volume
             imbalance = (bid_volume - ask_volume) / total_volume if total_volume > 0 else 0
 
-            # Obter trades recentes para CVD (usando API direta pois não temos método no client)
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{client.base_url}/fapi/v1/aggTrades",
-                    params={'symbol': symbol, 'limit': 100},
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as trades_response:
-                    buy_volume = 0
-                    sell_volume = 0
-                    if trades_response.status == 200:
-                        trades = await trades_response.json()
-                        for trade in trades:
-                            if trade['m']:  # isBuyerMaker
-                                sell_volume += float(trade['q'])
-                            else:
-                                buy_volume += float(trade['q'])
+            # Obter trades recentes para CVD usando BinanceClient (com retry e circuit breaker)
+            buy_volume = 0
+            sell_volume = 0
+            try:
+                trades = await client.get_agg_trades(symbol, limit=100)
+                for trade in trades:
+                    if trade['m']:  # isBuyerMaker
+                        sell_volume += float(trade['q'])
+                    else:
+                        buy_volume += float(trade['q'])
+            except Exception as e:
+                logger.warning(f"[{symbol}] Erro ao obter aggTrades, usando orderbook apenas: {e}")
 
             cvd = buy_volume - sell_volume
 
@@ -451,7 +446,7 @@ async def analyze_order_flow(symbol: str) -> Dict[str, Any]:
                 "buy_pressure": buy_volume > sell_volume * 1.2,
                 "timestamp": datetime.now().isoformat()
             }
-        
+
     except Exception as e:
         logger.exception(f"Erro na análise de order flow: {e}")
         return {

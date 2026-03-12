@@ -157,7 +157,28 @@ class BinanceClient:
             logger.error(f"Error fetching open interest for {symbol}: {e}")
             raise
     
-    async def get_historical_klines(self, symbol: str, interval: str, 
+    async def get_agg_trades(self, symbol: str, limit: int = 100) -> List[Dict]:
+        """
+        Obtém trades agregados recentes (with rate limiting & circuit breaker)
+        """
+        try:
+            url = f"{self.base_url}/fapi/v1/aggTrades"
+            params = {'symbol': symbol, 'limit': limit}
+
+            data = await exponential_backoff_retry(
+                self._request_with_protection,
+                max_retries=3,
+                url=url,
+                params=params
+            )
+            logger.debug(f"Fetched {len(data)} aggTrades for {symbol}")
+            return data
+
+        except Exception as e:
+            logger.error(f"Error fetching aggTrades for {symbol}: {e}")
+            raise
+
+    async def get_historical_klines(self, symbol: str, interval: str,
                                   start_time: datetime, end_time: datetime) -> pd.DataFrame:
         """
         Obtém dados históricos de klines para backtesting
