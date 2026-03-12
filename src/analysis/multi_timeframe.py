@@ -1,10 +1,11 @@
 """
 Multi-timeframe analysis
 """
+from datetime import datetime
+from typing import Any, Dict
+
 import pandas as pd
 import talib
-from typing import Dict, Any
-from datetime import datetime
 
 from src.core.logger import get_logger
 

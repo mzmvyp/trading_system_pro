@@ -2,17 +2,18 @@
 Estratégia de seguimento de tendência (portada e simplificada de smart_trading_system).
 Usa EMA, MACD, ADX e RSI para identificar tendência e pullbacks.
 """
-import pandas as pd
-import numpy as np
-import talib
-from typing import Dict, Any, List
 from dataclasses import dataclass
-from strategies.base_strategy import BaseStrategy
-from strategies.signal_types import SignalType, SignalPriority
-from filters.volatility_filter import VolatilityFilter
+from typing import Any, Dict
+
+import numpy as np
+import pandas as pd
+import talib
+
 from filters.market_condition_filter import MarketConditionFilter
-from utils.helpers import safe_divide, normalize_value, calculate_percentage_change, find_local_extremes
+from filters.volatility_filter import VolatilityFilter
 from src.core.logger import get_logger
+from strategies.base_strategy import BaseStrategy
+from strategies.signal_types import SignalType
 
 logger = get_logger(__name__)
 

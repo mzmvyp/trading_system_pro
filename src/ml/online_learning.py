@@ -12,21 +12,21 @@ Autor: Trading Bot
 Data: 2026-01-13
 """
 
-import os
 import json
+import os
 import pickle
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List
+
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
-from pathlib import Path
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, f1_score
 
 # Sklearn
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
 # Configuracoes
 CONFIG = {
@@ -57,7 +57,7 @@ class OnlineLearningManager:
         # Auto-seed: se o buffer esta vazio e há sinais avaliados, popular automaticamente
         if auto_seed and len(self.buffer) == 0:
             self._auto_seed()
-        
+
     def _auto_seed(self):
         """Automaticamente popula buffer com sinais avaliados se buffer vazio"""
         try:
@@ -134,32 +134,32 @@ class OnlineLearningManager:
                 with open(CONFIG["buffer_file"], 'r') as f:
                     self.buffer = json.load(f)
                 print(f"[OL] Buffer carregado: {len(self.buffer)} exemplos pendentes")
-            except:
+            except Exception:
                 self.buffer = []
         else:
             self.buffer = []
-            
+
     def _save_buffer(self):
         """Salva buffer de dados pendentes"""
         with open(CONFIG["buffer_file"], 'w') as f:
             json.dump(self.buffer, f, indent=2, default=str)
-            
+
     def _load_performance_history(self):
         """Carrega historico de performance"""
         if os.path.exists(CONFIG["performance_file"]):
             try:
                 with open(CONFIG["performance_file"], 'r') as f:
                     self.performance_history = json.load(f)
-            except:
+            except Exception:
                 self.performance_history = []
         else:
             self.performance_history = []
-            
+
     def _save_performance_history(self):
         """Salva historico de performance"""
         with open(CONFIG["performance_file"], 'w') as f:
             json.dump(self.performance_history, f, indent=2, default=str)
-            
+
     def add_signal_result(self, signal: Dict, result: str, return_pct: float = 0.0, _batch_mode: bool = False):
         """
         Adiciona um resultado de sinal ao buffer para aprendizado futuro.
@@ -242,7 +242,7 @@ class OnlineLearningManager:
             'return_pct': return_pct,
             'target': 1 if result in ['TP1', 'TP2'] else 0
         }
-        
+
         self.buffer.append(data_point)
 
         if _batch_mode:
@@ -255,9 +255,9 @@ class OnlineLearningManager:
 
         # Verificar se deve retreinar
         if len(self.buffer) >= CONFIG["retrain_threshold"]:
-            print(f"[OL] Threshold atingido! Iniciando retreino...")
+            print("[OL] Threshold atingido! Iniciando retreino...")
             self.retrain()
-            
+
     def retrain(self) -> Dict:
         """
         Retreina o modelo com novos dados.
@@ -418,7 +418,7 @@ class OnlineLearningManager:
             else:
                 # Primeiro modelo: sempre salvar
                 should_save = True
-                print(f"[OL] Primeiro treinamento - salvando modelo inicial")
+                print("[OL] Primeiro treinamento - salvando modelo inicial")
 
             if should_save:
                 # Salvar TODOS os modelos treinados (nao so o melhor)
@@ -434,7 +434,7 @@ class OnlineLearningManager:
                 # Registrar performance
                 self._record_performance(new_accuracy, new_f1, len(X_combined))
 
-                print(f"[OL] Novo modelo salvo com sucesso!")
+                print("[OL] Novo modelo salvo com sucesso!")
 
                 return {
                     "success": True,
@@ -446,7 +446,7 @@ class OnlineLearningManager:
                     "first_training": not has_current_model
                 }
             else:
-                print(f"[OL] Modelo nao melhorou suficiente. Mantendo atual.")
+                print("[OL] Modelo nao melhorou suficiente. Mantendo atual.")
                 return {
                     "success": False,
                     "reason": "Sem melhoria suficiente",
@@ -458,7 +458,7 @@ class OnlineLearningManager:
             import traceback
             traceback.print_exc()
             return {"success": False, "error": str(e)}
-            
+
     def _save_new_model(self, model, scaler, feature_columns):
         """Salva o novo modelo treinado (compatibilidade)"""
         self._save_new_model_ensemble(
@@ -508,7 +508,7 @@ class OnlineLearningManager:
             print(f"[OL] Dataset atualizado: {len(df)} amostras salvas em ml_dataset/dataset_train_latest.csv")
         except Exception as e:
             print(f"[OL] Erro ao salvar dataset: {e}")
-            
+
     def _record_performance(self, accuracy: float, f1: float, n_samples: int):
         """Registra performance do modelo"""
         self.performance_history.append({
@@ -518,14 +518,14 @@ class OnlineLearningManager:
             'n_samples': n_samples
         })
         self._save_performance_history()
-        
+
     def get_performance_summary(self) -> Dict:
         """Retorna resumo de performance do modelo"""
         if not self.performance_history:
             return {"status": "Sem historico"}
-            
+
         recent = self.performance_history[-1]
-        
+
         return {
             "last_retrain": recent.get('timestamp'),
             "current_accuracy": recent.get('accuracy'),
@@ -546,7 +546,7 @@ def add_trade_result(signal: Dict, result: str, return_pct: float = 0.0):
     Chamada pelo bot quando um trade e fechado.
     """
     online_learning_manager.add_signal_result(signal, result, return_pct)
-    
+
 
 def manual_retrain():
     """Forca retreino manual"""
@@ -664,7 +664,7 @@ def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
                         print(f"  [{i+1}/{len(finalized)}] {enriched} enriquecidos...")
                     time.sleep(0.2)  # Rate limit Binance API
                     continue
-            except Exception as e:
+            except Exception:
                 pass  # Fallback para dados do sinal
 
         # Fallback: usar dados originais do sinal (sem enriquecimento)
@@ -725,12 +725,12 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("ONLINE LEARNING MANAGER - TESTE")
     print("="*60)
-    
+
     manager = OnlineLearningManager()
-    
+
     # Status
     print(f"\nStatus: {manager.get_performance_summary()}")
-    
+
     # Simular adicao de resultado
     test_signal = {
         'symbol': 'BTCUSDT',
@@ -739,8 +739,8 @@ if __name__ == "__main__":
         'rsi': 45,
         'macd_histogram': 100
     }
-    
+
     # manager.add_signal_result(test_signal, 'TP1', 2.5)
-    
+
     print("\n[OK] Teste concluido!")
 

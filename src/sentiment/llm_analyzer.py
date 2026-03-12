@@ -3,12 +3,11 @@
 LLM Sentiment Analyzer - Análise de sentimento com OpenAI (portado de sinais).
 Usa variável de ambiente OPENAI_API_KEY.
 """
-import os
 import json
-import time
+import os
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional
-from dataclasses import dataclass
 
 try:
     from openai import OpenAI

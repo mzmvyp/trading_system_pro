@@ -9,13 +9,11 @@ Funcionalidades:
 """
 
 import json
-import asyncio
 from datetime import datetime
-from typing import Dict, Any, Optional
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 from src.core.logger import get_logger
-from src.core.config import settings
 
 logger = get_logger(__name__)
 
@@ -59,7 +57,7 @@ class StopAdjuster:
             # Buscar dados de mercado atuais
             async with BinanceClient() as client:
                 klines_1h = await client.get_klines(symbol, "1h", limit=50)
-                klines_4h = await client.get_klines(symbol, "4h", limit=30)
+                await client.get_klines(symbol, "4h", limit=30)
 
             if klines_1h.empty:
                 return {"error": "Dados de mercado não disponíveis"}
@@ -147,7 +145,7 @@ class StopAdjuster:
             if json_match:
                 return json.loads(json_match.group())
             return None
-        except:
+        except Exception:
             return None
 
     async def adjust_stop_after_tp1(

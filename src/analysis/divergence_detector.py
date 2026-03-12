@@ -6,7 +6,6 @@ Types: Bullish Regular, Bearish Regular, Bullish Hidden, Bearish Hidden
 Scoring: strength (WEAK/MODERATE/STRONG/VERY_STRONG), confidence, reliability
 """
 
-import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Tuple

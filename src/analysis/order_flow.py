@@ -1,8 +1,9 @@
 """
 Order flow analysis
 """
-from typing import Dict, Any
 from datetime import datetime
+from typing import Any, Dict
+
 import aiohttp
 
 from src.core.logger import get_logger

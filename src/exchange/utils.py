@@ -5,9 +5,9 @@ Prevents API bans and handles failures gracefully
 
 import asyncio
 import time
-from typing import Callable, Any, Optional
-from functools import wraps
 from collections import deque
+from functools import wraps
+from typing import Any, Callable, Optional
 
 from src.core.logger import get_logger
 

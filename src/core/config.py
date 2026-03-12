@@ -1,10 +1,11 @@
 """
 Configurações do sistema de trading
 """
-import os
 from typing import Optional
-from pydantic_settings import BaseSettings
+
 from pydantic import Field
+from pydantic_settings import BaseSettings
+
 
 class Settings(BaseSettings):
     # ========================================
@@ -29,11 +30,11 @@ class Settings(BaseSettings):
 
     # Configurações do DeepSeek
     deepseek_base_url: str = "https://api.deepseek.com/v1"
-    
+
     # Configurações do sistema
     log_level: str = "INFO"
     trading_symbol: str = "BTCUSDT"
-    
+
     # Configurações de Risk Management
     # CORRIGIDO: Valores mais conservadores para proteger o capital
     max_risk_per_trade: float = 0.02  # Máximo 2% de risco por trade (reduzido de 5%)
@@ -65,17 +66,17 @@ class Settings(BaseSettings):
     # - Distancia do stop = $2,000 (2%)
     # - Tamanho = $500 / $2,000 = 0.25 BTC
     # - Valor total = 0.25 * $100,000 = $25,000 (alavancagem ~2.5x)
-    
+
     # Configurações de Confiança
     # UNIFICADO: Sempre usar escala 0-10
     min_confidence_0_10: int = 7  # Mínimo 7/10 para executar sinais
     # DEPRECATED: min_confidence_0_5 removido - sempre usar escala 0-10
-    
+
     # Configurações de Intervalo de Análise
     # CORRIGIDO: Aumentado para 4h para evitar overtrading severo
     # Análise dos 267 sinais mostrou que sinais a cada 2-7min destruíam performance
     min_analysis_interval_hours: float = 4.0  # Mínimo 4 horas entre análises do mesmo símbolo (aumentado de 2h)
-    
+
     # Top 10 criptomoedas para análise
     top_crypto_pairs: list = [
         "BTCUSDT",   # Bitcoin
@@ -118,7 +119,7 @@ class Settings(BaseSettings):
     # Se True, só executa sinais que passam na validação ML
     # Se False, apenas loga a validação mas executa de qualquer forma
     ml_validation_required: bool = False
-    
+
     # ========================================
     # ONLINE LEARNING - RETREINAMENTO AUTOMÁTICO
     # ========================================

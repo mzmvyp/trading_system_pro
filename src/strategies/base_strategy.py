@@ -3,7 +3,8 @@ Classe abstrata base para estratégias de trading.
 Todas as estratégias devem herdar de BaseStrategy e implementar analyze().
 """
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Any, Dict
+
 import pandas as pd
 
 

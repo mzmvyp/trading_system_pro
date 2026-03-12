@@ -1,10 +1,10 @@
 """
 Risk management and position validation
 """
-from typing import Dict, Any, Optional
-from datetime import datetime
 import json
 import os
+from datetime import datetime
+from typing import Any, Dict
 
 from src.core.logger import get_logger
 

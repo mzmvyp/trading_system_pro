@@ -2,9 +2,10 @@
 Indicadores técnicos centralizados (portado de agente_trade_futuros, usando talib).
 Use este módulo em todo o projeto para consistência.
 """
-import pandas as pd
-import numpy as np
 from typing import Dict, Tuple
+
+import numpy as np
+import pandas as pd
 
 try:
     import talib
@@ -14,15 +15,15 @@ except ImportError:
     talib = None
 
 from src.core.constants import (
-    RSI_PERIOD,
-    MACD_FAST,
-    MACD_SLOW,
-    MACD_SIGNAL,
+    ATR_PERIOD,
     BOLLINGER_PERIOD,
     BOLLINGER_STD_DEV,
-    ATR_PERIOD,
-    SMA_SHORT,
+    MACD_FAST,
+    MACD_SIGNAL,
+    MACD_SLOW,
+    RSI_PERIOD,
     SMA_LONG,
+    SMA_SHORT,
 )
 from src.core.logger import get_logger
 
@@ -56,7 +57,7 @@ class TechnicalIndicators:
         signal: int = MACD_SIGNAL,
     ) -> Tuple[pd.Series, pd.Series, pd.Series]:
         if not TALIB_AVAILABLE:
-            n = len(df)
+            len(df)
             return pd.Series(np.nan, index=df.index), pd.Series(np.nan, index=df.index), pd.Series(np.nan, index=df.index)
         c = df["close"].astype(float)
         macd, sig, hist = talib.MACD(c, fastperiod=fast, slowperiod=slow, signalperiod=signal)
@@ -69,11 +70,11 @@ class TechnicalIndicators:
         std: float = BOLLINGER_STD_DEV,
     ) -> Tuple[pd.Series, pd.Series, pd.Series]:
         if not TALIB_AVAILABLE:
-            n = len(df)
+            len(df)
             return pd.Series(np.nan, index=df.index), pd.Series(np.nan, index=df.index), pd.Series(np.nan, index=df.index)
         c = df["close"].astype(float)
-        u, m, l = talib.BBANDS(c, timeperiod=period, nbdevup=std, nbdevdn=std)
-        return pd.Series(u, index=df.index), pd.Series(m, index=df.index), pd.Series(l, index=df.index)
+        u, m, lower = talib.BBANDS(c, timeperiod=period, nbdevup=std, nbdevdn=std)
+        return pd.Series(u, index=df.index), pd.Series(m, index=df.index), pd.Series(lower, index=df.index)
 
     @staticmethod
     def calculate_sma(df: pd.DataFrame, period: int) -> pd.Series:
@@ -93,8 +94,8 @@ class TechnicalIndicators:
     def calculate_atr(df: pd.DataFrame, period: int = ATR_PERIOD) -> pd.Series:
         if not TALIB_AVAILABLE:
             return pd.Series(np.nan, index=df.index)
-        h, l, c = df["high"].astype(float), df["low"].astype(float), df["close"].astype(float)
-        return pd.Series(talib.ATR(h, l, c, timeperiod=period), index=df.index)
+        h, low, c = df["high"].astype(float), df["low"].astype(float), df["close"].astype(float)
+        return pd.Series(talib.ATR(h, low, c, timeperiod=period), index=df.index)
 
     @staticmethod
     def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -106,8 +107,8 @@ class TechnicalIndicators:
         df["rsi"] = TechnicalIndicators.calculate_rsi(df)
         macd, sig, hist = TechnicalIndicators.calculate_macd(df)
         df["macd"], df["macd_signal"], df["macd_histogram"] = macd, sig, hist
-        u, m, l = TechnicalIndicators.calculate_bollinger_bands(df)
-        df["bb_upper"], df["bb_middle"], df["bb_lower"] = u, m, l
+        u, m, lower = TechnicalIndicators.calculate_bollinger_bands(df)
+        df["bb_upper"], df["bb_middle"], df["bb_lower"] = u, m, lower
         df["sma_20"] = TechnicalIndicators.calculate_sma(df, SMA_SHORT)
         df["sma_50"] = TechnicalIndicators.calculate_sma(df, SMA_LONG)
         df["ema_12"] = TechnicalIndicators.calculate_ema(df, 12)

@@ -103,7 +103,7 @@ def _register_trade_result(symbol: str, add_trade_result_fn):
         if os.path.exists("portfolio/state.json"):
             with open("portfolio/state.json", 'r', encoding='utf-8') as f:
                 state = json.load(f)
-                positions = state.get("positions", {})
+                state.get("positions", {})
                 trade_history = state.get("trade_history", [])
 
                 # Procurar no historico de trades

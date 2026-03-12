@@ -2,10 +2,10 @@
 Signal parsing from LLM responses
 Extracts structured trading signals from text using JSON parsing and regex fallbacks
 """
-import re
 import json
-from typing import Dict, Any, Optional
+import re
 from datetime import datetime
+from typing import Any, Dict, Optional
 
 from src.core.logger import get_logger
 
@@ -140,7 +140,7 @@ async def process_agent_response(response: Any, symbol: str) -> Dict[str, Any]:
     }
 
     if not response_text:
-        logger.error(f"[ERRO] Não foi possível extrair conteúdo da resposta do AGNO")
+        logger.error("[ERRO] Não foi possível extrair conteúdo da resposta do AGNO")
         return {
             "symbol": symbol, "timestamp": datetime.now().isoformat(),
             "signal": "NO_SIGNAL", "confidence": 0,

@@ -9,16 +9,15 @@ Pagina principal do dashboard com visao geral de:
 - Health check dos componentes
 """
 
+import json
+import os
 import sys
 from pathlib import Path
 
-import json
-import os
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from datetime import datetime, timedelta
 
 # Adicionar raiz do projeto ao path
 root = Path(__file__).resolve().parent.parent.parent.parent

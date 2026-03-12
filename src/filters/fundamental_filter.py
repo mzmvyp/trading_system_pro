@@ -1,8 +1,10 @@
 """
 Filtro fundamental (stub portado de smart_trading_system).
 """
-from typing import Dict, Any
+from typing import Any, Dict
+
 import pandas as pd
+
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)

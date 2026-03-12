@@ -6,25 +6,23 @@ Pagina de backtesting que avalia como o modelo ML teria
 performado em sinais historicos.
 """
 
-import sys
-from pathlib import Path
-
 import json
 import os
 import pickle
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from datetime import datetime
 
 # Adicionar raiz do projeto ao path
 root = Path(__file__).resolve().parent.parent.parent.parent
 if str(root) not in sys.path:
     sys.path.insert(0, str(root))
 
-from src.trading.signal_tracker import evaluate_all_signals, get_performance_summary  # noqa: E402
+from src.trading.signal_tracker import evaluate_all_signals  # noqa: E402
 
 st.set_page_config(page_title="Backtesting", page_icon="🔬", layout="wide")
 
@@ -225,8 +223,8 @@ wr_all = wins_all / total_all * 100 if total_all else 0
 pnl_all = df_all['pnl_percent'].sum()
 
 # Com filtro ML
-executed = df_ml[df_ml['executed'] == True]
-skipped = df_ml[df_ml['executed'] == False]
+executed = df_ml[df_ml['executed']]
+skipped = df_ml[not df_ml['executed']]
 total_exec = len(executed)
 wins_exec = len(executed[executed['original_pnl'] > 0]) if total_exec > 0 else 0
 wr_exec = wins_exec / total_exec * 100 if total_exec else 0

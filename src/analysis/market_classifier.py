@@ -1,7 +1,7 @@
 """
 Market condition classifier - determines optimal operation type
 """
-from typing import Dict, Any
+from typing import Any, Dict
 
 from src.core.logger import get_logger
 
@@ -37,27 +37,36 @@ def classify_market_condition(analysis: Dict[str, Any]) -> Dict[str, Any]:
 
         # Volatility rules
         if volatility_level == "HIGH" or atr_pct > 3.0:
-            scores["SCALP"] += 3; scores["DAY_TRADE"] += 2
+            scores["SCALP"] += 3
+            scores["DAY_TRADE"] += 2
         elif volatility_level == "MEDIUM" or 1.5 <= atr_pct <= 3.0:
-            scores["DAY_TRADE"] += 3; scores["SWING_TRADE"] += 2
+            scores["DAY_TRADE"] += 3
+            scores["SWING_TRADE"] += 2
         else:
-            scores["SWING_TRADE"] += 3; scores["POSITION_TRADE"] += 3
+            scores["SWING_TRADE"] += 3
+            scores["POSITION_TRADE"] += 3
 
         # Trend rules
         if adx_value < 20 or trend_strength == "WEAK":
-            scores["SCALP"] += 3; scores["DAY_TRADE"] += 1
+            scores["SCALP"] += 3
+            scores["DAY_TRADE"] += 1
         elif 20 <= adx_value < 35 or trend_strength == "MODERATE":
-            scores["DAY_TRADE"] += 3; scores["SWING_TRADE"] += 2
+            scores["DAY_TRADE"] += 3
+            scores["SWING_TRADE"] += 2
         elif 35 <= adx_value < 50 or trend_strength == "STRONG":
-            scores["SWING_TRADE"] += 4; scores["DAY_TRADE"] += 1
+            scores["SWING_TRADE"] += 4
+            scores["DAY_TRADE"] += 1
         else:
-            scores["POSITION_TRADE"] += 4; scores["SWING_TRADE"] += 2
+            scores["POSITION_TRADE"] += 4
+            scores["SWING_TRADE"] += 2
 
         # Confluence rules
         if confluence_score >= 4:
-            scores["SWING_TRADE"] += 2; scores["POSITION_TRADE"] += 2
+            scores["SWING_TRADE"] += 2
+            scores["POSITION_TRADE"] += 2
         elif confluence_score <= 2:
-            scores["SCALP"] += 2; scores["DAY_TRADE"] += 1
+            scores["SCALP"] += 2
+            scores["DAY_TRADE"] += 1
 
         # Momentum rules
         if 40 <= rsi <= 60:
@@ -67,11 +76,13 @@ def classify_market_condition(analysis: Dict[str, Any]) -> Dict[str, Any]:
 
         # Volume rules
         if volume_trend in ["increasing", "strong_increasing"]:
-            scores["SWING_TRADE"] += 1; scores["POSITION_TRADE"] += 1
+            scores["SWING_TRADE"] += 1
+            scores["POSITION_TRADE"] += 1
 
         # Primary trend rules
         if primary_trend in ["NEUTRAL", "SIDEWAYS"]:
-            scores["SCALP"] += 2; scores["DAY_TRADE"] += 1
+            scores["SCALP"] += 2
+            scores["DAY_TRADE"] += 1
         elif primary_trend in ["BULLISH", "BEARISH"]:
             scores["SWING_TRADE"] += 1
         elif primary_trend in ["STRONG_BULLISH", "STRONG_BEARISH"]:

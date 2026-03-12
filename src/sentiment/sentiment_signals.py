@@ -3,7 +3,8 @@
 Integra sentimento como feature/sinal para os modelos existentes.
 Pode ser usado como input adicional no ML ou no agente AGNO.
 """
-from typing import Dict, Optional
+from typing import Optional
+
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)

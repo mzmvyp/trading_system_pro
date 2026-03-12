@@ -6,11 +6,9 @@ Patterns: Bullish Engulfing (0.85), Bearish Engulfing (0.90),
 Validations: max risk 2.5%, min R:R 1.2:1, max target 5%
 """
 
-import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-import numpy as np
 import pandas as pd
 
 from src.core.logger import get_logger

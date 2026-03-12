@@ -3,16 +3,14 @@ Sistema de Paper Trading REAL com Simulação Completa
 Monitora preços, executa stop loss/take profit automaticamente
 """
 
+import asyncio
 import json
 import os
-import asyncio
-import aiohttp
-import tempfile
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
+from datetime import datetime
 from pathlib import Path
-import pandas as pd
-import numpy as np
+from typing import Any, Dict, List, Optional
+
+import aiohttp
 
 from src.core.logger import get_logger
 
@@ -40,20 +38,20 @@ class RealPaperTradingSystem:
         self.portfolio_value = initial_balance
         self.is_monitoring = False
         self.monitor_task = None
-        
+
         # CORREÇÃO: Adicionar lock para evitar race condition no monitoramento
         import threading
         self._monitoring_lock = threading.Lock()
         self._save_lock = threading.Lock()  # Lock para salvamento de estado
-        
+
         # Criar diretórios
         Path("paper_trades").mkdir(exist_ok=True)
         Path("portfolio").mkdir(exist_ok=True)
         Path("simulation_logs").mkdir(exist_ok=True)
-        
+
         # Carregar estado se existir
         self._load_state()
-    
+
     def _load_state(self):
         """Carrega estado anterior do sistema com proteção de lock"""
         # CORRIGIDO: Usar lock para evitar leitura durante escrita
@@ -112,13 +110,13 @@ class RealPaperTradingSystem:
             from src.core.config import settings
             if settings.trading_mode == "paper":
                 if len(self.positions) > 0 and not self.is_monitoring:
-                    logger.warning(f"[CRITICO] Posicoes abertas encontradas mas monitoramento nao esta ativo. Iniciando monitoramento...")
+                    logger.warning("[CRITICO] Posicoes abertas encontradas mas monitoramento nao esta ativo. Iniciando monitoramento...")
                     self.start_monitoring()
             else:
-                logger.info(f"[MODO REAL] Monitoramento de posicoes desabilitado - Binance gerencia SL/TP automaticamente")
+                logger.info("[MODO REAL] Monitoramento de posicoes desabilitado - Binance gerencia SL/TP automaticamente")
         except Exception as e:
             logger.error(f"Erro ao verificar modo de trading: {e}")
-    
+
     def _save_state(self):
         """Salva estado atual do sistema usando escrita atômica com retry e lock"""
         # Usar lock para evitar salvamentos simultâneos
@@ -168,7 +166,7 @@ class RealPaperTradingSystem:
                         if temp_path.exists():
                             try:
                                 temp_path.unlink()
-                            except:
+                            except Exception:
                                 pass
 
                         # Se state.json sumiu mas temos backup, restaurar
@@ -203,12 +201,12 @@ class RealPaperTradingSystem:
                         continue
                     else:
                         logger.exception(f"Erro inesperado ao salvar estado após {max_retries} tentativas: {e}")
-    
+
     async def get_current_price(self, symbol: str) -> Optional[float]:
         """Obtém preço atual do símbolo"""
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"https://fapi.binance.com/fapi/v1/ticker/price"
+                url = "https://fapi.binance.com/fapi/v1/ticker/price"
                 params = {'symbol': symbol}
 
                 async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
@@ -231,7 +229,7 @@ class RealPaperTradingSystem:
         except Exception as e:
             logger.exception(f"Erro inesperado ao obter preço de {symbol}: {e}")
             return None
-    
+
     def execute_trade(self, signal: Dict[str, Any], position_size: float = None) -> Dict[str, Any]:
         """
         Executa um paper trade REAL com monitoramento automático.
@@ -244,20 +242,20 @@ class RealPaperTradingSystem:
             take_profit_1 = signal.get("take_profit_1")
             take_profit_2 = signal.get("take_profit_2")
             confidence = signal.get("confidence", 5)
-            
+
             # Validar dados obrigatórios
             if not all([symbol, signal_type, entry_price]):
                 return {
                     "success": False,
                     "error": "Dados obrigatórios ausentes (symbol, signal, entry_price)"
                 }
-            
+
             if signal_type not in ["BUY", "SELL"]:
                 return {
                     "success": False,
                     "error": f"Sinal {signal_type} não é executável (apenas BUY/SELL)"
                 }
-            
+
             # CALCULO DE TAMANHO DE POSICAO BASEADO EM RISCO
             # O tamanho da posicao eh calculado para que a perda no stop loss seja
             # exatamente a porcentagem configurada do capital
@@ -290,10 +288,10 @@ class RealPaperTradingSystem:
                     position_value_fallback = capital * 0.01  # 1% do capital
                     position_size = position_value_fallback / entry_price
                     logger.warning(f"[POSICAO FALLBACK] Sem stop loss valido, usando 1% do capital: {position_size:.6f} unidades")
-            
+
             # Calcular valor da posição (apenas para tracking, não deduz do saldo)
             position_value = position_size * entry_price
-            
+
             # CORRIGIDO: Verificar se já existe QUALQUER posição aberta para este símbolo
             # NÃO permite long e short ao mesmo tempo (de qualquer fonte)
             signal_source = signal.get("source", "UNKNOWN")  # DEEPSEEK ou AGNO
@@ -315,9 +313,9 @@ class RealPaperTradingSystem:
                 position_key = f"{symbol}_{signal_source}_SHORT"
             else:
                 position_key = None
-            
+
             # REMOVIDO: Verificação de saldo - sistema agora foca apenas em P&L
-            
+
             # Criar trade
             trade_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             trade = {
@@ -354,24 +352,24 @@ class RealPaperTradingSystem:
                     "sentiment": signal.get("sentiment", "neutral"),
                 }
             }
-            
+
             # MODIFICADO: Não deduzir do saldo - sistema foca apenas em P&L
             # Apenas registrar a posição para tracking de P&L
             self.positions[position_key] = trade
-            
+
             # Adicionar ao histórico
             self.trade_history.append(trade)
-            
+
             # Salvar trade individual
             self._save_trade(trade)
-            
+
             # Salvar estado
             self._save_state()
-            
+
             # Iniciar monitoramento se não estiver ativo
             if not self.is_monitoring:
                 self.start_monitoring()
-            
+
             return {
                 "success": True,
                 "trade_id": trade_id,
@@ -379,13 +377,13 @@ class RealPaperTradingSystem:
                 "file": f"paper_trades/trade_{trade_id}.json",
                 "monitoring": "Iniciado monitoramento automático"
             }
-            
+
         except Exception as e:
             return {
                 "success": False,
                 "error": f"Erro ao executar trade: {str(e)}"
             }
-    
+
     def start_monitoring(self):
         """Inicia monitoramento automático de posições (CORRIGIDO: race condition fix com lock)"""
         # CORREÇÃO: Usar lock para evitar race condition
@@ -409,7 +407,7 @@ class RealPaperTradingSystem:
                     self.monitor_thread = threading.Thread(target=run_monitoring, daemon=True)
                     self.monitor_thread.start()
                     logger.info("[MONITOR] Monitoramento automatico iniciado (thread separada)")
-    
+
     def stop_monitoring(self):
         """Para monitoramento automático"""
         if self.is_monitoring:
@@ -417,7 +415,7 @@ class RealPaperTradingSystem:
             if self.monitor_task:
                 self.monitor_task.cancel()
             logger.info("[PARADO] Monitoramento automatico parado")
-    
+
     async def _monitor_positions(self):
         """Monitora posições abertas e executa stop loss/take profit"""
         logger.warning(f"[MONITOR] Iniciando monitoramento de {len(self.positions)} posicoes")
@@ -436,13 +434,13 @@ class RealPaperTradingSystem:
                         else:
                             clean_symbol = position_key.replace("_DEEPSEEK", "").replace("_AGNO", "").replace("_SHORT", "").replace("_LEGACY", "")
                     source = position.get("source", "UNKNOWN")
-                    
+
                     current_price = await self.get_current_price(clean_symbol)
-                    
+
                     if current_price is None:
                         logger.warning(f"[MONITOR] Nao foi possivel obter preco para {clean_symbol}")
                         continue
-                    
+
                     # Log detalhado a cada verificação (INFO para visibilidade)
                     entry_price = position.get("entry_price", 0)
                     tp1 = position.get("take_profit_1", 0)
@@ -461,16 +459,16 @@ class RealPaperTradingSystem:
                             position["source"] = source
                             self._save_state()
                     logger.info(f"[MONITOR] {clean_symbol} ({signal_type} {source}): Preco ${current_price:.2f} | Entry ${entry_price:.2f} | TP1 ${tp1:.2f}")
-                    
+
                     # Calcular P&L atual (apenas em %)
                     entry_price = position["entry_price"]
                     signal_type = position["signal"]
-                    
+
                     if signal_type == "BUY":
                         pnl_percent = ((current_price - entry_price) / entry_price) * 100
                     else:  # SELL
                         pnl_percent = ((entry_price - current_price) / entry_price) * 100
-                    
+
                     # Atualizar máximo lucro/prejuízo em % e SALVAR estado
                     if pnl_percent > position.get("max_profit_reached_percent", -999):
                         position["max_profit_reached_percent"] = pnl_percent
@@ -564,10 +562,10 @@ class RealPaperTradingSystem:
                             logger.warning(f"[TAKE PROFIT 2] Take Profit 2 atingido para {clean_symbol} {source}: ${current_price:.2f} (TP: ${tp2:.2f}) - Fechando 50% restante")
                             await self._close_position_auto(position_key, current_price, "TAKE_PROFIT_2")
                             continue
-                    
+
                     # Log de monitoramento (apenas %)
                     self._log_monitoring(clean_symbol, current_price, pnl_percent)
-                
+
                 # Pausa entre verificações
                 await asyncio.sleep(5)  # Verifica a cada 5 segundos
 
@@ -577,11 +575,11 @@ class RealPaperTradingSystem:
             except Exception as e:
                 logger.exception(f"❌ Erro no monitoramento: {e}")
                 await asyncio.sleep(10)
-    
+
     async def _close_position_partial(self, position_key: str, current_price: float, reason: str, partial_percent: float = 0.5):
         """
         Fecha parcialmente uma posição (ex: 50% no TP1, 50% restante no TP2)
-        
+
         Args:
             position_key: Chave da posição (ex: BTCUSDT_DEEPSEEK, BTCUSDT_AGNO_SHORT)
             current_price: Preço atual para fechamento
@@ -592,10 +590,10 @@ class RealPaperTradingSystem:
             position = self.positions[position_key]
             symbol = position.get("symbol", position_key.split("_")[0])  # Extrair símbolo da posição ou da chave
             entry_price = position["entry_price"]
-            original_position_size = position.get("original_position_size", position["position_size"])
+            position.get("original_position_size", position["position_size"])
             current_position_size = position["position_size"]
             signal_type = position["signal"]
-            
+
             # Calcular quantidade a fechar
             size_to_close = current_position_size * partial_percent
             size_remaining = current_position_size - size_to_close
@@ -642,7 +640,7 @@ class RealPaperTradingSystem:
             position["trailing_stop_highest"] = current_price if signal_type == "BUY" else None
             position["trailing_stop_lowest"] = current_price if signal_type == "SELL" else None
             logger.info(f"[BREAK-EVEN] {symbol}: SL movido para entrada ${entry_price:.2f}, trailing stop ativado")
-            
+
             # Salvar estado
             self._save_state()
 
@@ -654,7 +652,7 @@ class RealPaperTradingSystem:
             logger.error(f"Posição não encontrada: {symbol} - {e}")
         except Exception as e:
             logger.exception(f"❌ Erro ao fechar parcialmente posição {symbol}: {e}")
-    
+
     async def _close_position_auto(self, position_key: str, current_price: float, reason: str):
         """Fecha posição automaticamente com cálculo de P&L total incluindo partes anteriores"""
         try:
@@ -680,7 +678,7 @@ class RealPaperTradingSystem:
             else:
                 # Fechamento total (sem parcial anterior)
                 total_pnl_percent = current_pnl_percent
-            
+
             # Atualizar trade no histórico ANTES de remover
             for trade in self.trade_history:
                 if trade.get("trade_id") == position.get("trade_id") and trade.get("status") != "CLOSED":
@@ -690,17 +688,17 @@ class RealPaperTradingSystem:
                     trade["close_timestamp"] = datetime.now().isoformat()
                     trade["close_reason"] = reason
                     break
-            
+
             # Atualizar posição
             position["close_price"] = current_price
             position["pnl_percent"] = total_pnl_percent
             position["status"] = "CLOSED"
             position["close_timestamp"] = datetime.now().isoformat()
             position["close_reason"] = reason
-            
+
             # Remover da posição ativa (usar position_key, não symbol)
             del self.positions[position_key]
-            
+
             # Salvar estado IMEDIATAMENTE (CRÍTICO)
             self._save_state()
 
@@ -708,7 +706,7 @@ class RealPaperTradingSystem:
             source = position.get("source", "UNKNOWN")
             logger.warning(f"[FECHADO] {reason}: {symbol} {source} fechado a ${current_price:.2f} | P&L Total: {total_pnl_percent:+.2f}%")
             self._log_trade_close(symbol, current_price, total_pnl_percent, reason)
-            
+
             # === ONLINE LEARNING: Registrar resultado para retreino do modelo ===
             if ML_ONLINE_LEARNING_ENABLED:
                 try:
@@ -726,7 +724,7 @@ class RealPaperTradingSystem:
                         if key in reason.upper():
                             result = val
                             break
-                            
+
                     # CORRIGIDO: Preparar sinal com TODOS os indicadores para Online Learning
                     indicators = position.get('indicators', {})
                     signal_data = {
@@ -809,7 +807,7 @@ class RealPaperTradingSystem:
     def _log_monitoring(self, symbol: str, price: float, pnl_percent: float):
         """Log de monitoramento (apenas %)"""
         logger.debug(f"📊 {symbol}: ${price:.2f} | P&L: {pnl_percent:+.2f}%")
-    
+
     def _log_trade_close(self, symbol: str, price: float, pnl_percent: float, reason: str):
         """Log de fechamento de trade (apenas %)"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -820,7 +818,7 @@ class RealPaperTradingSystem:
             "pnl_percent": pnl_percent,
             "reason": reason
         }
-        
+
         # Salvar log
         log_file = f"simulation_logs/trade_close_{datetime.now().strftime('%Y%m%d')}.json"
         try:
@@ -829,16 +827,16 @@ class RealPaperTradingSystem:
                     logs = json.load(f)
             else:
                 logs = []
-            
+
             logs.append(log_entry)
-            
+
             with open(log_file, "w") as f:
                 json.dump(logs, f, indent=2)
         except (IOError, json.JSONDecodeError) as e:
             logger.error(f"⚠️ Erro ao salvar log: {e}")
         except Exception as e:
             logger.exception(f"Erro inesperado ao salvar log: {e}")
-    
+
     def _save_trade(self, trade: Dict[str, Any]):
         """Salva trade individual"""
         try:
@@ -850,19 +848,19 @@ class RealPaperTradingSystem:
             logger.error(f"⚠️ Erro ao salvar trade: {e}")
         except Exception as e:
             logger.exception(f"Erro inesperado ao salvar trade: {e}")
-    
+
     def get_portfolio_summary(self) -> Dict[str, Any]:
         """Retorna resumo do portfólio focado em P&L em PORCENTAGEM"""
         try:
             # Calcular P&L de posições abertas (unrealized P&L em %)
             open_positions_pnl = []
-            
+
             # Obter preços atuais para calcular P&L não realizado
             # MODIFICADO: Simplificado - usar apenas se não houver loop rodando
             # Se houver loop, pular cálculo de preços (será calculado no monitoramento)
             import asyncio
             open_positions_pnl = []
-            
+
             # Tentar calcular P&L apenas se não houver loop assíncrono rodando
             try:
                 asyncio.get_running_loop()
@@ -873,14 +871,14 @@ class RealPaperTradingSystem:
                 try:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
-                    
+
                     async def _fetch_prices():
                         results = []
                         for position in self.positions.values():
                             symbol = position.get("symbol")
                             entry_price = position.get("entry_price", 0)
                             signal_type = position.get("signal", "BUY")
-                            
+
                             try:
                                 current_price = await self.get_current_price(symbol)
                                 if current_price and entry_price > 0:
@@ -892,21 +890,21 @@ class RealPaperTradingSystem:
                                         "symbol": symbol,
                                         "pnl_percent": pnl_percent
                                     })
-                            except:
+                            except Exception:
                                 pass
                         return results
-                    
+
                     open_positions_pnl = loop.run_until_complete(_fetch_prices())
                     loop.close()
                 except Exception as e:
                     logger.debug(f"Erro ao buscar preços para P&L: {e}")
                     open_positions_pnl = []
-            
+
             # Calcular P&L acumulado de trades fechados (realized P&L em %)
             realized_pnl_percent = 0.0
             winning_trades = 0
             losing_trades = 0
-            
+
             for trade in self.trade_history:
                 if trade.get("status") in ["CLOSED", "CLOSED_PARTIAL"]:
                     pnl_percent = trade.get("pnl_percent", 0)
@@ -915,19 +913,19 @@ class RealPaperTradingSystem:
                         winning_trades += 1
                     elif pnl_percent < 0:
                         losing_trades += 1
-            
+
             # Calcular P&L não realizado médio (média das posições abertas)
             unrealized_pnl_percent = 0.0
             if open_positions_pnl:
                 unrealized_pnl_percent = sum([p["pnl_percent"] for p in open_positions_pnl]) / len(open_positions_pnl)
-            
+
             # P&L total acumulado (soma de todos os trades fechados)
             total_pnl_percent = realized_pnl_percent
-            
+
             # Calcular win rate
             total_closed_trades = winning_trades + losing_trades
             win_rate = (winning_trades / total_closed_trades * 100) if total_closed_trades > 0 else 0
-            
+
             return {
                 "realized_pnl_percent": realized_pnl_percent,
                 "unrealized_pnl_percent": unrealized_pnl_percent,
@@ -941,7 +939,7 @@ class RealPaperTradingSystem:
                 "win_rate_percent": win_rate,
                 "is_monitoring": self.is_monitoring
             }
-            
+
         except KeyError as ke:
             # Erro específico de chave faltando - pode ser current_balance ou outra chave antiga
             logger.error(f"Chave faltando ao calcular resumo do portfólio: {ke}")
@@ -965,15 +963,15 @@ class RealPaperTradingSystem:
             return {
                 "error": f"Erro ao calcular resumo: {str(e)}"
             }
-    
+
     def get_open_positions(self) -> List[Dict[str, Any]]:
         """Retorna posições abertas"""
         return list(self.positions.values())
-    
+
     def get_trade_history(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Retorna histórico de trades"""
         return self.trade_history[-limit:] if limit else self.trade_history
-    
+
     def reset_portfolio(self):
         """Reseta o portfólio para o estado inicial"""
         self.stop_monitoring()
@@ -982,13 +980,13 @@ class RealPaperTradingSystem:
         self.trade_history = []
         self._save_state()
         logger.info("Portfolio resetado para estado inicial (modo P&L)")
-    
+
     def export_performance_report(self) -> str:
         """Exporta relatório de performance REAL"""
         try:
             summary = self.get_portfolio_summary()
             history = self.get_trade_history()
-            
+
             report = {
                 "report_date": datetime.now().isoformat(),
                 "summary": summary,
@@ -996,13 +994,13 @@ class RealPaperTradingSystem:
                 "open_positions": self.get_open_positions(),
                 "simulation_type": "REAL_PAPER_TRADING"
             }
-            
+
             filename = f"portfolio/performance_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             with open(filename, "w") as f:
                 json.dump(report, f, indent=2)
-            
+
             return filename
-            
+
         except Exception as e:
             return f"Erro ao exportar relatório: {str(e)}"
 

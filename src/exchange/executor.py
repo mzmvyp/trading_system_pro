@@ -7,23 +7,24 @@ Use com extrema cautela. Teste sempre em modo paper primeiro.
 """
 
 import asyncio
-import aiohttp
 import hashlib
 import hmac
-import time
 import json
 import os
+import time
 from datetime import datetime
-from typing import Dict, Any, Optional, List
-from urllib.parse import urlencode
 from pathlib import Path
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
+
+import aiohttp
 from dotenv import load_dotenv
 
 # Carregar variaveis de ambiente
 load_dotenv()
 
-from src.core.logger import get_logger
-from src.core.config import settings
+from src.core.config import settings  # noqa: E402
+from src.core.logger import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -56,7 +57,7 @@ class BinanceFuturesExecutor:
         # Verificar se deve usar testnet
         self.use_testnet = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
         self.BASE_URL = self.TESTNET_URL if self.use_testnet else self.PRODUCTION_URL
-        
+
         self.api_key = os.getenv("BINANCE_API_KEY") or settings.binance_api_key
         self.api_secret = os.getenv("BINANCE_SECRET_KEY") or settings.binance_secret_key
 
@@ -120,7 +121,7 @@ class BinanceFuturesExecutor:
         """
         url = f"{self.BASE_URL}{endpoint}"
         params = params or {}
-        
+
         # Fazer cópia dos params para não modificar o original
         request_params = params.copy()
 
@@ -153,10 +154,10 @@ class BinanceFuturesExecutor:
                 if isinstance(data, dict) and "code" in data and data["code"] < 0:
                     error_msg = data.get("msg", "Erro desconhecido")
                     error_code = data["code"]
-                    
+
                     # Erro -1021: Timestamp ahead of server - fazer retry com server time sync
                     if error_code == -1021 and signed and retry_timestamp:
-                        logger.warning(f"[BINANCE API] Erro -1021 detectado. Sincronizando com server time...")
+                        logger.warning("[BINANCE API] Erro -1021 detectado. Sincronizando com server time...")
                         # Buscar server time da Binance para calcular offset correto
                         try:
                             async with aiohttp.ClientSession() as time_session:
@@ -169,7 +170,7 @@ class BinanceFuturesExecutor:
                             request_params["timestamp"] = int(time.time() * 1000) - 3000
                         request_params.pop("signature", None)
                         request_params["signature"] = self._generate_signature(request_params)
-                        
+
                         # Retry uma vez com timestamp ajustado (fazer requisição diretamente)
                         await asyncio.sleep(0.1)  # Pequeno delay antes do retry
                         try:
@@ -183,7 +184,7 @@ class BinanceFuturesExecutor:
                                 elif method == "DELETE":
                                     async with retry_session.delete(url, params=request_params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as retry_response:
                                         retry_data = await retry_response.json()
-                                
+
                                 # Verificar se o retry foi bem-sucedido
                                 if isinstance(retry_data, dict) and "code" in retry_data and retry_data["code"] < 0:
                                     error_msg = retry_data.get("msg", "Erro desconhecido")
@@ -193,19 +194,19 @@ class BinanceFuturesExecutor:
                                     else:
                                         logger.error(f"[BINANCE API ERROR] Codigo: {error_code}, Mensagem: {error_msg}")
                                     return {"error": error_msg, "code": error_code}
-                                
+
                                 logger.info("[BINANCE API] Retry com timestamp ajustado foi bem-sucedido")
                                 return retry_data
                         except Exception as retry_e:
                             logger.error(f"[BINANCE] Erro no retry: {retry_e}")
                             return {"error": error_msg, "code": error_code}
-                    
+
                     # Erro -4046 é apenas um aviso (margem já está no tipo correto)
                     if error_code == -4046:
                         logger.info(f"[BINANCE API] Codigo: {error_code}, Mensagem: {error_msg}")
                     else:
                         logger.error(f"[BINANCE API ERROR] Codigo: {error_code}, Mensagem: {error_msg}")
-                    
+
                     return {"error": error_msg, "code": error_code}
 
                 return data
@@ -516,7 +517,7 @@ class BinanceFuturesExecutor:
 
         # CORRIGIDO: Cancelar TODAS as ordens pendentes (SL, TP1, TP2) após fechar posição
         try:
-            cancel_result = await self.cancel_all_orders(symbol)
+            await self.cancel_all_orders(symbol)
             logger.info(f"[CLOSE] Ordens pendentes de {symbol} canceladas apos fechamento")
         except Exception as e:
             logger.warning(f"[CLOSE] Erro ao cancelar ordens de {symbol}: {e}")
@@ -597,7 +598,7 @@ class BinanceFuturesExecutor:
             capital_total = total_balance
             risk_percent = settings.risk_percent_per_trade / 100.0  # Converter para decimal
             risk_amount = capital_total * risk_percent  # $ que estamos dispostos a perder
-            
+
             if position_size is None:
                 if stop_loss and stop_loss != entry_price:
                     # Distancia do stop loss em $
@@ -609,7 +610,7 @@ class BinanceFuturesExecutor:
 
                     # Calcular valor total da posicao
                     position_value_calc = position_size * entry_price
-                    
+
                     # IMPORTANTE: A margem necessária em modo ISOLATED é apenas o risco (valor do stop)
                     # Não é o valor_posicao / alavancagem, é o próprio risk_amount + buffer
                     margin_required = risk_amount * 1.2  # 20% de buffer para taxas e slippage
@@ -618,7 +619,7 @@ class BinanceFuturesExecutor:
                     logger.info(f"[POSICAO] Entry: ${entry_price:.4f} | Stop: ${stop_loss:.4f} | Distancia: ${stop_distance:.4f}")
                     logger.info(f"[POSICAO] Tamanho: {position_size:.4f} unidades | Valor: ${position_value_calc:.2f}")
                     logger.info(f"[MARGEM] Margem isolada necessaria: ${margin_required:.2f} (risco + buffer)")
-                    
+
                     # Verificar se tem margem disponível
                     if margin_required > available:
                         logger.warning(f"[MARGEM INSUFICIENTE] Necessario: ${margin_required:.2f} > Disponivel: ${available:.2f}")
@@ -657,16 +658,16 @@ class BinanceFuturesExecutor:
             # alavancagem = valor_posicao / margem_desejada
             position_value = position_size * entry_price
             desired_margin = risk_amount * 1.2  # Margem = risco + 20% buffer
-            
+
             if desired_margin > 0:
                 calculated_leverage = int(position_value / desired_margin)
                 # Limitar entre 1x e 20x (conservador - alguns ativos como PAXG tem limites baixos)
                 calculated_leverage = max(1, min(calculated_leverage, 20))
             else:
                 calculated_leverage = self.default_leverage
-            
+
             logger.info(f"[ALAVANCAGEM] Valor posicao: ${position_value:.2f} / Margem: ${desired_margin:.2f} = {calculated_leverage}x")
-            
+
             leverage_result = await self.set_leverage(symbol, calculated_leverage)
             if "error" in leverage_result:
                 logger.warning(f"Erro ao configurar alavancagem: {leverage_result}")

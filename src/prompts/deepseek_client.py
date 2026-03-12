@@ -6,13 +6,14 @@ import os
 from typing import Optional
 
 try:
-    from agno.models.deepseek import DeepSeek
     from agno.agent import Agent
+    from agno.models.deepseek import DeepSeek
     AGNO_AVAILABLE = True
 except ImportError:
     AGNO_AVAILABLE = False
 
 from src.core.logger import get_logger
+
 logger = get_logger(__name__)
 
 
