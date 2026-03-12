@@ -86,7 +86,7 @@ class OnlineLearningManager:
         with open(CONFIG["performance_file"], 'w') as f:
             json.dump(self.performance_history, f, indent=2, default=str)
             
-    def add_signal_result(self, signal: Dict, result: str, return_pct: float = 0.0):
+    def add_signal_result(self, signal: Dict, result: str, return_pct: float = 0.0, _batch_mode: bool = False):
         """
         Adiciona um resultado de sinal ao buffer para aprendizado futuro.
 
@@ -94,6 +94,7 @@ class OnlineLearningManager:
             signal: O sinal original (com features)
             result: 'TP1', 'TP2', 'SL', 'TIMEOUT'
             return_pct: Retorno percentual
+            _batch_mode: Se True, nao salva/retreina a cada item (para seed em lote)
         """
         # CORRIGIDO: Extrair TODAS as features necessárias para o modelo
         # Sincronizado com simple_signal_validator.py
@@ -169,11 +170,15 @@ class OnlineLearningManager:
         }
         
         self.buffer.append(data_point)
+
+        if _batch_mode:
+            return
+
         self._save_buffer()
-        
+
         print(f"[OL] Novo resultado adicionado: {signal.get('symbol')} {signal.get('signal')} -> {result} ({return_pct:+.2f}%)")
         print(f"[OL] Buffer: {len(self.buffer)}/{CONFIG['retrain_threshold']} para retreino")
-        
+
         # Verificar se deve retreinar
         if len(self.buffer) >= CONFIG["retrain_threshold"]:
             print(f"[OL] Threshold atingido! Iniciando retreino...")
@@ -401,6 +406,99 @@ def add_trade_result(signal: Dict, result: str, return_pct: float = 0.0):
 def manual_retrain():
     """Forca retreino manual"""
     return online_learning_manager.retrain()
+
+
+def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
+    """
+    Popula o buffer do online learning com sinais ja avaliados pelo signal_tracker.
+    Isso permite treinar o ML usando sinais existentes sem precisar de trades paper.
+
+    Args:
+        force_retrain: Se True, dispara retreino apos popular o buffer
+
+    Returns:
+        Dict com resultado da operacao
+    """
+    try:
+        from src.trading.signal_tracker import evaluate_all_signals
+    except ImportError as e:
+        return {"success": False, "error": f"Import error: {e}"}
+
+    evaluations = evaluate_all_signals()
+    if not evaluations:
+        return {"success": False, "error": "Nenhum sinal avaliado encontrado"}
+
+    # Filtrar apenas sinais finalizados (SL/TP hit)
+    finalized = [e for e in evaluations
+                 if e.get('outcome') in ('SL_HIT', 'TP1_HIT', 'TP2_HIT')]
+
+    if not finalized:
+        return {"success": False, "error": "Nenhum sinal finalizado (SL/TP hit)"}
+
+    # Evitar duplicatas - checar sinais ja no buffer por symbol+timestamp
+    existing_keys = {
+        (b.get('symbol', ''), b.get('timestamp', '')[:16])
+        for b in online_learning_manager.buffer
+    }
+
+    added = 0
+    for ev in finalized:
+        key = (ev.get('symbol', ''), ev.get('timestamp', '')[:16])
+        if key in existing_keys:
+            continue
+
+        outcome = ev.get('outcome', '')
+        result_map = {'TP1_HIT': 'TP1', 'TP2_HIT': 'TP2', 'SL_HIT': 'SL'}
+        result = result_map.get(outcome, 'SL')
+
+        # Usar add_signal_result para manter formato consistente
+        signal_data = {
+            'symbol': ev.get('symbol', ''),
+            'signal': ev.get('signal', ''),
+            'entry_price': ev.get('entry_price', 0),
+            'stop_loss': ev.get('stop_loss', 0),
+            'take_profit_1': ev.get('take_profit_1', 0),
+            'take_profit_2': ev.get('take_profit_2', 0),
+            'confidence': ev.get('confidence', 5),
+            'timestamp': ev.get('timestamp', ''),
+            'source': ev.get('source', ''),
+            'indicators': ev.get('indicators', {}),
+            'trend': ev.get('trend', 'neutral'),
+            'sentiment': ev.get('sentiment', 'neutral'),
+            'bullish_tf_count': ev.get('bullish_tf_count', 0),
+            'bearish_tf_count': ev.get('bearish_tf_count', 0),
+            'rsi': ev.get('rsi', ev.get('indicators', {}).get('rsi', 50)),
+            'macd_histogram': ev.get('macd_histogram', ev.get('indicators', {}).get('macd_histogram', 0)),
+            'adx': ev.get('adx', ev.get('indicators', {}).get('adx', 25)),
+            'atr': ev.get('atr', ev.get('indicators', {}).get('atr', 0)),
+            'bb_position': ev.get('bb_position', ev.get('indicators', {}).get('bb_position', 0.5)),
+            'cvd': ev.get('cvd', ev.get('indicators', {}).get('cvd', 0)),
+            'orderbook_imbalance': ev.get('orderbook_imbalance', ev.get('indicators', {}).get('orderbook_imbalance', 0.5)),
+        }
+
+        pnl = ev.get('pnl_percent', 0)
+        online_learning_manager.add_signal_result(signal_data, result, pnl, _batch_mode=True)
+        added += 1
+
+    # Salvar buffer uma unica vez apos adicionar todos
+    if added > 0:
+        online_learning_manager._save_buffer()
+
+    print(f"[OL-SEED] {added} sinais adicionados ao buffer ({len(online_learning_manager.buffer)} total)")
+
+    retrain_result = None
+    if force_retrain and len(online_learning_manager.buffer) >= 10:
+        print(f"[OL-SEED] Disparando retreino com {len(online_learning_manager.buffer)} amostras...")
+        retrain_result = online_learning_manager.retrain()
+
+    return {
+        "success": True,
+        "signals_evaluated": len(evaluations),
+        "signals_finalized": len(finalized),
+        "signals_added": added,
+        "buffer_total": len(online_learning_manager.buffer),
+        "retrain_result": retrain_result,
+    }
 
 
 def get_learning_status() -> Dict:
