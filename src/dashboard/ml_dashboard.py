@@ -200,6 +200,10 @@ def main():
         st.caption(f"Retreino automatico ao atingir {threshold} amostras no buffer. "
                    f"Usa TODOS os dados do buffer + dataset original.")
 
+        # Aviso: buffer cheio mas modelo ainda nao treinado (ex.: primeiro uso ou retreino falhou)
+        if len(buffer) >= 50 and (not model_info or not model_info.get("best_model")):
+            st.warning("Buffer cheio e nenhum modelo ativo. Clique em **Forcar Retreino** para treinar o modelo com os sinais do buffer.")
+
         if st.button("📡 Alimentar com Sinais", type="primary", use_container_width=True):
             with st.spinner("Avaliando sinais e populando buffer..."):
                 from src.ml.online_learning import seed_from_evaluated_signals
@@ -230,6 +234,7 @@ def main():
         st.caption("• Treina ensemble (LogReg, RF, GB)")
         st.caption("• Salva apenas se F1 melhorar")
         st.caption("• Buffer limpo apos retreino")
+
 
     # ================= MAIN CONTENT =================
     if not has_model:
