@@ -564,6 +564,16 @@ class BinanceFuturesExecutor:
                     "error": f"Ja existe posicao aberta para {symbol}: {existing_position['side']} {abs(existing_position['position_amt'])}"
                 }
 
+            # 2b. Cancelar quaisquer ordens pendentes antes de abrir nova posição
+            # Evita acúmulo de ordens SL/TP de tentativas anteriores
+            try:
+                existing_orders = await self.get_open_orders(symbol)
+                if existing_orders and len(existing_orders) > 0:
+                    logger.info(f"[LIMPEZA PRE-EXECUCAO] {symbol}: cancelando {len(existing_orders)} ordens pendentes antes de abrir nova posicao")
+                    await self.cancel_all_orders(symbol)
+            except Exception as e:
+                logger.warning(f"[LIMPEZA PRE-EXECUCAO] Erro ao limpar ordens de {symbol}: {e}")
+
             # 3. Obter informações do símbolo
             symbol_info = await self.get_symbol_info(symbol)
             if not symbol_info or "error" in symbol_info:
