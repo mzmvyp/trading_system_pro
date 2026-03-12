@@ -8,7 +8,6 @@ Rules:
 - NEUTRAL: Allows both
 """
 
-import logging
 from datetime import datetime
 from enum import Enum
 from typing import Dict, Optional, Tuple
@@ -81,7 +80,7 @@ class MarketRegimeFilter:
             # MACD
             ema12 = self._ema(close_1h, 12)
             ema26 = self._ema(close_1h, 26)
-            macd_hist = (ema12 - ema26) - self._ema(np.array([ema12 - ema26][-1:] if len(close_1h) < 50 else [0]), 9)
+            (ema12 - ema26) - self._ema(np.array([ema12 - ema26][-1:] if len(close_1h) < 50 else [0]), 9)
             macd_bullish = (ema12 - ema26) > 0
 
             # 24h price change approximation
@@ -220,12 +219,12 @@ class MarketRegimeFilter:
     @staticmethod
     def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> float:
         import pandas as pd
-        h, l, c = pd.Series(high), pd.Series(low), pd.Series(close)
+        h, lo, c = pd.Series(high), pd.Series(low), pd.Series(close)
         up = h.diff()
-        down = -l.diff()
+        down = -lo.diff()
         plus_dm = pd.Series(np.where((up > down) & (up > 0), up, 0.0))
         minus_dm = pd.Series(np.where((down > up) & (down > 0), down, 0.0))
-        tr = pd.concat([h - l, (h - c.shift(1)).abs(), (l - c.shift(1)).abs()], axis=1).max(axis=1)
+        tr = pd.concat([h - lo, (h - c.shift(1)).abs(), (lo - c.shift(1)).abs()], axis=1).max(axis=1)
         atr = tr.ewm(alpha=1/period, adjust=False).mean()
         pdi = 100 * (plus_dm.ewm(alpha=1/period, adjust=False).mean() / (atr + 1e-10))
         mdi = 100 * (minus_dm.ewm(alpha=1/period, adjust=False).mean() / (atr + 1e-10))

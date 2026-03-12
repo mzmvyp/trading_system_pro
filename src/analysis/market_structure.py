@@ -8,7 +8,6 @@ Features:
 - Breakout analysis with volume confirmation
 """
 
-import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
@@ -168,8 +167,8 @@ class MarketStructureAnalyzer:
 
     def _classify_structure(self, points: List[StructurePoint]):
         """Classify each point as HH/HL/LH/LL/EH/EL."""
-        swing_highs = [p for p in points if p.price == max(p.price for p2 in points if abs(p2.index - p.index) < 2)]
-        swing_lows = [p for p in points if p.price == min(p.price for p2 in points if abs(p2.index - p.index) < 2)]
+        [p for p in points if p.price == max(p.price for p2 in points if abs(p2.index - p.index) < 2)]
+        [p for p in points if p.price == min(p.price for p2 in points if abs(p2.index - p.index) < 2)]
 
         # Separate highs and lows by alternating through points
         highs = []

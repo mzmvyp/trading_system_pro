@@ -7,7 +7,6 @@ Features:
 - Multi-position total risk calculation
 """
 
-import logging
 from typing import Dict, Optional
 
 from src.core.logger import get_logger

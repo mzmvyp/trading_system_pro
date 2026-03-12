@@ -1,11 +1,11 @@
 """
 Market data collection from Binance
 """
-from typing import Dict, Any
 from datetime import datetime
+from typing import Any, Dict
 
-from src.core.logger import get_logger
 from src.core.constants import DEFAULT_KLINES_LIMIT
+from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 

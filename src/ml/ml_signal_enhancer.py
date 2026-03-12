@@ -4,7 +4,6 @@ Source: sinais
 Combines technical confidence with ML prediction using configurable weight.
 """
 
-import logging
 from typing import Dict, Optional
 
 from src.core.logger import get_logger
@@ -12,7 +11,7 @@ from src.core.logger import get_logger
 logger = get_logger(__name__)
 
 try:
-    from src.ml.xgboost_predictor import OptimizedXGBoostPredictor, XGBOOST_AVAILABLE
+    from src.ml.xgboost_predictor import XGBOOST_AVAILABLE, OptimizedXGBoostPredictor
 except ImportError:
     XGBOOST_AVAILABLE = False
 

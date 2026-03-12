@@ -17,15 +17,15 @@ NOVO: Trailing Stop Dinamico baseado em ATR
 NOVO: Time-Based Exit (saida por tempo)
 """
 
+import asyncio
 import json
 import os
-import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from src.core.logger import get_logger
 from src.core.config import settings
+from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -147,7 +147,7 @@ class SignalReevaluator:
                             assumed_open_time = datetime.now() - timedelta(hours=min_required_hours)
                             context_timestamp = assumed_open_time.isoformat()
                             logger.info(f"[REEVALUATOR] {symbol}: Sem timestamp no state.json, assumindo aberta ha {min_required_hours}h")
-                        
+
                         pos_data = {
                             "position_key": f"{symbol}_BINANCE",
                             "symbol": symbol,
@@ -252,12 +252,12 @@ class SignalReevaluator:
         """
         try:
             from src.analysis.agno_tools import (
-                get_market_data,
-                analyze_technical_indicators,
                 analyze_market_sentiment,
                 analyze_multiple_timeframes,
                 analyze_order_flow,
-                classify_market_condition
+                analyze_technical_indicators,
+                classify_market_condition,
+                get_market_data,
             )
 
             logger.info(f"[REEVALUATOR] Coletando dados de mercado para {symbol}...")
@@ -371,7 +371,7 @@ class SignalReevaluator:
         try:
             open_time = datetime.fromisoformat(position.get("timestamp", datetime.now().isoformat()))
             hours_open = (datetime.now() - open_time).total_seconds() / 3600
-        except:
+        except Exception:
             hours_open = 0
 
         # Extrair indicadores tecnicos
@@ -522,7 +522,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
         # Se reevaluation_require_tp1_hit = True, só reavalia após TP1 atingido
         if settings.reevaluation_require_tp1_hit:
             tp1_hit = await self._check_tp1_hit(position)
-            
+
             if not tp1_hit:
                 logger.info(f"[REEVALUATOR] {position_key}: TP1 nao atingido - pulando reavaliacao (economia de tokens)")
                 return {
@@ -611,8 +611,8 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
         import re
 
         try:
-            from agno.models.deepseek import DeepSeek
             from agno.agent import Agent
+            from agno.models.deepseek import DeepSeek
 
             api_key = os.getenv("DEEPSEEK_API_KEY")
             if not api_key:
@@ -652,7 +652,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                 pass
 
             # Fallback
-            logger.warning(f"[REEVALUATOR] Nao foi possivel extrair JSON da resposta")
+            logger.warning("[REEVALUATOR] Nao foi possivel extrair JSON da resposta")
             return {
                 "action": "HOLD",
                 "confidence": 3,
@@ -748,7 +748,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                 # OPCIONAL: So ajustar stop se TP1 ja foi atingido (se configurado)
                 if settings.reevaluation_require_tp1_hit:
                     tp1_hit = await self._check_tp1_hit(position)
-                    
+
                     if not tp1_hit:
                         logger.info(f"[REEVALUATOR] {position_key}: Ajuste de stop BLOQUEADO - TP1 ainda nao foi atingido")
                         return {
@@ -757,7 +757,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                             "action": action,
                             "position_key": position_key
                         }
-                
+
                 # Pode ajustar stop
                 if action == "MOVE_STOP_BREAKEVEN":
                     return await self._execute_adjust_stop(position, position.get("entry_price"))
@@ -924,7 +924,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                     )
 
                     logger.info(f"[REEVALUATOR] {position_key}: Novo SL criado em ${new_stop:.2f}")
-                    
+
                     return {
                         "executed": True,
                         "action": "ADJUST_STOP",
@@ -942,35 +942,35 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
     async def _check_tp1_hit(self, position: Dict[str, Any]) -> bool:
         """
         Verifica se o TP1 (Take Profit 1) ja foi atingido.
-        
+
         LOGICA PRINCIPAL: O sistema sempre cria 2 ordens de Take Profit (TP1 e TP2).
         Se existe apenas 1 ordem de TP aberta, significa que TP1 foi executado.
         Se existem 0 ordens de TP, ambos foram executados ou cancelados.
-        
+
         Args:
             position: Dados da posicao
-            
+
         Returns:
             True se TP1 foi atingido, False caso contrario
         """
         position_key = position.get("position_key", "unknown")
         symbol = position.get("symbol")
-        
+
         try:
             # METODO PRINCIPAL: Contar ordens de Take Profit abertas
             # Sistema sempre cria 2 TPs. Se tem apenas 1, TP1 foi batido.
             from src.exchange.executor import BinanceFuturesExecutor
-            
+
             async with BinanceFuturesExecutor() as executor:
                 # Buscar ordens abertas do simbolo
                 params = {"symbol": symbol}
                 open_orders = await executor._request("GET", "/fapi/v1/openOrders", params, signed=True)
-                
+
                 if isinstance(open_orders, list):
                     # Contar apenas ordens de Take Profit
                     tp_orders = [o for o in open_orders if o.get("type") == "TAKE_PROFIT_MARKET"]
                     tp_count = len(tp_orders)
-                    
+
                     if tp_count == 1:
                         # Exatamente 1 TP = TP1 foi batido, TP2 ainda aberto
                         logger.info(f"[REEVALUATOR] {position_key}: TP1 ATINGIDO - apenas 1 ordem de TP aberta")
@@ -983,13 +983,13 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                         # 2 TPs ainda abertos = TP1 nao foi batido
                         logger.debug(f"[REEVALUATOR] {position_key}: TP1 pendente - {tp_count} ordens de TP abertas")
                         return False
-            
+
             # Fallback: Verificar flag de TP1 atingido (se existir)
             if position.get("tp1_hit") or position.get("tp1_executed"):
                 return True
-            
+
             return False
-            
+
         except Exception as e:
             logger.warning(f"[REEVALUATOR] Erro ao verificar TP1 para {position_key}: {e}")
             # Em caso de erro, assume que TP1 nao foi atingido (mais seguro)
@@ -1206,7 +1206,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
         for position in positions:
             position_key = position.get("position_key", "unknown")
             symbol = position.get("symbol", "UNKNOWN")
-            
+
             # ============================================
             # 1. TIME-BASED EXIT (saida por tempo)
             # ============================================
@@ -1215,7 +1215,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                     time_action = position_manager.check_time_based_exit(position)
                     if time_action:
                         logger.warning(f"[TIME EXIT] {position_key}: Acao recomendada = {time_action}")
-                        
+
                         if auto_execute and time_action == "BREAKEVEN":
                             # Mover para breakeven
                             be_result = await self._execute_adjust_stop(position, position.get("entry_price"))
@@ -1237,27 +1237,27 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                             continue
                 except Exception as e:
                     logger.debug(f"[TIME EXIT] Erro: {e}")
-            
+
             # ============================================
             # 2. TRAILING STOP DINAMICO (baseado em ATR)
             # ============================================
             if POSITION_MANAGER_AVAILABLE and settings.trailing_stop_enabled:
                 try:
                     current_price = await self._get_current_price(symbol)
-                    
+
                     # Obter ATR atual
                     from src.analysis.agno_tools import analyze_technical_indicators
                     tech = await analyze_technical_indicators(symbol)
                     atr = tech.get("indicators", {}).get("atr", 0)
-                    
+
                     if atr > 0 and current_price > 0:
                         new_trailing = await position_manager.calculate_trailing_stop(
                             position, current_price, atr
                         )
-                        
+
                         if new_trailing:
                             logger.info(f"[TRAILING] {position_key}: Movendo stop para ${new_trailing:.2f}")
-                            
+
                             if auto_execute:
                                 trailing_result = await self._execute_adjust_stop(position, new_trailing)
                                 results.append({
@@ -1271,7 +1271,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                                 continue
                 except Exception as e:
                     logger.debug(f"[TRAILING] Erro ao calcular trailing: {e}")
-            
+
             # ============================================
             # 3. VERIFICAR TP1 E AJUSTAR STOP
             # ============================================

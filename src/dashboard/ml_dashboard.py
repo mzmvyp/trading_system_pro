@@ -10,15 +10,13 @@ Dashboard em Streamlit para acompanhar:
 - Auto-treino quando nao existe modelo
 """
 
-import streamlit as st
-import pandas as pd
-import numpy as np
 import json
 import os
-from datetime import datetime
-from pathlib import Path
+
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import streamlit as st
 
 # Configuracao da pagina
 st.set_page_config(

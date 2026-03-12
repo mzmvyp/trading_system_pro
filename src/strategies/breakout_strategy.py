@@ -9,10 +9,9 @@ Features:
 - Confluence scoring system
 """
 
-import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -105,7 +104,7 @@ class BreakoutStrategy:
 
         highs = df["high"].values
         lows = df["low"].values
-        closes = df["close"].values
+        df["close"].values
         volumes = df["volume"].values
 
         # Sliding window approach

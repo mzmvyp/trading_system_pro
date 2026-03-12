@@ -2,10 +2,12 @@
 Estratégia de swing (esqueleto portado de smart_trading_system).
 Implementação completa pode ser expandida com market structure e multi-timeframe.
 """
+from typing import Any, Dict
+
 import pandas as pd
-from typing import Dict, Any
-from strategies.base_strategy import BaseStrategy
+
 from src.core.logger import get_logger
+from strategies.base_strategy import BaseStrategy
 
 logger = get_logger(__name__)
 

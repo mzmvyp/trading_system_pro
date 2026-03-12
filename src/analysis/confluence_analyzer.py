@@ -9,13 +9,11 @@ Weights:
 5. S/R Levels (10%)
 """
 
-import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 
 import numpy as np
-import pandas as pd
 
 from src.core.logger import get_logger
 
@@ -248,7 +246,7 @@ class ConfluenceAnalyzer:
         flow_score = order_flow.get("score", 0.5)
 
         # Volume profile
-        poc_position = volume_profile.get("poc_position", "MIDDLE")
+        volume_profile.get("poc_position", "MIDDLE")
 
         if flow_bias == "BULLISH" and flow_score > 0.6:
             bias = "BULLISH"

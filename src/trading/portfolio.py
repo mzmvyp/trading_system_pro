@@ -4,17 +4,18 @@ CORRIGIDO: Usa real_paper_trading ao invés de paper_trading
 """
 
 import argparse
+
 from src.trading.paper_trading import real_paper_trading as paper_trading
-from datetime import datetime
+
 
 def show_portfolio():
     """Mostra resumo do portfólio"""
     print("\n" + "="*60)
     print("📊 RESUMO DO PORTFÓLIO")
     print("="*60)
-    
+
     summary = paper_trading.get_portfolio_summary()
-    
+
     print(f"💰 Saldo Inicial: ${summary['initial_balance']:,.2f}")
     print(f"💵 Saldo Atual: ${summary['current_balance']:,.2f}")
     print(f"📈 Valor Total: ${summary['total_portfolio_value']:,.2f}")
@@ -24,26 +25,26 @@ def show_portfolio():
     print(f"📋 Total de Trades: {summary['total_trades']}")
     print(f"✅ Trades Vencedores: {summary['winning_trades']}")
     print(f"❌ Trades Perdedores: {summary['losing_trades']}")
-    
+
     # Calcular taxa de acerto
     if summary['total_trades'] > 0:
         win_rate = (summary['winning_trades'] / summary['total_trades']) * 100
         print(f"🎯 Taxa de Acerto: {win_rate:.1f}%")
-    
+
     print("="*60)
 
 def show_positions():
     """Mostra posições abertas"""
     positions = paper_trading.get_open_positions()
-    
+
     if not positions:
         print("\n📭 Nenhuma posição aberta")
         return
-    
+
     print("\n" + "="*60)
     print("📈 POSIÇÕES ABERTAS")
     print("="*60)
-    
+
     for pos in positions:
         print(f"🔸 {pos['symbol']} - {pos['signal']}")
         print(f"   💰 Entrada: ${pos['entry_price']:.4f}")
@@ -61,19 +62,19 @@ def show_positions():
 def show_history(limit=10):
     """Mostra histórico de trades"""
     history = paper_trading.get_trade_history(limit)
-    
+
     if not history:
         print("\n📭 Nenhum trade no histórico")
         return
-    
-    print(f"\n" + "="*60)
+
+    print("\n" + "="*60)
     print(f"📋 HISTÓRICO DE TRADES (Últimos {len(history)})")
     print("="*60)
-    
+
     for trade in reversed(history):  # Mostrar mais recentes primeiro
         status_emoji = "✅" if trade.get('status') == 'CLOSED' else "🔄"
         pnl_emoji = "📈" if trade.get('pnl', 0) > 0 else "📉" if trade.get('pnl', 0) < 0 else "➖"
-        
+
         print(f"{status_emoji} {trade['symbol']} - {trade['signal']}")
         print(f"   💰 Entrada: ${trade['entry_price']:.4f}")
         if trade.get('close_price'):
@@ -87,7 +88,7 @@ def show_history(limit=10):
 def close_position(symbol, current_price):
     """Fecha uma posição"""
     result = paper_trading.close_position(symbol, current_price)
-    
+
     if result["success"]:
         print(f"\n✅ Posição {symbol} fechada!")
         print(f"💰 P&L: ${result['pnl']:+,.2f}")
@@ -110,14 +111,14 @@ def reset_portfolio():
 
 def main():
     parser = argparse.ArgumentParser(description='Gerenciador de Portfólio')
-    parser.add_argument('--action', choices=['portfolio', 'positions', 'history', 'close', 'export', 'reset'], 
+    parser.add_argument('--action', choices=['portfolio', 'positions', 'history', 'close', 'export', 'reset'],
                        default='portfolio', help='Ação a executar')
     parser.add_argument('--symbol', help='Símbolo para fechar posição')
     parser.add_argument('--price', type=float, help='Preço atual para fechar posição')
     parser.add_argument('--limit', type=int, default=10, help='Limite de trades no histórico')
-    
+
     args = parser.parse_args()
-    
+
     if args.action == 'portfolio':
         show_portfolio()
     elif args.action == 'positions':

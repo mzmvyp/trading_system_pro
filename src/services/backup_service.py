@@ -10,9 +10,6 @@ Features:
 
 import hashlib
 import json
-import logging
-import os
-import shutil
 import zipfile
 from datetime import datetime
 from pathlib import Path

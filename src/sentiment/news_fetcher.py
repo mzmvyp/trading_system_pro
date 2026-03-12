@@ -4,10 +4,12 @@ News Fetcher - Coleta notícias de crypto (portado de sinais).
 Suporta CryptoCompare e mock para desenvolvimento.
 """
 import os
-import requests
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import List, Optional
+
+import requests
+
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)

@@ -5,23 +5,26 @@ Handles LLM interaction for trading signal generation
 import json
 import os
 import re
-from typing import Dict, Any, List
 from datetime import datetime
+from typing import Any, Dict, List
 
-from src.core.logger import get_logger
-from src.analysis.market_data import get_market_data
 from src.analysis.indicators import (
+    _calculate_suggested_stops,
+    _classify_bollinger_position,
+    _classify_orderbook_imbalance,
+    _classify_rsi,
+    _detect_ema_alignment,
+    _interpret_adx,
+    _interpret_funding_rate,
+    _interpret_macd_momentum,
     analyze_technical_indicators,
-    _classify_rsi, _interpret_adx, _interpret_macd_momentum,
-    _classify_bollinger_position, _detect_ema_alignment,
-    _interpret_funding_rate, _classify_orderbook_imbalance,
-    _calculate_suggested_stops
 )
-from src.analysis.sentiment import analyze_market_sentiment
+from src.analysis.market_classifier import classify_market_condition
+from src.analysis.market_data import get_market_data
 from src.analysis.multi_timeframe import analyze_multiple_timeframes
 from src.analysis.order_flow import analyze_order_flow
-from src.analysis.market_classifier import classify_market_condition
-from src.trading.risk_manager import validate_risk_and_position
+from src.analysis.sentiment import analyze_market_sentiment
+from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -445,8 +448,8 @@ RESPONDA APENAS COM JSON:
 async def get_deepseek_analysis(symbol: str) -> Dict[str, Any]:
     """Prepara análise otimizada para o DeepSeek e chama diretamente."""
     try:
-        from agno.models.deepseek import DeepSeek
         from agno.agent import Agent
+        from agno.models.deepseek import DeepSeek
 
         analysis = await prepare_analysis_for_llm(symbol)
         if "error" in analysis:
@@ -497,7 +500,7 @@ async def get_deepseek_analysis(symbol: str) -> Dict[str, Any]:
             except json.JSONDecodeError as e:
                 logger.warning(f"[DEEPSEEK] Erro ao decodificar JSON: {e}")
 
-        logger.warning(f"[DEEPSEEK] Não foi possível extrair JSON, retornando resposta bruta")
+        logger.warning("[DEEPSEEK] Não foi possível extrair JSON, retornando resposta bruta")
         return {
             "analysis_data": analysis,
             "deepseek_prompt": prompt,
@@ -514,7 +517,6 @@ async def get_deepseek_analysis(symbol: str) -> Dict[str, Any]:
 async def backtest_strategy(symbol: str, start_date: str, end_date: str) -> Dict[str, Any]:
     """Backtesting com dados históricos."""
     try:
-        from datetime import timedelta
         from src.exchange.client import BinanceClient
 
         start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))

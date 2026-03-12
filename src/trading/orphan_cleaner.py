@@ -14,7 +14,8 @@ Data: 2026-01-14
 
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Any, Set
+from typing import Any, Dict, List, Set
+
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -22,59 +23,59 @@ logger = get_logger(__name__)
 
 class OrphanOrderCleaner:
     """Limpa ordens órfãs (ordens sem posição correspondente)"""
-    
+
     def __init__(self):
         self.last_cleanup = None
         self.cleanup_count = 0
         self.orders_cancelled = 0
-        
+
     async def cleanup_orphan_orders(self, executor=None) -> Dict[str, Any]:
         """
         Limpa ordens órfãs da conta.
-        
+
         Args:
             executor: BinanceFuturesExecutor instance (opcional, cria um novo se não fornecido)
-            
+
         Returns:
             Dict com resultado da limpeza
         """
         print("\n" + "="*60)
         print("[LIMPEZA] Verificando ordens orfas...")
         print("="*60)
-        
+
         try:
             # Criar executor se não fornecido
             if executor is None:
                 from src.exchange.executor import BinanceFuturesExecutor
                 executor = BinanceFuturesExecutor()
-            
+
             # 1. Obter todas as posições abertas
             positions = await executor.get_all_positions()
-            
+
             if isinstance(positions, list) and len(positions) > 0 and "error" in positions[0]:
                 logger.error(f"[LIMPEZA] Erro ao obter posicoes: {positions[0].get('error')}")
                 return {"success": False, "error": positions[0].get("error")}
-            
+
             # Criar set de símbolos com posição aberta
             symbols_with_position: Set[str] = set()
             for pos in positions:
                 if isinstance(pos, dict) and pos.get("symbol"):
                     symbols_with_position.add(pos["symbol"])
-                    
+
             print(f"[LIMPEZA] Posicoes abertas: {len(symbols_with_position)}")
             for sym in symbols_with_position:
                 pos = next((p for p in positions if p.get("symbol") == sym), {})
                 print(f"   - {sym}: {pos.get('side', 'N/A')} {abs(pos.get('position_amt', 0)):.4f}")
-            
+
             # 2. Obter todas as ordens abertas
             all_orders = await executor.get_open_orders()
-            
+
             if isinstance(all_orders, dict) and "error" in all_orders:
                 logger.error(f"[LIMPEZA] Erro ao obter ordens: {all_orders.get('error')}")
                 return {"success": False, "error": all_orders.get("error")}
-            
+
             print(f"[LIMPEZA] Ordens abertas: {len(all_orders)}")
-            
+
             # 3. Identificar ordens órfãs (ordens de símbolos sem posição)
             #    E ordens EXCESSIVAS (mais de 3 ordens para o mesmo símbolo com posição)
             orphan_orders = []
@@ -112,7 +113,7 @@ class OrphanOrderCleaner:
             print(f"[LIMPEZA] Ordens validas: {len(valid_orders)}")
             if excess_symbols:
                 print(f"[LIMPEZA] Simbolos com ordens excessivas: {excess_symbols}")
-            
+
             # 4. Cancelar ordens órfãs
             cancelled_orders = []
             failed_cancellations = []
@@ -180,7 +181,7 @@ class OrphanOrderCleaner:
                         print(f"   [FALLBACK] {sym}: canceladas TODAS as ordens (erro ao filtrar)")
                     except Exception as e2:
                         logger.error(f"[LIMPEZA] Fallback falhou para {sym}: {e2}")
-                        
+
             # 5. Atualizar estatísticas
             self.last_cleanup = datetime.now()
             self.cleanup_count += 1
@@ -206,25 +207,25 @@ class OrphanOrderCleaner:
             if total_cancelled > 0:
                 print(f"[LIMPEZA] CONCLUIDO: {len(cancelled_orders)} orfas + {excess_cancelled} excessivas = {total_cancelled} ordens canceladas!")
             else:
-                print(f"[LIMPEZA] CONCLUIDO: Nenhuma ordem para cancelar.")
+                print("[LIMPEZA] CONCLUIDO: Nenhuma ordem para cancelar.")
             print("-"*60 + "\n")
-            
+
             logger.info(f"[LIMPEZA] Resultado: {len(cancelled_orders)} canceladas, {len(failed_cancellations)} falhas")
-            
+
             return result
-            
+
         except Exception as e:
             logger.exception(f"[LIMPEZA] Erro durante limpeza: {e}")
             return {"success": False, "error": str(e)}
-            
+
     async def cleanup_specific_symbol(self, symbol: str, executor=None) -> Dict[str, Any]:
         """
         Cancela todas as ordens de um símbolo específico.
-        
+
         Args:
             symbol: Símbolo para limpar ordens
             executor: BinanceFuturesExecutor instance
-            
+
         Returns:
             Dict com resultado
         """
@@ -232,18 +233,18 @@ class OrphanOrderCleaner:
             if executor is None:
                 from src.exchange.executor import BinanceFuturesExecutor
                 executor = BinanceFuturesExecutor()
-                
+
             result = await executor.cancel_all_orders(symbol)
-            
+
             if isinstance(result, dict) and "error" in result:
                 return {"success": False, "symbol": symbol, "error": result.get("error")}
-                
+
             logger.info(f"[LIMPEZA] Ordens de {symbol} canceladas")
             return {"success": True, "symbol": symbol, "message": "Ordens canceladas"}
-            
+
         except Exception as e:
             return {"success": False, "symbol": symbol, "error": str(e)}
-            
+
     def get_stats(self) -> Dict[str, Any]:
         """Retorna estatísticas de limpeza"""
         return {
@@ -281,10 +282,10 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("ORPHAN ORDER CLEANER - TESTE")
     print("="*60)
-    
+
     async def test():
         result = await cleanup_orphan_orders()
         print(f"\nResultado: {result}")
-        
+
     asyncio.run(test())
 

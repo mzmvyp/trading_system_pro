@@ -8,11 +8,10 @@ Features:
 - Signal expiration: 72 hours
 """
 
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -424,7 +423,7 @@ class SwingStrategy:
 
         # S/R level support (15%)
         w = self.weights["sr_levels"]
-        strong_levels = [l for l in sr_levels if l.strength >= 3]
+        strong_levels = [lv for lv in sr_levels if lv.strength >= 3]
         if len(strong_levels) >= 2:
             score += w * 0.8
         elif len(strong_levels) >= 1:

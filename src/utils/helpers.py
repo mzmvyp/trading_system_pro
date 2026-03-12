@@ -1,8 +1,9 @@
 """
 Funções auxiliares para estratégias e filtros (portado de smart_trading_system).
 """
+from typing import Any, Dict, List
+
 import numpy as np
-from typing import List, Dict, Any
 
 
 def safe_divide(numerator: float, denominator: float, default: float = 0.0) -> float:

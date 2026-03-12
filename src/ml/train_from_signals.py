@@ -39,8 +39,7 @@ import pickle
 import sys
 import time
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -365,17 +364,17 @@ def _check_outcome(signal_type: str, entry: float, sl: float,
     """Verifica se TP ou SL seria atingido nos candles futuros."""
     for _, candle in future.iterrows():
         h = candle['high']
-        l = candle['low']
+        low = candle['low']
 
         if signal_type == 'BUY':
-            if l <= sl:
+            if low <= sl:
                 return 0
             if h >= tp1:
                 return 1
         else:
             if h >= sl:
                 return 0
-            if l <= tp1:
+            if low <= tp1:
                 return 1
 
     return 0  # Timeout = loss
@@ -563,7 +562,7 @@ def build_dataset_from_bootstrap() -> Optional[pd.DataFrame]:
         df = fetch_klines(symbol, interval="15m", limit=1500)
 
         if df is None or len(df) < 200:
-            print(f" ERRO (dados insuficientes)")
+            print(" ERRO (dados insuficientes)")
             continue
 
         signals = generate_bootstrap_signals(symbol, df, lookforward=48)
@@ -852,7 +851,7 @@ def run_training_pipeline():
     df = None
 
     # Tentar modo SIGNAL primeiro (dados reais > dados sinteticos)
-    signal_files = load_signal_files()
+    load_signal_files()
     evaluations = load_evaluated_signals()
     finalized = [e for e in evaluations
                  if e.get('outcome') in ('SL_HIT', 'TP1_HIT', 'TP2_HIT')]
@@ -863,7 +862,7 @@ def run_training_pipeline():
 
     # Se nao tem sinais suficientes, usar BOOTSTRAP
     if df is None or len(df) < 20:
-        print(f"\n[MODE] BOOTSTRAP MODE - Gerando dados a partir de historico Binance")
+        print("\n[MODE] BOOTSTRAP MODE - Gerando dados a partir de historico Binance")
         df = build_dataset_from_bootstrap()
 
     if df is None or len(df) < 30:

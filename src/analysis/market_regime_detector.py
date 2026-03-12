@@ -10,7 +10,6 @@ Features:
 - Special regimes: SQUEEZE_BREAKOUT_PENDING, LONG_SQUEEZE, SHORT_SQUEEZE
 """
 
-import logging
 from typing import Dict, Optional
 
 import numpy as np

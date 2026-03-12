@@ -10,7 +10,6 @@ Features:
 - Temporal features (hour, day_of_week with sin/cos encoding)
 """
 
-import logging
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np

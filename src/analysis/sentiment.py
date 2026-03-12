@@ -1,11 +1,11 @@
 """
 Market sentiment analysis based on market data
 """
-from typing import Dict, Any
 from datetime import datetime
+from typing import Any, Dict
 
-from src.core.logger import get_logger
 from src.analysis.market_data import get_market_data
+from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -27,41 +27,56 @@ async def analyze_market_sentiment(symbol: str = "BTCUSDT") -> Dict[str, Any]:
 
         # 1. Variação de preço
         if price_change > 8:
-            sentiment_score += 3; confidence += 0.3
+            sentiment_score += 3
+            confidence += 0.3
         elif price_change > 3:
-            sentiment_score += 2; confidence += 0.2
+            sentiment_score += 2
+            confidence += 0.2
         elif price_change > 1:
-            sentiment_score += 1; confidence += 0.1
+            sentiment_score += 1
+            confidence += 0.1
         elif price_change < -8:
-            sentiment_score -= 3; confidence += 0.3
+            sentiment_score -= 3
+            confidence += 0.3
         elif price_change < -3:
-            sentiment_score -= 2; confidence += 0.2
+            sentiment_score -= 2
+            confidence += 0.2
         elif price_change < -1:
-            sentiment_score -= 1; confidence += 0.1
+            sentiment_score -= 1
+            confidence += 0.1
 
         # 2. Volume
         if volume > 2000000:
-            sentiment_score += 2; confidence += 0.2
+            sentiment_score += 2
+            confidence += 0.2
         elif volume > 1000000:
-            sentiment_score += 1; confidence += 0.1
+            sentiment_score += 1
+            confidence += 0.1
         elif volume < 50000:
-            sentiment_score -= 1; confidence += 0.1
+            sentiment_score -= 1
+            confidence += 0.1
 
         # 3. Funding rate
         if funding_rate > 0.02:
-            sentiment_score += 2; confidence += 0.2
+            sentiment_score += 2
+            confidence += 0.2
         elif funding_rate > 0.005:
-            sentiment_score += 1; confidence += 0.1
+            sentiment_score += 1
+            confidence += 0.1
         elif funding_rate < -0.02:
-            sentiment_score -= 2; confidence += 0.2
+            sentiment_score -= 2
+            confidence += 0.2
         elif funding_rate < -0.005:
-            sentiment_score -= 1; confidence += 0.1
+            sentiment_score -= 1
+            confidence += 0.1
 
         # 4. Open Interest
         if open_interest > 100000000:
-            sentiment_score += 1; confidence += 0.1
+            sentiment_score += 1
+            confidence += 0.1
         elif open_interest < 10000000:
-            sentiment_score -= 1; confidence += 0.1
+            sentiment_score -= 1
+            confidence += 0.1
 
         # Cap confidence before final determination
         confidence = min(confidence, 1.0)
