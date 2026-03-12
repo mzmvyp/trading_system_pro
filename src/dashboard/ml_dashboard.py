@@ -130,7 +130,7 @@ def main():
         st.progress(len(buffer) / 50)
         
         if st.button("🔄 Forcar Retreino"):
-            from ml_online_learning import manual_retrain
+            from src.ml.online_learning import manual_retrain
             result = manual_retrain()
             st.write(result)
             
