@@ -127,12 +127,27 @@ def main():
         # Online Learning
         st.subheader("🔄 Online Learning")
         st.metric("Buffer", f"{len(buffer)}/50")
-        st.progress(len(buffer) / 50)
-        
-        if st.button("🔄 Forcar Retreino"):
+        st.progress(min(len(buffer) / 50, 1.0))
+
+        if st.button("📡 Alimentar com Sinais", type="primary", use_container_width=True):
+            with st.spinner("Avaliando sinais e populando buffer..."):
+                from src.ml.online_learning import seed_from_evaluated_signals
+                result = seed_from_evaluated_signals(force_retrain=True)
+            if result.get("success"):
+                st.success(f"✅ {result.get('signals_added', 0)} sinais adicionados! Buffer: {result.get('buffer_total', 0)}")
+                if result.get("retrain_result", {}).get("success"):
+                    rt = result["retrain_result"]
+                    st.success(f"🎯 Modelo retreinado! Accuracy: {rt.get('new_accuracy', 0):.1%} | F1: {rt.get('new_f1', 0):.3f}")
+                st.rerun()
+            else:
+                st.error(f"❌ {result.get('error', 'Erro desconhecido')}")
+
+        if st.button("🔄 Forcar Retreino", use_container_width=True):
             from src.ml.online_learning import manual_retrain
             result = manual_retrain()
             st.write(result)
+            if result.get("success"):
+                st.rerun()
             
     # ================= MAIN CONTENT =================
     
