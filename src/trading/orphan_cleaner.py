@@ -76,37 +76,55 @@ class OrphanOrderCleaner:
             print(f"[LIMPEZA] Ordens abertas: {len(all_orders)}")
             
             # 3. Identificar ordens órfãs (ordens de símbolos sem posição)
+            #    E ordens EXCESSIVAS (mais de 3 ordens para o mesmo símbolo com posição)
             orphan_orders = []
             valid_orders = []
-            
+            orders_by_symbol: Dict[str, List[Dict]] = {}
+
             for order in all_orders:
                 order_symbol = order.get("symbol", "")
                 order_type = order.get("type", "")
                 order_side = order.get("side", "")
                 order_id = order.get("orderId", "")
-                
+
                 if order_symbol not in symbols_with_position:
                     # Órfã: ordem para símbolo sem posição
                     orphan_orders.append(order)
                     print(f"   [ORFA] {order_symbol} {order_type} {order_side} (ID: {order_id})")
                 else:
                     valid_orders.append(order)
-                    
+                    # Agrupar por símbolo para verificar excessos
+                    if order_symbol not in orders_by_symbol:
+                        orders_by_symbol[order_symbol] = []
+                    orders_by_symbol[order_symbol].append(order)
+
+            # 3b. Detectar ordens EXCESSIVAS para símbolos com posição
+            # Máximo esperado: 3 ordens por símbolo (SL + TP1 + TP2)
+            MAX_ORDERS_PER_SYMBOL = 3
+            excess_symbols = []
+            for sym, orders in orders_by_symbol.items():
+                if len(orders) > MAX_ORDERS_PER_SYMBOL:
+                    excess_count = len(orders) - MAX_ORDERS_PER_SYMBOL
+                    excess_symbols.append(sym)
+                    print(f"   [EXCESSO] {sym}: {len(orders)} ordens (max {MAX_ORDERS_PER_SYMBOL}), {excess_count} extras")
+
             print(f"\n[LIMPEZA] Ordens orfas encontradas: {len(orphan_orders)}")
             print(f"[LIMPEZA] Ordens validas: {len(valid_orders)}")
+            if excess_symbols:
+                print(f"[LIMPEZA] Simbolos com ordens excessivas: {excess_symbols}")
             
             # 4. Cancelar ordens órfãs
             cancelled_orders = []
             failed_cancellations = []
-            
+
             if orphan_orders:
                 # Agrupar por símbolo para cancelamento em lote
                 symbols_to_cancel = set(o.get("symbol") for o in orphan_orders)
-                
+
                 for symbol in symbols_to_cancel:
                     try:
                         result = await executor.cancel_all_orders(symbol)
-                        
+
                         if isinstance(result, dict) and "error" in result:
                             failed_cancellations.append({
                                 "symbol": symbol,
@@ -114,23 +132,61 @@ class OrphanOrderCleaner:
                             })
                             print(f"   [ERRO] Falha ao cancelar ordens de {symbol}: {result.get('error')}")
                         else:
-                            # Contar quantas ordens foram canceladas deste símbolo
                             symbol_orders = [o for o in orphan_orders if o.get("symbol") == symbol]
                             cancelled_orders.extend(symbol_orders)
-                            print(f"   [OK] {len(symbol_orders)} ordem(s) cancelada(s) para {symbol}")
-                            
+                            print(f"   [OK] {len(symbol_orders)} ordem(s) orfa(s) cancelada(s) para {symbol}")
+
                     except Exception as e:
                         failed_cancellations.append({
                             "symbol": symbol,
                             "error": str(e)
                         })
                         logger.error(f"[LIMPEZA] Erro ao cancelar ordens de {symbol}: {e}")
+
+            # 4b. Limpar ordens EXCESSIVAS de símbolos com posição
+            # Estratégia: cancelar TODAS e recolocar apenas as mais recentes (SL + TPs)
+            # Isso é mais seguro do que tentar escolher quais manter
+            excess_cancelled = 0
+            for sym in excess_symbols:
+                try:
+                    orders = orders_by_symbol[sym]
+                    total = len(orders)
+
+                    # Ordenar por tempo de criação (mais recente primeiro)
+                    orders.sort(key=lambda o: o.get("time", 0), reverse=True)
+
+                    # Manter as 3 mais recentes, cancelar o resto
+                    orders_to_cancel = orders[MAX_ORDERS_PER_SYMBOL:]
+                    for order in orders_to_cancel:
+                        try:
+                            order_id = order.get("orderId")
+                            cancel_result = await executor._request(
+                                "DELETE", "/fapi/v1/order",
+                                {"symbol": sym, "orderId": order_id},
+                                signed=True
+                            )
+                            if not (isinstance(cancel_result, dict) and "error" in cancel_result):
+                                excess_cancelled += 1
+                        except Exception as e:
+                            logger.warning(f"[LIMPEZA] Erro ao cancelar ordem {order.get('orderId')} de {sym}: {e}")
+
+                    print(f"   [OK] {sym}: canceladas {total - MAX_ORDERS_PER_SYMBOL} ordens excessivas (mantidas {MAX_ORDERS_PER_SYMBOL} mais recentes)")
+
+                except Exception as e:
+                    logger.error(f"[LIMPEZA] Erro ao limpar excesso de {sym}: {e}")
+                    # Fallback: cancelar TODAS e alertar
+                    try:
+                        await executor.cancel_all_orders(sym)
+                        print(f"   [FALLBACK] {sym}: canceladas TODAS as ordens (erro ao filtrar)")
+                    except Exception as e2:
+                        logger.error(f"[LIMPEZA] Fallback falhou para {sym}: {e2}")
                         
             # 5. Atualizar estatísticas
             self.last_cleanup = datetime.now()
             self.cleanup_count += 1
-            self.orders_cancelled += len(cancelled_orders)
-            
+            total_cancelled = len(cancelled_orders) + excess_cancelled
+            self.orders_cancelled += total_cancelled
+
             # 6. Resultado
             result = {
                 "success": True,
@@ -138,17 +194,19 @@ class OrphanOrderCleaner:
                 "positions_found": len(symbols_with_position),
                 "orders_found": len(all_orders),
                 "orphan_orders_found": len(orphan_orders),
-                "orders_cancelled": len(cancelled_orders),
+                "orphan_orders_cancelled": len(cancelled_orders),
+                "excess_orders_cancelled": excess_cancelled,
+                "total_orders_cancelled_now": total_cancelled,
                 "failed_cancellations": len(failed_cancellations),
                 "total_cleanups": self.cleanup_count,
-                "total_orders_cancelled": self.orders_cancelled
+                "total_orders_cancelled_all_time": self.orders_cancelled
             }
-            
+
             print("\n" + "-"*60)
-            if cancelled_orders:
-                print(f"[LIMPEZA] CONCLUIDO: {len(cancelled_orders)} ordens orfas canceladas!")
+            if total_cancelled > 0:
+                print(f"[LIMPEZA] CONCLUIDO: {len(cancelled_orders)} orfas + {excess_cancelled} excessivas = {total_cancelled} ordens canceladas!")
             else:
-                print(f"[LIMPEZA] CONCLUIDO: Nenhuma ordem orfa encontrada.")
+                print(f"[LIMPEZA] CONCLUIDO: Nenhuma ordem para cancelar.")
             print("-"*60 + "\n")
             
             logger.info(f"[LIMPEZA] Resultado: {len(cancelled_orders)} canceladas, {len(failed_cancellations)} falhas")
