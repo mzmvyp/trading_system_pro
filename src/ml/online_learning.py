@@ -555,8 +555,12 @@ def manual_retrain():
 
 def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
     """
-    Popula o buffer do online learning com sinais ja avaliados pelo signal_tracker.
-    Isso permite treinar o ML usando sinais existentes sem precisar de trades paper.
+    Popula o buffer com sinais avaliados, ENRIQUECIDOS com indicadores reais.
+    Usa enrich_signal_with_klines() para buscar klines historicos e calcular
+    indicadores tecnicos reais (RSI, MACD, ADX, etc.) em vez de usar defaults.
+
+    Se nao existe modelo, usa o training pipeline bootstrap (que gera dados
+    de alta qualidade a partir de historico Binance).
 
     Args:
         force_retrain: Se True, dispara retreino apos popular o buffer
@@ -564,6 +568,25 @@ def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
     Returns:
         Dict com resultado da operacao
     """
+    import time
+
+    # Se nao existe modelo, preferir bootstrap pipeline (dados de alta qualidade)
+    models_path = os.path.join(CONFIG["model_dir"], "signal_validators.pkl")
+    if not os.path.exists(models_path) and force_retrain:
+        print("[OL-SEED] Nenhum modelo existente. Usando training pipeline bootstrap...")
+        try:
+            from src.ml.train_from_signals import run_training_pipeline
+            success = run_training_pipeline()
+            if success:
+                return {
+                    "success": True,
+                    "signals_added": 0,
+                    "buffer_total": len(online_learning_manager.buffer),
+                    "retrain_result": {"success": True, "method": "bootstrap_pipeline"},
+                }
+        except Exception as e:
+            print(f"[OL-SEED] Bootstrap pipeline falhou: {e}. Tentando via buffer...")
+
     try:
         from src.trading.signal_tracker import evaluate_all_signals
     except ImportError as e:
@@ -580,6 +603,15 @@ def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
     if not finalized:
         return {"success": False, "error": "Nenhum sinal finalizado (SL/TP hit)"}
 
+    # Tentar enriquecer sinais com indicadores reais via klines
+    try:
+        from src.ml.train_from_signals import enrich_signal_with_klines
+        use_enrichment = True
+        print(f"[OL-SEED] Enriquecendo {len(finalized)} sinais com indicadores reais...")
+    except ImportError:
+        use_enrichment = False
+        print("[OL-SEED] AVISO: enrich_signal_with_klines nao disponivel. Usando dados do sinal.")
+
     # Evitar duplicatas - checar sinais ja no buffer por symbol+timestamp
     existing_keys = {
         (b.get('symbol', ''), b.get('timestamp', '')[:16])
@@ -587,7 +619,8 @@ def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
     }
 
     added = 0
-    for ev in finalized:
+    enriched = 0
+    for i, ev in enumerate(finalized):
         key = (ev.get('symbol', ''), ev.get('timestamp', '')[:16])
         if key in existing_keys:
             continue
@@ -596,17 +629,52 @@ def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
         result_map = {'TP1_HIT': 'TP1', 'TP2_HIT': 'TP2', 'SL_HIT': 'SL'}
         result = result_map.get(outcome, 'SL')
 
-        # Usar add_signal_result para manter formato consistente
+        # Tentar enriquecer com indicadores reais
+        if use_enrichment:
+            try:
+                enriched_data = enrich_signal_with_klines(ev)
+                if enriched_data:
+                    # enrich_signal_with_klines retorna dict com features reais + target
+                    signal_data = {
+                        'symbol': ev.get('symbol', ''),
+                        'signal': ev.get('signal', ''),
+                        'entry_price': ev.get('entry_price', 0),
+                        'stop_loss': ev.get('stop_loss', 0),
+                        'take_profit_1': ev.get('take_profit_1', 0),
+                        'confidence': ev.get('confidence', 5),
+                        # Indicadores REAIS do enriquecimento
+                        'rsi': enriched_data.get('rsi', 50),
+                        'macd_histogram': enriched_data.get('macd_histogram', 0),
+                        'adx': enriched_data.get('adx', 25),
+                        'atr': enriched_data.get('atr', 0),
+                        'bb_position': enriched_data.get('bb_position', 0.5),
+                        'cvd': enriched_data.get('cvd', 0),
+                        'orderbook_imbalance': enriched_data.get('orderbook_imbalance', 0.5),
+                        'bullish_tf_count': enriched_data.get('bullish_tf_count', 5),
+                        'bearish_tf_count': enriched_data.get('bearish_tf_count', 5),
+                        'trend': str(enriched_data.get('trend_encoded', 0)),
+                        'sentiment': str(enriched_data.get('sentiment_encoded', 0)),
+                        'indicators': {},
+                    }
+                    pnl = ev.get('pnl_percent', 0)
+                    online_learning_manager.add_signal_result(signal_data, result, pnl, _batch_mode=True)
+                    added += 1
+                    enriched += 1
+                    if (i + 1) % 10 == 0:
+                        print(f"  [{i+1}/{len(finalized)}] {enriched} enriquecidos...")
+                    time.sleep(0.2)  # Rate limit Binance API
+                    continue
+            except Exception as e:
+                pass  # Fallback para dados do sinal
+
+        # Fallback: usar dados originais do sinal (sem enriquecimento)
         signal_data = {
             'symbol': ev.get('symbol', ''),
             'signal': ev.get('signal', ''),
             'entry_price': ev.get('entry_price', 0),
             'stop_loss': ev.get('stop_loss', 0),
             'take_profit_1': ev.get('take_profit_1', 0),
-            'take_profit_2': ev.get('take_profit_2', 0),
             'confidence': ev.get('confidence', 5),
-            'timestamp': ev.get('timestamp', ''),
-            'source': ev.get('source', ''),
             'indicators': ev.get('indicators', {}),
             'trend': ev.get('trend', 'neutral'),
             'sentiment': ev.get('sentiment', 'neutral'),
@@ -629,7 +697,7 @@ def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
     if added > 0:
         online_learning_manager._save_buffer()
 
-    print(f"[OL-SEED] {added} sinais adicionados ao buffer ({len(online_learning_manager.buffer)} total)")
+    print(f"[OL-SEED] {added} sinais adicionados ({enriched} enriquecidos com indicadores reais)")
 
     retrain_result = None
     if force_retrain and len(online_learning_manager.buffer) >= 10:
@@ -641,6 +709,7 @@ def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
         "signals_evaluated": len(evaluations),
         "signals_finalized": len(finalized),
         "signals_added": added,
+        "signals_enriched": enriched,
         "buffer_total": len(online_learning_manager.buffer),
         "retrain_result": retrain_result,
     }
