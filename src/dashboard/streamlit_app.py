@@ -276,19 +276,102 @@ def get_current_price(symbol):
         st.error(f"Erro ao obter preço de {symbol}: {e}")
         return None
 
+def load_binance_as_portfolio():
+    """Converte posições abertas da Binance para o formato do portfolio."""
+    result = get_binance_positions()
+    if result.get("error"):
+        return {"error": result["error"]}
+    if not result.get("positions"):
+        return {"positions": {}, "trade_history": [], "capital": 0, "source": "BINANCE"}
+
+    positions = {}
+    trade_history = []
+
+    for p in result["positions"]:
+        symbol = p.get("symbol", "")
+        amt = float(p.get("positionAmt", 0))
+        entry_price = float(p.get("entryPrice", 0))
+        mark_price = float(p.get("markPrice", 0))
+        unrealized_pnl = float(p.get("unRealizedProfit", 0))
+        leverage = int(float(p.get("leverage", 1)))
+
+        signal = "BUY" if amt > 0 else "SELL"
+        size = abs(amt)
+
+        pnl_percent = 0.0
+        if entry_price > 0:
+            if signal == "BUY":
+                pnl_percent = ((mark_price - entry_price) / entry_price) * 100
+            else:
+                pnl_percent = ((entry_price - mark_price) / entry_price) * 100
+
+        pos_key = f"{symbol}_BINANCE"
+        pos_data = {
+            "symbol": symbol,
+            "signal": signal,
+            "entry_price": entry_price,
+            "position_size": size,
+            "position_value": size * entry_price,
+            "stop_loss": 0,
+            "take_profit_1": 0,
+            "take_profit_2": 0,
+            "confidence": 0,
+            "source": "BINANCE",
+            "status": "OPEN",
+            "operation_type": "SWING_TRADE",
+            "leverage": leverage,
+            "mark_price": mark_price,
+            "unrealized_pnl": unrealized_pnl,
+            "timestamp": datetime.now().isoformat(),
+        }
+        positions[pos_key] = pos_data
+        trade_data = {**pos_data, "trade_id": pos_key}
+        trade_history.append(trade_data)
+
+    balance_data = get_binance_balance()
+    total_balance = float(balance_data.get("balance", 0)) if not balance_data.get("error") else 0
+
+    return {
+        "positions": positions,
+        "trade_history": trade_history,
+        "capital": total_balance,
+        "source": "BINANCE",
+        "last_update": datetime.now().isoformat(),
+    }
+
+
 # Função para carregar dados do portfólio (CORRIGIDO: cache reduzido para 2s)
 @st.cache_data(ttl=2)
 def load_portfolio_data():
-    """Carrega dados do portfólio (paper: state.json; real: Binance API)"""
-    try:
-        if os.path.exists("portfolio/state.json"):
-            with open("portfolio/state.json", "r", encoding='utf-8') as f:
-                return json.load(f)
-    except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
-    # Modo REAL (testnet/produção): usar dados da Binance para não mostrar dashboard vazio
-    if os.getenv("TRADING_MODE", "").lower() == "real":
-        return load_binance_as_portfolio()
+    """Carrega dados do portfólio com fallback para backup e Binance."""
+    trading_mode = os.getenv("TRADING_MODE", "paper").strip().lower()
+    # Tentar arquivo principal e backup
+    for filepath in ["portfolio/state.json", "portfolio/state.json.bak"]:
+        try:
+            if os.path.exists(filepath):
+                with open(filepath, "r", encoding='utf-8') as f:
+                    data = json.load(f)
+                    if filepath.endswith(".bak"):
+                        st.info("⚠️ Carregado do backup (state.json.bak)")
+                    # Se tem posições, usar direto
+                    if data and data.get("positions"):
+                        return data
+                    # Se state.json sem posições e modo real, tentar Binance
+                    if trading_mode == "real" and data:
+                        binance_data = load_binance_as_portfolio()
+                        if binance_data and binance_data.get("positions"):
+                            return binance_data
+                    return data
+        except (json.JSONDecodeError, Exception) as e:
+            if not filepath.endswith(".bak"):
+                continue
+            st.error(f"Erro ao carregar dados: {e}")
+
+    # Se não existe state.json e modo real, buscar Binance direto
+    if trading_mode == "real":
+        binance_data = load_binance_as_portfolio()
+        if binance_data:
+            return binance_data
     return None
 
 
@@ -1646,7 +1729,19 @@ if portfolio_data:
             st.caption(f"Total: {len(orders)} ordens abertas")
 
 else:
-    st.warning("⚠️ Nenhum dado de portfólio encontrado. Execute alguns trades primeiro!")
+    trading_mode = os.getenv("TRADING_MODE", "paper").strip().lower()
+    if trading_mode == "real":
+        # Tentar dar mais detalhes sobre o erro
+        binance_result = load_binance_as_portfolio()
+        if binance_result and binance_result.get("error"):
+            st.error(f"⚠️ Erro ao consultar Binance API: {binance_result['error']}\n\nVerifique as chaves de API e a conexão de rede.")
+        elif binance_result and not binance_result.get("positions"):
+            testnet_label = "Testnet" if os.getenv("BINANCE_TESTNET", "false").strip().lower() == "true" else "Mainnet"
+            st.info(f"📡 Modo Real ({testnet_label}) - Nenhuma posição aberta na Binance.\n\nUse a aba 'Binance Futures' para ver detalhes da conta.")
+        else:
+            st.warning("⚠️ Nenhum dado de portfólio encontrado. Verifique a configuração do TRADING_MODE e chaves de API.")
+    else:
+        st.warning("⚠️ Nenhum dado de portfólio encontrado. Execute o bot primeiro:\n\n`python main.py --mode monitor --paper`")
 
 # Footer
 st.markdown("---")

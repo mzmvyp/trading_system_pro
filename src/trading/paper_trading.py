@@ -125,59 +125,44 @@ class RealPaperTradingSystem:
         with self._save_lock:
             max_retries = 3
             retry_delay = 0.1  # 100ms
-            
+
             for attempt in range(max_retries):
                 try:
-                    # MODIFICADO: Remover current_balance (sistema em modo P&L)
                     state = {
                         "positions": self.positions,
                         "trade_history": self.trade_history,
                         "last_update": datetime.now().isoformat()
                     }
 
-                    # Atomic write to prevent corruption
                     state_file = Path("portfolio/state.json")
-                    
+                    backup_file = Path("portfolio/state.json.bak")
+
                     # Criar arquivo temporário no mesmo diretório com nome único
                     import time
                     temp_path = state_file.parent / f".state_{os.getpid()}_{int(time.time() * 1000000)}.tmp"
-                    
+
                     try:
                         # Escrever para arquivo temporário
                         with open(temp_path, 'w', encoding='utf-8') as f:
                             json.dump(state, f, indent=2)
                             f.flush()
-                            os.fsync(f.fileno())  # Forçar escrita no disco
+                            os.fsync(f.fileno())
 
-                        # Tentar substituir o arquivo original
-                        # No Windows, pode falhar se o arquivo estiver aberto (ex: Streamlit)
-                        try:
-                            os.replace(temp_path, state_file)
-                        except (PermissionError, OSError) as e:
-                            # Se falhar por permissão/arquivo em uso, tentar remover o arquivo antigo primeiro
-                            if state_file.exists():
-                                try:
-                                    # Tentar remover arquivo antigo
-                                    os.remove(state_file)
-                                    os.replace(temp_path, state_file)
-                                except Exception as e2:
-                                    logger.warning(f"Tentativa {attempt + 1}: Erro ao substituir state.json: {e2}")
-                                    if temp_path.exists():
-                                        try:
-                                            temp_path.unlink()
-                                        except:
-                                            pass
-                                    if attempt < max_retries - 1:
-                                        time.sleep(retry_delay * (attempt + 1))
-                                        continue
-                                    raise
-                            else:
-                                # Arquivo não existe, apenas renomear
-                                os.replace(temp_path, state_file)
-                        
+                        # Manter backup antes de substituir
+                        if state_file.exists():
+                            try:
+                                import shutil
+                                shutil.copy2(state_file, backup_file)
+                            except Exception:
+                                pass  # Backup é best-effort
+
+                        # Substituição atômica - os.replace é atômico no Linux
+                        # NUNCA deletar o original antes de ter o temp pronto
+                        os.replace(temp_path, state_file)
+
                         logger.debug(f"Estado salvo atomicamente: {len(self.positions)} posições (modo P&L)")
                         return  # Sucesso, sair da função
-                        
+
                     except Exception as e:
                         # Cleanup temp file on error
                         if temp_path.exists():
@@ -185,14 +170,23 @@ class RealPaperTradingSystem:
                                 temp_path.unlink()
                             except:
                                 pass
-                        
+
+                        # Se state.json sumiu mas temos backup, restaurar
+                        if not state_file.exists() and backup_file.exists():
+                            try:
+                                import shutil
+                                shutil.copy2(backup_file, state_file)
+                                logger.warning(f"state.json restaurado do backup após erro: {e}")
+                            except Exception:
+                                pass
+
                         if attempt < max_retries - 1:
                             logger.warning(f"Tentativa {attempt + 1}/{max_retries} falhou ao salvar estado: {e}. Tentando novamente...")
                             time.sleep(retry_delay * (attempt + 1))
                             continue
                         else:
                             raise
-                            
+
                 except IOError as e:
                     if attempt < max_retries - 1:
                         logger.warning(f"Erro de I/O ao salvar estado (tentativa {attempt + 1}): {e}. Tentando novamente...")
