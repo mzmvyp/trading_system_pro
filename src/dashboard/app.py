@@ -344,22 +344,28 @@ def load_binance_as_portfolio():
 @st.cache_data(ttl=2)
 def load_portfolio_data():
     """Carrega dados do portfólio. Em modo real, usa dados da Binance como fallback."""
-    try:
-        if os.path.exists("portfolio/state.json"):
-            with open("portfolio/state.json", "r", encoding='utf-8') as f:
-                data = json.load(f)
-                # Se tem posições no state.json, usar ele
-                if data and data.get("positions"):
+    # Tentar arquivo principal e backup
+    for filepath in ["portfolio/state.json", "portfolio/state.json.bak"]:
+        try:
+            if os.path.exists(filepath):
+                with open(filepath, "r", encoding='utf-8') as f:
+                    data = json.load(f)
+                    if filepath.endswith(".bak"):
+                        st.info("⚠️ Carregado do backup (state.json.bak)")
+                    # Se tem posições no state.json, usar ele
+                    if data and data.get("positions"):
+                        return data
+                    # Se state.json existe mas sem posições, em modo real buscar Binance
+                    trading_mode = os.getenv("TRADING_MODE", "paper").lower()
+                    if trading_mode == "real" and data:
+                        binance_data = load_binance_as_portfolio()
+                        if binance_data and binance_data.get("positions"):
+                            return binance_data
                     return data
-                # Se state.json existe mas sem posições, em modo real buscar Binance
-                trading_mode = os.getenv("TRADING_MODE", "paper").lower()
-                if trading_mode == "real" and data:
-                    binance_data = load_binance_as_portfolio()
-                    if binance_data and binance_data.get("positions"):
-                        return binance_data
-                return data
-    except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
+        except (json.JSONDecodeError, Exception) as e:
+            if not filepath.endswith(".bak"):
+                continue  # Tentar backup
+            st.error(f"Erro ao carregar dados: {e}")
 
     # Se não existe state.json e estamos em modo real, buscar Binance
     trading_mode = os.getenv("TRADING_MODE", "paper").lower()

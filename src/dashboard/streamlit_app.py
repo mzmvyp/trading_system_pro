@@ -279,13 +279,21 @@ def get_current_price(symbol):
 # Função para carregar dados do portfólio (CORRIGIDO: cache reduzido para 2s)
 @st.cache_data(ttl=2)
 def load_portfolio_data():
-    """Carrega dados do portfólio"""
-    try:
-        if os.path.exists("portfolio/state.json"):
-            with open("portfolio/state.json", "r", encoding='utf-8') as f:
-                return json.load(f)
-    except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
+    """Carrega dados do portfólio com fallback para backup"""
+    # Tentar arquivo principal
+    for filepath in ["portfolio/state.json", "portfolio/state.json.bak"]:
+        try:
+            if os.path.exists(filepath):
+                with open(filepath, "r", encoding='utf-8') as f:
+                    data = json.load(f)
+                    if filepath.endswith(".bak"):
+                        st.info("⚠️ Carregado do backup (state.json.bak)")
+                    return data
+        except (json.JSONDecodeError, Exception) as e:
+            if not filepath.endswith(".bak"):
+                # Arquivo principal corrompido, tentar backup
+                continue
+            st.error(f"Erro ao carregar dados: {e}")
     return None
 
 # Função para carregar histórico de trades
