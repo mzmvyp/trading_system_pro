@@ -79,6 +79,51 @@ async def log_monitor_summary(settings, interval_sec: int):
     print("-"*60)
 
 
+def _register_trade_result(symbol: str, add_trade_result_fn):
+    """Registra resultado de trade fechado para online learning."""
+    try:
+        # Buscar ultimo sinal salvo para este simbolo
+        import glob as glob_mod
+        signal_files = glob_mod.glob(f"signals/agno_*_{symbol}_*.json")
+        if not signal_files:
+            return
+
+        # Pegar o mais recente
+        signal_files.sort(key=os.path.getmtime, reverse=True)
+        with open(signal_files[0], 'r', encoding='utf-8') as f:
+            signal = json.load(f)
+
+        if signal.get('signal') not in ('BUY', 'SELL'):
+            return
+
+        # Buscar resultado do trade no portfolio
+        result = 'TIMEOUT'
+        return_pct = 0.0
+
+        if os.path.exists("portfolio/state.json"):
+            with open("portfolio/state.json", 'r', encoding='utf-8') as f:
+                state = json.load(f)
+                positions = state.get("positions", {})
+                trade_history = state.get("trade_history", [])
+
+                # Procurar no historico de trades
+                for trade in reversed(trade_history):
+                    if trade.get("symbol") == symbol:
+                        pnl = trade.get("pnl", trade.get("pnl_pct", 0))
+                        return_pct = float(pnl) if pnl else 0.0
+                        if return_pct > 0:
+                            result = 'TP1'
+                        else:
+                            result = 'SL'
+                        break
+
+        add_trade_result_fn(signal, result, return_pct)
+        print(f"[ML] Resultado registrado para online learning: {symbol} -> {result} ({return_pct:+.2f}%)")
+
+    except Exception as e:
+        logger.warning(f"Erro ao registrar trade result para {symbol}: {e}")
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description='Sistema de Trading de Criptomoedas com AGNO Agent'
@@ -90,9 +135,9 @@ async def main():
     )
     parser.add_argument(
         '--mode',
-        choices=['single', 'monitor', 'top5', 'top10', 'cleanup'],
+        choices=['single', 'monitor', 'top5', 'top10', 'cleanup', 'train_ml'],
         default='single',
-        help='Modo de operação (cleanup = limpar ordens órfãs imediatamente)'
+        help='Modo de operação (cleanup = limpar ordens órfãs, train_ml = treinar modelo ML)'
     )
     parser.add_argument(
         '--interval',
@@ -186,6 +231,15 @@ async def main():
                                     print(f"[LIMPEZA] Ordens de {sym} canceladas (posicao fechada)")
                             except Exception as e:
                                 logger.warning(f"Erro ao limpar ordens de posicoes fechadas: {e}")
+
+                        # Online Learning: registrar resultado do trade fechado
+                        if settings.ml_online_learning_enabled:
+                            try:
+                                from src.ml.online_learning import add_trade_result
+                                for sym in closed_positions:
+                                    _register_trade_result(sym, add_trade_result)
+                            except Exception as e:
+                                logger.warning(f"Erro ao registrar resultado para online learning: {e}")
 
                     # Limpeza periódica de ordens órfãs (a cada 2 ciclos ~30 min com interval=900s)
                     _cleanup_cycle += 1
@@ -300,6 +354,17 @@ async def main():
             from src.trading.orphan_cleaner import cleanup_orphan_orders
             result = await cleanup_orphan_orders()
             print(f"\nResultado: {result}")
+
+        elif args.mode == 'train_ml':
+            # Treinamento do modelo ML
+            print("\n" + "=" * 60)
+            print("[ML] Iniciando treinamento do modelo ML")
+            print("=" * 60)
+            from src.ml.train_from_signals import run_training_pipeline
+            success = run_training_pipeline()
+            if not success:
+                print("\n[ERRO] Falha no treinamento ML")
+                sys.exit(1)
 
     except KeyboardInterrupt:
         logger.info("Sistema interrompido pelo usuário")
