@@ -89,7 +89,7 @@ class Settings(BaseSettings):
         "AVAXUSDT",  # Avalanche
         "DOTUSDT",   # Polkadot
         "LINKUSDT",  # Chainlink
-        # "PAXGUSDT" # PAX Gold - REMOVIDO: não existe em Binance Futures, causava travamento
+        "PAXGUSDT",  # PAX Gold
     ]
 
     # ========================================
