@@ -241,10 +241,9 @@ async def main():
                             except Exception as e:
                                 logger.warning(f"Erro ao registrar resultado para online learning: {e}")
 
-                    # Limpeza periódica de ordens órfãs (a cada 2 ciclos ~30 min com interval=900s)
+                    # Limpeza periódica de ordens órfãs (CADA ciclo - SL pode fechar posição a qualquer momento)
                     _cleanup_cycle += 1
-                    if settings.trading_mode == "real" and _cleanup_cycle >= 2:
-                        _cleanup_cycle = 0
+                    if settings.trading_mode == "real":
                         try:
                             from src.trading.orphan_cleaner import cleanup_orphan_orders
                             await cleanup_orphan_orders()

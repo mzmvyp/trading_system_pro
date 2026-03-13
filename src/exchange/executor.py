@@ -485,9 +485,41 @@ class BinanceFuturesExecutor:
         return result
 
     async def cancel_all_orders(self, symbol: str) -> Dict[str, Any]:
-        """Cancela todas as ordens abertas de um símbolo"""
-        params = {"symbol": symbol}
-        return await self._request("DELETE", "/fapi/v1/allOpenOrders", params, signed=True)
+        """Cancela todas as ordens abertas de um símbolo (normais + algo)"""
+        # 1. Cancelar ordens normais
+        result = await self._request("DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol}, signed=True)
+
+        # 2. Cancelar ordens ALGO (SL/TP colocados via Algo Order API)
+        try:
+            algo_orders = await self._request("GET", "/fapi/v1/algoOrder/openOrders", {"symbol": symbol}, signed=True)
+            if isinstance(algo_orders, dict) and algo_orders.get("rows"):
+                algo_orders_list = algo_orders["rows"]
+            elif isinstance(algo_orders, list):
+                algo_orders_list = algo_orders
+            else:
+                algo_orders_list = []
+
+            algo_cancelled = 0
+            for algo_order in algo_orders_list:
+                algo_id = algo_order.get("algoId")
+                if algo_id:
+                    try:
+                        cancel_result = await self._request(
+                            "DELETE", "/fapi/v1/algoOrder",
+                            {"algoId": algo_id}, signed=True
+                        )
+                        if not (isinstance(cancel_result, dict) and "error" in cancel_result):
+                            algo_cancelled += 1
+                    except Exception as e:
+                        logger.warning(f"[CANCEL] Erro ao cancelar algo order {algo_id} de {symbol}: {e}")
+
+            if algo_cancelled > 0:
+                logger.info(f"[CANCEL] {symbol}: {algo_cancelled} algo orders (SL/TP) canceladas")
+
+        except Exception as e:
+            logger.warning(f"[CANCEL] Erro ao buscar/cancelar algo orders de {symbol}: {e}")
+
+        return result
 
     async def close_position(self, symbol: str) -> Dict[str, Any]:
         """
@@ -592,12 +624,17 @@ class BinanceFuturesExecutor:
             if not symbol_info or "error" in symbol_info:
                 return {"success": False, "error": f"Erro ao obter info do simbolo: {symbol_info}"}
 
-            # 4. Calcular risco baseado no CAPITAL TOTAL
-            # CORRIGIDO: O risco é calculado sobre o CAPITAL TOTAL, não sobre o disponível
-            # Isso permite abrir até 20 posições simultâneas com 5% de risco cada
-            capital_total = total_balance
-            risk_percent = settings.risk_percent_per_trade / 100.0  # Converter para decimal
-            risk_amount = capital_total * risk_percent  # $ que estamos dispostos a perder
+            # 4. Calcular risco baseado no SALDO DISPONIVEL
+            # Usa o disponivel para evitar "Margin insufficient" da Binance
+            # Se tem pouca margem livre, reduz o risco proporcionalmente
+            capital_base = available  # Usar saldo DISPONIVEL, nao o total
+            risk_percent = settings.risk_percent_per_trade / 100.0
+            risk_amount = capital_base * risk_percent
+
+            # Garantir risco minimo viavel (evitar posicoes microscopicas)
+            if risk_amount < 1.0:
+                logger.warning(f"[RISCO] Risco calculado muito baixo: ${risk_amount:.2f} (disponivel: ${available:.2f})")
+                return {"success": False, "error": f"Saldo disponivel muito baixo: ${available:.2f}"}
 
             if position_size is None:
                 if stop_loss and stop_loss != entry_price:
@@ -615,7 +652,7 @@ class BinanceFuturesExecutor:
                     # Não é o valor_posicao / alavancagem, é o próprio risk_amount + buffer
                     margin_required = risk_amount * 1.2  # 20% de buffer para taxas e slippage
 
-                    logger.info(f"[RISCO] Capital Total: ${capital_total:.2f} | Risco: {settings.risk_percent_per_trade}% = ${risk_amount:.2f}")
+                    logger.info(f"[RISCO] Disponivel: ${available:.2f} | Total: ${total_balance:.2f} | Risco: {settings.risk_percent_per_trade}% = ${risk_amount:.2f}")
                     logger.info(f"[POSICAO] Entry: ${entry_price:.4f} | Stop: ${stop_loss:.4f} | Distancia: ${stop_distance:.4f}")
                     logger.info(f"[POSICAO] Tamanho: {position_size:.4f} unidades | Valor: ${position_value_calc:.2f}")
                     logger.info(f"[MARGEM] Margem isolada necessaria: ${margin_required:.2f} (risco + buffer)")
@@ -796,12 +833,46 @@ class BinanceFuturesExecutor:
             logger.error(f"Erro ao salvar log de ordem: {e}")
 
     async def get_open_orders(self, symbol: str = None) -> List[Dict[str, Any]]:
-        """Obtém ordens abertas"""
+        """Obtém ordens abertas (normais + algo)"""
         params = {}
         if symbol:
             params["symbol"] = symbol
 
-        return await self._request("GET", "/fapi/v1/openOrders", params, signed=True)
+        # 1. Ordens normais
+        normal_orders = await self._request("GET", "/fapi/v1/openOrders", params, signed=True)
+        if isinstance(normal_orders, dict) and "error" in normal_orders:
+            normal_orders = []
+
+        # 2. Ordens algo (SL/TP colocados via Algo Order API)
+        try:
+            algo_params = {}
+            if symbol:
+                algo_params["symbol"] = symbol
+            algo_result = await self._request("GET", "/fapi/v1/algoOrder/openOrders", algo_params, signed=True)
+
+            algo_orders = []
+            if isinstance(algo_result, dict) and algo_result.get("rows"):
+                algo_orders = algo_result["rows"]
+            elif isinstance(algo_result, list):
+                algo_orders = algo_result
+
+            # Normalizar algo orders para formato compatível com ordens normais
+            for algo in algo_orders:
+                normal_orders.append({
+                    "symbol": algo.get("symbol", ""),
+                    "orderId": algo.get("algoId", ""),
+                    "algoId": algo.get("algoId", ""),
+                    "type": algo.get("type", algo.get("algoType", "ALGO")),
+                    "side": algo.get("side", ""),
+                    "quantity": algo.get("quantity", 0),
+                    "triggerPrice": algo.get("triggerPrice", 0),
+                    "time": algo.get("bookTime", 0),
+                    "is_algo": True
+                })
+        except Exception as e:
+            logger.warning(f"[ORDERS] Erro ao buscar algo orders: {e}")
+
+        return normal_orders
 
     async def get_all_positions(self) -> List[Dict[str, Any]]:
         """Obtém todas as posições abertas"""
