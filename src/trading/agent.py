@@ -554,23 +554,20 @@ Regras: confidence>=7 para executar. Se <7, use NO_SIGNAL. Seja decisivo."""
                 ml_prob = ml_validation.get('probability', 0)
                 ml_pred = ml_validation.get('prediction', 0)
 
-                # SEMPRE mostrar resultado da validação ML
-                print(f"[ML] Validacao: prob={ml_prob:.1%}, predicao={'SUCESSO' if ml_pred == 1 else 'FALHA'}")
-                logger.info(f"[ML] Validacao ML: prob={ml_prob:.1%}, predicao={ml_pred}")
+                # ML em modo OBSERVADOR: registra predicao mas NAO bloqueia sinais
+                ml_opinion = 'SUCESSO' if ml_pred == 1 else 'FALHA'
+                if ml_validation.get("has_confluence"):
+                    print(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML concorda (prob: {ml_prob:.1%})")
+                    logger.info(f"[ML OBSERVADOR] Confluencia: prob={ml_prob:.1%}, predicao={ml_opinion}")
+                else:
+                    print(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML discorda (prob: {ml_prob:.1%}, predicao={ml_opinion})")
+                    logger.info(f"[ML OBSERVADOR] Sem confluencia: prob={ml_prob:.1%}, predicao={ml_opinion}")
 
                 if ml_validation.get("skip_signal"):
-                    logger.warning(f"[ML] Sinal REJEITADO pelo modelo ML: prob={ml_prob:.1%}, predicao={'SUCESSO' if ml_pred == 1 else 'FALHA'}")
-                    print(f"[ML] ❌ Sinal {agno_signal.get('signal')} REJEITADO - Modelo ML: FALHA (prob: {ml_prob:.1%})")
-                    logger.info("[ML] Sinal bloqueado - Sem confluencia entre DeepSeek e ML")
+                    # Isso so acontece se ml_required=True (configuracao explicita)
+                    logger.warning(f"[ML] Sinal BLOQUEADO (ml_required=True): prob={ml_prob:.1%}")
+                    print(f"[ML] Sinal {agno_signal.get('signal')} BLOQUEADO - ml_required=True")
                 else:
-                    if ml_validation.get("has_confluence"):
-                        logger.info(f"[ML] Confluencia confirmada! Prob sucesso: {ml_prob:.1%}")
-                        print(f"[ML] ✅ CONFLUENCIA! DeepSeek + ML concordam (prob: {ml_prob:.1%})")
-                    else:
-                        # Isso não deveria acontecer se skip_signal está correto, mas mantém para segurança
-                        logger.warning(f"[ML] ATENCAO: Executando sem confluencia (prob: {ml_prob:.1%})")
-                        print(f"[ML] ⚠️ Sem confluencia (prob: {ml_prob:.1%}) - Verifique configuracao ML")
-
                     # Obter tendência dinâmica para filtro
                     try:
                         trend_data = await get_trend(symbol)
