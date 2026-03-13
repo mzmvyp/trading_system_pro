@@ -319,10 +319,19 @@ class SimpleSignalValidator:
         # Preparar features
         X = np.array([[features.get(col, 0) for col in self.feature_columns]])
 
-        # Tratar NaN/Inf
+        # Tratar NaN/Inf nos inputs
         X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
-        X_scaled = self.scaler.transform(X)
+        # Aplicar scaler (pode retornar NaN se scaler mal treinado)
+        try:
+            X_scaled = self.scaler.transform(X)
+            # Tratar NaN/Inf no output do scaler (scaler quebrado ou dados extremos)
+            if np.any(np.isnan(X_scaled)) or np.any(np.isinf(X_scaled)):
+                logger.warning("[ML] Scaler retornou NaN/Inf - usando features sem escala")
+                X_scaled = X  # Fallback: usar features brutas
+        except Exception as e:
+            logger.warning(f"[ML] Erro no scaler.transform: {e} - usando features sem escala")
+            X_scaled = X
 
         # Predicao
         pred = model.predict(X_scaled)[0]
@@ -331,6 +340,13 @@ class SimpleSignalValidator:
             prob = float(model.predict_proba(X_scaled)[0][1])
         else:
             prob = float(pred)
+
+        # Proteger contra NaN na saída final
+        if np.isnan(prob):
+            logger.warning("[ML] predict_proba retornou NaN - usando 0.5 (neutro)")
+            prob = 0.5
+        if np.isnan(pred):
+            pred = 0
 
         return {
             'probability_success': prob,

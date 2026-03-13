@@ -81,6 +81,12 @@ def evaluate_signal(signal: Dict) -> Dict:
     confidence = signal.get("confidence", 0)
     timestamp_str = signal.get("timestamp", "")
 
+    # Rastreabilidade: sinal foi efetivamente executado?
+    executed = signal.get("executed", False)
+    execution_mode = signal.get("execution_mode", None)
+    ml_probability = signal.get("ml_probability", None)
+    ml_prediction = signal.get("ml_prediction", None)
+
     result = {
         "symbol": symbol,
         "signal": signal_type,
@@ -98,6 +104,10 @@ def evaluate_signal(signal: Dict) -> Dict:
         "duration_hours": 0.0,
         "max_favorable": 0.0,  # Máximo a favor (MFE)
         "max_adverse": 0.0,  # Máximo contra (MAE)
+        "executed": executed,
+        "execution_mode": execution_mode,
+        "ml_probability": ml_probability,
+        "ml_prediction": ml_prediction,
     }
 
     if signal_type not in ("BUY", "SELL") or not entry_price or not symbol:
@@ -312,19 +322,15 @@ def evaluate_all_signals(signals_dir: str = "signals", cache_file: str = "signal
     return results
 
 
-def get_performance_summary(evaluations: List[Dict]) -> Dict:
-    """Calcula métricas agregadas de performance"""
-    if not evaluations:
-        return {}
-
-    # Filtrar apenas sinais finalizados
-    closed = [e for e in evaluations if e["outcome"] in ("SL_HIT", "TP1_HIT", "TP2_HIT", "EXPIRED")]
-    active = [e for e in evaluations if e["outcome"] == "ACTIVE"]
+def _calc_metrics(evals: List[Dict]) -> Dict:
+    """Calcula métricas para uma lista de avaliações"""
+    closed = [e for e in evals if e["outcome"] in ("SL_HIT", "TP1_HIT", "TP2_HIT", "EXPIRED")]
+    active = [e for e in evals if e["outcome"] == "ACTIVE"]
     total = len(closed)
 
     if total == 0:
         return {
-            "total_signals": len(evaluations),
+            "total_signals": len(evals),
             "closed": 0,
             "active": len(active),
             "win_rate": 0,
@@ -344,25 +350,21 @@ def get_performance_summary(evaluations: List[Dict]) -> Dict:
     tp2_hits = len([e for e in closed if e["outcome"] == "TP2_HIT"])
     expired = len([e for e in closed if e["outcome"] == "EXPIRED"])
 
-    # Profit factor
     gross_profit = sum(e["pnl_percent"] for e in wins) if wins else 0
     gross_loss = abs(sum(e["pnl_percent"] for e in losses)) if losses else 1
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
 
-    # Expectancy (esperança matemática)
     win_rate = len(wins) / total * 100 if total else 0
     expectancy = (win_rate / 100 * avg_win) + ((1 - win_rate / 100) * avg_loss)
 
-    # Duração média
     durations = [e["duration_hours"] for e in closed if e["duration_hours"] > 0]
     avg_duration = sum(durations) / len(durations) if durations else 0
 
-    # MFE/MAE médios
     mfe_list = [e["max_favorable"] for e in closed]
     mae_list = [e["max_adverse"] for e in closed]
 
     return {
-        "total_signals": len(evaluations),
+        "total_signals": len(evals),
         "closed": total,
         "active": len(active),
         "wins": len(wins),
@@ -384,3 +386,36 @@ def get_performance_summary(evaluations: List[Dict]) -> Dict:
         "avg_mfe": sum(mfe_list) / len(mfe_list) if mfe_list else 0,
         "avg_mae": sum(mae_list) / len(mae_list) if mae_list else 0,
     }
+
+
+def get_performance_summary(evaluations: List[Dict]) -> Dict:
+    """
+    Calcula métricas agregadas de performance.
+    Separa sinais EXECUTADOS (real/paper) de APENAS GERADOS para comparação.
+    """
+    if not evaluations:
+        return {}
+
+    # Métricas globais (todos os sinais)
+    all_metrics = _calc_metrics(evaluations)
+
+    # Separar por executados vs apenas gerados
+    executed = [e for e in evaluations if e.get("executed")]
+    not_executed = [e for e in evaluations if not e.get("executed")]
+
+    all_metrics["executed_count"] = len(executed)
+    all_metrics["not_executed_count"] = len(not_executed)
+
+    # Métricas separadas para sinais EXECUTADOS
+    if executed:
+        all_metrics["executed_metrics"] = _calc_metrics(executed)
+    else:
+        all_metrics["executed_metrics"] = {}
+
+    # Métricas separadas para sinais NÃO executados (para comparar)
+    if not_executed:
+        all_metrics["not_executed_metrics"] = _calc_metrics(not_executed)
+    else:
+        all_metrics["not_executed_metrics"] = {}
+
+    return all_metrics

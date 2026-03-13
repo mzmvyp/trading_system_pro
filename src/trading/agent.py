@@ -445,8 +445,10 @@ Regras: confidence>=7 para executar. Se <7, use NO_SIGNAL. Seja decisivo."""
                             position_size = validation.get("recommended_position_size", validation.get("position_size"))
                             execution_result = execute_paper_trade(deepseek_signal, position_size)
                             if execution_result.get("success"):
+                                self._mark_signal_executed(deepseek_signal, "paper", True, execution_result.get("message", ""))
                                 logger.info(f"[DEEPSEEK] Trade executado: {execution_result.get('message', '')}")
                             else:
+                                self._mark_signal_executed(deepseek_signal, "paper", False, execution_result.get("error", ""))
                                 logger.warning(f"[DEEPSEEK] Falha: {execution_result.get('error', '')}")
                         else:
                             logger.info(f"[DEEPSEEK] Não executado: {validation.get('reason', '')}")
@@ -554,6 +556,19 @@ Regras: confidence>=7 para executar. Se <7, use NO_SIGNAL. Seja decisivo."""
                 ml_prob = ml_validation.get('probability', 0)
                 ml_pred = ml_validation.get('prediction', 0)
 
+                # Salvar probabilidade ML no arquivo do sinal
+                filepath = agno_signal.get("_signal_file")
+                if filepath and os.path.exists(filepath):
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            saved = json.load(f)
+                        saved["ml_probability"] = ml_prob
+                        saved["ml_prediction"] = ml_pred
+                        with open(filepath, "w", encoding="utf-8") as f:
+                            json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
+                    except Exception:
+                        pass
+
                 # ML em modo OBSERVADOR: registra predicao mas NAO bloqueia sinais
                 ml_opinion = 'SUCESSO' if ml_pred == 1 else 'FALHA'
                 if ml_validation.get("has_confluence"):
@@ -588,15 +603,19 @@ Regras: confidence>=7 para executar. Se <7, use NO_SIGNAL. Seja decisivo."""
                             executor = BinanceFuturesExecutor()
                             execution_result = await executor.execute_signal(agno_signal, position_size=None)
                             if execution_result.get("success"):
+                                self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
                                 logger.info(f"[AGNO REAL] Trade REAL executado com sucesso: {execution_result.get('message', '')}")
                             else:
+                                self._mark_signal_executed(agno_signal, "real", False, execution_result.get("error", ""))
                                 logger.warning(f"[AGNO REAL] Falha ao executar trade REAL: {execution_result.get('error', '')}")
                         else:
                             # MODO PAPER: Simulação
                             execution_result = execute_paper_trade(agno_signal, position_size)
                             if execution_result.get("success"):
+                                self._mark_signal_executed(agno_signal, "paper", True, execution_result.get("message", ""))
                                 logger.info(f"[AGNO PAPER] Trade PAPER executado com sucesso: {execution_result.get('message', '')}")
                             else:
+                                self._mark_signal_executed(agno_signal, "paper", False, execution_result.get("error", ""))
                                 logger.warning(f"[AGNO PAPER] Falha ao executar trade PAPER: {execution_result.get('error', '')}")
                     else:
                         logger.info(f"[AGNO] Sinal nao executado: {validation.get('reason', '')}")
@@ -1178,13 +1197,58 @@ Regras: confidence>=7 para executar. Se <7, use NO_SIGNAL. Seja decisivo."""
         # Salvar no cache
         AgnoTradingAgent._last_signal_cache[cache_key] = signal
 
+        # Campos de rastreabilidade (sinal começa como NÃO executado)
+        signal["executed"] = False
+        signal["execution_mode"] = None
+        signal["execution_result"] = None
+        signal["ml_probability"] = signal.get("ml_probability", None)
+
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"signals/agno_{symbol}_{timestamp}.json"
+        signal["_signal_file"] = filename
 
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(signal, f, indent=2, ensure_ascii=False, default=str)
 
         print(f"[SALVO] Sinal salvo: {filename}")
+
+    def _mark_signal_executed(self, signal: Dict[str, Any], mode: str, success: bool, details: str = ""):
+        """
+        Atualiza o arquivo do sinal marcando como executado.
+
+        Args:
+            signal: O sinal original (deve ter _signal_file)
+            mode: 'real' ou 'paper'
+            success: Se a execução foi bem-sucedida
+            details: Mensagem adicional (erro ou confirmação)
+        """
+        filepath = signal.get("_signal_file")
+        if not filepath or not os.path.exists(filepath):
+            # Tentar encontrar pelo padrão
+            symbol = signal.get("symbol", "")
+            ts = signal.get("timestamp", "")
+            if not filepath:
+                logger.warning(f"[TRACK] Sinal sem _signal_file: {symbol}")
+                return
+
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+
+            saved["executed"] = success
+            saved["execution_mode"] = mode
+            saved["execution_result"] = "SUCCESS" if success else f"FAILED: {details}"
+            saved["execution_time"] = datetime.now().isoformat()
+
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
+
+            status = "EXECUTADO" if success else "FALHOU"
+            logger.info(f"[TRACK] {signal.get('symbol')} {signal.get('signal')} -> {status} ({mode})")
+            print(f"[TRACK] Sinal {status}: {filepath}")
+
+        except Exception as e:
+            logger.warning(f"[TRACK] Erro ao atualizar sinal: {e}")
 
     def _save_deepseek_response(self, symbol: str, prompt: str, response: Any, analysis_data: Dict[str, Any] = None):
         """
