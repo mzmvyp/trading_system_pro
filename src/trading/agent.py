@@ -151,9 +151,15 @@ class AgnoTradingAgent:
             ml_enabled = getattr(settings, 'ml_validation_enabled', True)
 
             # Verificar accuracy do modelo - se < 50%, nao confiar no ML
-            model_accuracy = self.ml_validator.model_info.get('results', {}).get(
-                self.ml_validator.best_model_name, {}
-            ).get('test_accuracy', 0.5)
+            # Tentar multiplos campos onde accuracy pode estar salva
+            model_accuracy = (
+                self.ml_validator.model_info.get('best_accuracy')
+                or self.ml_validator.model_info.get('accuracy')
+                or self.ml_validator.model_info.get('results', {}).get(
+                    self.ml_validator.best_model_name or '', {}
+                ).get('test_accuracy')
+                or 0.5
+            )
 
             if model_accuracy < 0.50:
                 # Modelo pior que aleatorio - nao bloquear sinais
