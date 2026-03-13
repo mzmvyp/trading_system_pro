@@ -11,6 +11,7 @@ services:
     env_file: .env
     environment:
       - PYTHONPATH=/app:/app/src
+      - PYTHONUNBUFFERED=1
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}

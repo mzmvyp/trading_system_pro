@@ -281,7 +281,13 @@ async def main():
 
                         for symbol in symbols_to_analyze:
                             try:
-                                await agent.analyze(symbol)
+                                await asyncio.wait_for(
+                                    agent.analyze(symbol),
+                                    timeout=300  # 5 minutos max por par
+                                )
+                            except asyncio.TimeoutError:
+                                logger.warning(f"[TIMEOUT] {symbol} excedeu 300s - pulando para proximo par")
+                                print(f"[TIMEOUT] {symbol} excedeu 300s - pulando para proximo par")
                             except Exception as e:
                                 logger.error(f"Erro ao analisar {symbol}: {e}")
                                 print(f"[ERRO] Erro em {symbol}: {e}")
