@@ -347,99 +347,20 @@ def _create_analysis_prompt(analysis: Dict[str, Any], market_classification: Dic
             classification_text = ""
             recommended_type = "SWING_TRADE"
 
-        return f"""
-Você é um trader profissional. Analise os dados e forneça um sinal de trading.
+        return f"""{classification_text}
+{analysis['symbol']} ${analysis['price_context']['current']:,.2f} ({analysis['price_context']['change_24h_pct']:+.2f}% 24h) Range:{analysis['price_context']['position_in_range_pct']:.0f}%
+Trend:{analysis['trend_analysis']['primary_trend']} ADX:{analysis['trend_analysis']['trend_strength_interpretation']} Mom:{analysis['trend_analysis']['momentum']} TF:{analysis['trend_analysis']['confluence_score']}/5
+RSI:{analysis['key_indicators']['rsi']['value']:.1f}({analysis['key_indicators']['rsi']['zone']}) MACD:{analysis['key_indicators']['macd']['crossover']}/{analysis['key_indicators']['macd']['momentum_direction']} BB:{analysis['key_indicators']['bollinger']['zone']} EMA:{analysis['key_indicators']['ema_structure']['ema_alignment']}
+Sup:${analysis['key_levels']['immediate_support']:,.2f}({analysis['key_levels']['distance_to_support_pct']:+.2f}%) Res:${analysis['key_levels']['immediate_resistance']:,.2f}({analysis['key_levels']['distance_to_resistance_pct']:+.2f}%) POC:${analysis['key_levels']['volume_poc']:,.2f}
+OB:{analysis['volume_flow']['orderbook_bias']} OBV:{analysis['volume_flow']['obv_trend']} Sent:{analysis['sentiment']['overall']} Fund:{analysis['sentiment']['funding_interpretation']}
+Vol:{analysis['volatility']['level']} SL:{analysis['volatility']['suggested_stop_pct']:.2f}% TP1:{analysis['volatility']['suggested_tp1_pct']:.2f}% TP2:{analysis['volatility']['suggested_tp2_pct']:.2f}%
+Conflicts:{conflicting_text}
+Bull:{analysis['aggregated_scores']['bullish_factors_count']} Bear:{analysis['aggregated_scores']['bearish_factors_count']} Bias:{analysis['aggregated_scores']['overall_bias']}/10({analysis['aggregated_scores']['overall_bias_interpretation']}) Rec:{analysis['aggregated_scores']['recommended_action']}
 
-{classification_text}
-
-## DADOS DE MERCADO
-
-- Símbolo: {analysis['symbol']}
-- Preço: ${analysis['price_context']['current']:,.2f}
-- Variação 24h: {analysis['price_context']['change_24h_pct']:+.2f}%
-- Posição no range: {analysis['price_context']['position_in_range_pct']:.0f}%
-
-## ANÁLISE DE TENDÊNCIA
-
-- Tendência primária: {analysis['trend_analysis']['primary_trend']}
-- Força (ADX): {analysis['trend_analysis']['trend_strength_interpretation']}
-- Momentum: {analysis['trend_analysis']['momentum']}
-- Alinhamento timeframes: {analysis['trend_analysis']['confluence_interpretation']}
-- Score confluência: {analysis['trend_analysis']['confluence_score']}/5
-
-## INDICADORES
-
-- RSI: {analysis['key_indicators']['rsi']['value']:.1f} ({analysis['key_indicators']['rsi']['zone']})
-- MACD: {analysis['key_indicators']['macd']['crossover']} - {analysis['key_indicators']['macd']['momentum_direction']}
-- Bollinger: {analysis['key_indicators']['bollinger']['zone']}
-- EMAs: {analysis['key_indicators']['ema_structure']['ema_alignment']}
-
-## NÍVEIS CHAVE
-
-- Suporte: ${analysis['key_levels']['immediate_support']:,.2f} ({analysis['key_levels']['distance_to_support_pct']:+.2f}%)
-- Resistência: ${analysis['key_levels']['immediate_resistance']:,.2f} ({analysis['key_levels']['distance_to_resistance_pct']:+.2f}%)
-- POC Volume: ${analysis['key_levels']['volume_poc']:,.2f}
-
-## VOLUME E FLUXO
-
-- Pressão orderbook: {analysis['volume_flow']['orderbook_bias']}
-- OBV: {analysis['volume_flow']['obv_trend']}
-
-## SENTIMENTO
-
-- Geral: {analysis['sentiment']['overall']}
-- Funding: {analysis['sentiment']['funding_interpretation']}
-
-## VOLATILIDADE
-
-- Nível: {analysis['volatility']['level']}
-- Stop sugerido: {analysis['volatility']['suggested_stop_pct']:.2f}%
-- TP1 sugerido: {analysis['volatility']['suggested_tp1_pct']:.2f}%
-- TP2 sugerido: {analysis['volatility']['suggested_tp2_pct']:.2f}%
-
-## SINAIS CONFLITANTES
-
-{conflicting_text}
-
-## SCORE AGREGADO
-
-- Fatores bullish: {analysis['aggregated_scores']['bullish_factors_count']}
-- Fatores bearish: {analysis['aggregated_scores']['bearish_factors_count']}
-- Bias geral: {analysis['aggregated_scores']['overall_bias']}/10 ({analysis['aggregated_scores']['overall_bias_interpretation']})
-- Ação recomendada: {analysis['aggregated_scores']['recommended_action']}
-
----
-
-## IMPORTANTE: ESCALA DE CONFIANÇA (0-10)
-
-A confiança deve ser um número inteiro de 1 a 10.
-**CRÍTICO**: Apenas sinais com confiança >= 7 serão executados pelo sistema.
-
----
-
-## INSTRUÇÕES
-
-1. **ANALISE O TIPO DE OPERAÇÃO RECOMENDADO** ({recommended_type}) e considere se concorda.
-2. **SEJA DECISIVO** - Forneça BUY ou SELL sempre que houver oportunidade.
-3. **AJUSTE OS PARÂMETROS** conforme o tipo de operação escolhido.
-
----
-
-RESPONDA APENAS COM JSON:
-
+Type:{recommended_type}. Confidence 1-10 (>=7 to execute). Reply ONLY JSON:
 ```json
-{{{{
-    "signal": "BUY" ou "SELL" ou "NO_SIGNAL",
-    "operation_type": "SCALP" ou "DAY_TRADE" ou "SWING_TRADE" ou "POSITION_TRADE",
-    "entry_price": <número>,
-    "stop_loss": <número>,
-    "take_profit_1": <número>,
-    "take_profit_2": <número>,
-    "confidence": <1-10>,
-    "reasoning": "<justificativa>"
-}}}}
-```
-"""
+{{{{"signal":"BUY/SELL/NO_SIGNAL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE/POSITION_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":0,"reasoning":""}}}}
+```"""
     except Exception as e:
         logger.exception(f"Erro ao criar prompt: {e}")
         return "Erro ao criar prompt de análise."
@@ -464,10 +385,10 @@ async def get_deepseek_analysis(symbol: str) -> Dict[str, Any]:
         if not api_key:
             raise ValueError("DEEPSEEK_API_KEY não encontrada.")
 
-        model = DeepSeek(id="deepseek-chat", api_key=api_key, temperature=0.3, max_tokens=1000)
+        model = DeepSeek(id="deepseek-chat", api_key=api_key, temperature=0.3, max_tokens=500)
         agent = Agent(
             model=model,
-            instructions="Você é um trader profissional. Analise os dados e forneça um sinal de trading em formato JSON."
+            instructions="Trader profissional. Analise dados e retorne sinal JSON."
         )
 
         logger.info(f"[DEEPSEEK] Chamando DeepSeek diretamente para {symbol}")

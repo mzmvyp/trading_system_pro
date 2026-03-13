@@ -624,10 +624,10 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                 }
 
             # Criar agent para chamada
-            model = DeepSeek(id="deepseek-chat", api_key=api_key, temperature=0.2, max_tokens=800)
+            model = DeepSeek(id="deepseek-chat", api_key=api_key, temperature=0.2, max_tokens=400)
             agent = Agent(
                 model=model,
-                instructions="Voce e um trader profissional especializado em gestao de posicoes. Responda apenas com JSON valido."
+                instructions="Trader profissional. Responda apenas JSON."
             )
 
             logger.debug(f"[REEVALUATOR] Chamando DeepSeek para {position_key}")

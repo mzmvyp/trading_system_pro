@@ -28,7 +28,7 @@ class DeepSeekClient:
             raise ImportError("agno não instalado")
 
     async def __aenter__(self):
-        self._model = DeepSeek(id="deepseek-chat", api_key=self.api_key, temperature=0.3, max_tokens=1000)
+        self._model = DeepSeek(id="deepseek-chat", api_key=self.api_key, temperature=0.3, max_tokens=500)
         self._agent = Agent(model=self._model)
         return self
 
