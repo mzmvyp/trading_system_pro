@@ -150,39 +150,13 @@ class AgnoTradingAgent:
             ml_required = getattr(settings, 'ml_validation_required', False)
             ml_enabled = getattr(settings, 'ml_validation_enabled', True)
 
-            # Verificar accuracy do modelo - se < 50%, nao confiar no ML
-            # Tentar multiplos campos onde accuracy pode estar salva
-            model_accuracy = (
-                self.ml_validator.model_info.get('best_accuracy')
-                or self.ml_validator.model_info.get('accuracy')
-                or self.ml_validator.model_info.get('results', {}).get(
-                    self.ml_validator.best_model_name or '', {}
-                ).get('test_accuracy')
-                or 0.5
-            )
-
-            if model_accuracy < 0.50:
-                # Modelo pior que aleatorio - nao bloquear sinais
-                logger.warning(f"[ML] Accuracy {model_accuracy:.1%} < 50% - ML bypass ativo")
-                return {
-                    "skip_signal": False,
-                    "has_confluence": False,
-                    "probability": probability,
-                    "prediction": prediction,
-                    "reason": f"ML bypass: accuracy {model_accuracy:.1%} < 50% (modelo nao confiavel)"
-                }
-
             # has_confluence = True se modelo prevê sucesso E probabilidade > threshold
             has_confluence = prediction == 1 and probability >= ml_threshold
 
-            # Lógica de skip:
-            # - ml_required=True: só executa com confluência
-            # - ml_enabled=True: só bloqueia se prob muito baixa (< 0.4)
-            # - ml desabilitado: não bloqueia
+            # ML so bloqueia sinais se ml_required=True (configuracao explicita)
+            # Quando ml_required=False, ML apenas informa mas NUNCA bloqueia
             if ml_required:
                 skip_signal = not has_confluence
-            elif ml_enabled:
-                skip_signal = not has_confluence and probability < 0.4
             else:
                 skip_signal = False
 
@@ -191,7 +165,7 @@ class AgnoTradingAgent:
                 "has_confluence": has_confluence,
                 "probability": probability,
                 "prediction": prediction,
-                "reason": f"ML prob: {probability:.1%}, threshold: {ml_threshold:.1%}, accuracy: {model_accuracy:.1%}"
+                "reason": f"ML prob: {probability:.1%}, threshold: {ml_threshold:.1%}, required: {ml_required}"
             }
 
         except Exception as e:
@@ -580,23 +554,20 @@ Regras: confidence>=7 para executar. Se <7, use NO_SIGNAL. Seja decisivo."""
                 ml_prob = ml_validation.get('probability', 0)
                 ml_pred = ml_validation.get('prediction', 0)
 
-                # SEMPRE mostrar resultado da validação ML
-                print(f"[ML] Validacao: prob={ml_prob:.1%}, predicao={'SUCESSO' if ml_pred == 1 else 'FALHA'}")
-                logger.info(f"[ML] Validacao ML: prob={ml_prob:.1%}, predicao={ml_pred}")
+                # ML em modo OBSERVADOR: registra predicao mas NAO bloqueia sinais
+                ml_opinion = 'SUCESSO' if ml_pred == 1 else 'FALHA'
+                if ml_validation.get("has_confluence"):
+                    print(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML concorda (prob: {ml_prob:.1%})")
+                    logger.info(f"[ML OBSERVADOR] Confluencia: prob={ml_prob:.1%}, predicao={ml_opinion}")
+                else:
+                    print(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML discorda (prob: {ml_prob:.1%}, predicao={ml_opinion})")
+                    logger.info(f"[ML OBSERVADOR] Sem confluencia: prob={ml_prob:.1%}, predicao={ml_opinion}")
 
                 if ml_validation.get("skip_signal"):
-                    logger.warning(f"[ML] Sinal REJEITADO pelo modelo ML: prob={ml_prob:.1%}, predicao={'SUCESSO' if ml_pred == 1 else 'FALHA'}")
-                    print(f"[ML] ❌ Sinal {agno_signal.get('signal')} REJEITADO - Modelo ML: FALHA (prob: {ml_prob:.1%})")
-                    logger.info("[ML] Sinal bloqueado - Sem confluencia entre DeepSeek e ML")
+                    # Isso so acontece se ml_required=True (configuracao explicita)
+                    logger.warning(f"[ML] Sinal BLOQUEADO (ml_required=True): prob={ml_prob:.1%}")
+                    print(f"[ML] Sinal {agno_signal.get('signal')} BLOQUEADO - ml_required=True")
                 else:
-                    if ml_validation.get("has_confluence"):
-                        logger.info(f"[ML] Confluencia confirmada! Prob sucesso: {ml_prob:.1%}")
-                        print(f"[ML] ✅ CONFLUENCIA! DeepSeek + ML concordam (prob: {ml_prob:.1%})")
-                    else:
-                        # Isso não deveria acontecer se skip_signal está correto, mas mantém para segurança
-                        logger.warning(f"[ML] ATENCAO: Executando sem confluencia (prob: {ml_prob:.1%})")
-                        print(f"[ML] ⚠️ Sem confluencia (prob: {ml_prob:.1%}) - Verifique configuracao ML")
-
                     # Obter tendência dinâmica para filtro
                     try:
                         trend_data = await get_trend(symbol)

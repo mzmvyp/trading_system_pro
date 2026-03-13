@@ -385,7 +385,10 @@ class SimpleSignalValidator:
         return result
 
     def _log_prediction(self, signal: Dict, validation: Dict):
-        """Registra predicao para acompanhamento no dashboard"""
+        """
+        Registra predicao completa para acompanhamento no dashboard.
+        Salva dados ricos para poder comparar ML vs resultado real depois.
+        """
         try:
             log_path = os.path.join(CONFIG["model_dir"], "prediction_log.json")
 
@@ -395,26 +398,44 @@ class SimpleSignalValidator:
                 with open(log_path, 'r') as f:
                     predictions = json.load(f)
 
-            # Adicionar nova predicao
-            predictions.append({
+            # Registrar predicao com dados completos para analise futura
+            entry = {
                 'timestamp': datetime.now().isoformat(),
                 'symbol': signal.get('symbol', 'UNKNOWN'),
+                # Sinal do DeepSeek
                 'deepseek_signal': signal.get('signal', 'NO_SIGNAL'),
-                'predicted_success': validation.get('prediction', 0),
-                'probability': validation.get('probability', 0.5),
-                'recommendation': validation.get('recommendation', 'SKIP'),
-                'model_used': self.best_model_name
-            })
+                'deepseek_confidence': signal.get('confidence', 0),
+                'entry_price': signal.get('entry_price', 0),
+                'stop_loss': signal.get('stop_loss', 0),
+                'take_profit_1': signal.get('take_profit_1', signal.get('take_profit', 0)),
+                'take_profit_2': signal.get('take_profit_2', 0),
+                'take_profit_3': signal.get('take_profit_3', 0),
+                # Predicao do ML
+                'ml_prediction': validation.get('prediction', 0),
+                'ml_probability': validation.get('probability_success', validation.get('probability', 0.5)),
+                'ml_recommendation': validation.get('recommendation', 'SKIP'),
+                'ml_model_used': self.best_model_name,
+                # Indicadores chave (para debug)
+                'rsi': signal.get('rsi', signal.get('indicators', {}).get('rsi', None)),
+                'adx': signal.get('adx', signal.get('indicators', {}).get('adx', None)),
+                'trend': signal.get('trend', None),
+                'sentiment': signal.get('sentiment', None),
+                # Resultado real (preenchido depois pelo online_learning)
+                'actual_result': None,  # 'TP' ou 'SL' - preenchido quando trade fecha
+                'ml_was_correct': None,  # True/False - preenchido quando trade fecha
+            }
 
-            # Manter apenas ultimas 500 predicoes
-            predictions = predictions[-500:]
+            predictions.append(entry)
+
+            # Manter ultimas 1000 predicoes (mais historico para analise)
+            predictions = predictions[-1000:]
 
             # Salvar
             with open(log_path, 'w') as f:
                 json.dump(predictions, f, indent=2, default=str)
 
-        except Exception:
-            pass  # Ignorar erros de log
+        except Exception as e:
+            print(f"[ML LOG] Erro ao salvar predicao: {e}")
 
 
 def main():
