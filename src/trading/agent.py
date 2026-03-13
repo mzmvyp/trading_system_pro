@@ -141,28 +141,43 @@ class AgnoTradingAgent:
             probability = result.get('probability_success', 0.5)
             prediction = result.get('prediction', 0)
 
+            # Registrar predicao no dashboard (fix: predict_signal nao logava)
+            self.ml_validator._log_prediction(signal, result)
+
             # Configuracao: threshold de probabilidade para aceitar sinal
             from src.core.config import settings
             ml_threshold = getattr(settings, 'ml_validation_threshold', 0.65)
             ml_required = getattr(settings, 'ml_validation_required', False)
             ml_enabled = getattr(settings, 'ml_validation_enabled', True)
 
-            # CORRIGIDO: Lógica de confluência mais clara
+            # Verificar accuracy do modelo - se < 50%, nao confiar no ML
+            model_accuracy = self.ml_validator.model_info.get('results', {}).get(
+                self.ml_validator.best_model_name, {}
+            ).get('test_accuracy', 0.5)
+
+            if model_accuracy < 0.50:
+                # Modelo pior que aleatorio - nao bloquear sinais
+                logger.warning(f"[ML] Accuracy {model_accuracy:.1%} < 50% - ML bypass ativo")
+                return {
+                    "skip_signal": False,
+                    "has_confluence": False,
+                    "probability": probability,
+                    "prediction": prediction,
+                    "reason": f"ML bypass: accuracy {model_accuracy:.1%} < 50% (modelo nao confiavel)"
+                }
+
             # has_confluence = True se modelo prevê sucesso E probabilidade > threshold
             has_confluence = prediction == 1 and probability >= ml_threshold
 
-            # CORRIGIDO: Lógica de skip mais clara
-            # skip_signal = True APENAS se:
-            # - ml_required=True (ML é obrigatório) E não tem confluência, OU
-            # - ml_enabled=True E não tem confluência E probabilidade é muito baixa (< 0.4)
+            # Lógica de skip:
+            # - ml_required=True: só executa com confluência
+            # - ml_enabled=True: só bloqueia se prob muito baixa (< 0.4)
+            # - ml desabilitado: não bloqueia
             if ml_required:
-                # Se ML é obrigatório, só executa com confluência
                 skip_signal = not has_confluence
             elif ml_enabled:
-                # Se ML está habilitado mas não obrigatório, só bloqueia se prob muito baixa
                 skip_signal = not has_confluence and probability < 0.4
             else:
-                # Se ML desabilitado, não bloqueia
                 skip_signal = False
 
             return {
@@ -170,7 +185,7 @@ class AgnoTradingAgent:
                 "has_confluence": has_confluence,
                 "probability": probability,
                 "prediction": prediction,
-                "reason": f"ML prob: {probability:.1%}, threshold: {ml_threshold:.1%}"
+                "reason": f"ML prob: {probability:.1%}, threshold: {ml_threshold:.1%}, accuracy: {model_accuracy:.1%}"
             }
 
         except Exception as e:
