@@ -417,27 +417,6 @@ class BinanceFuturesExecutor:
 
         return result
 
-    async def _place_algo_order(
-        self,
-        symbol: str,
-        side: str,
-        order_type: str,  # STOP_MARKET ou TAKE_PROFIT_MARKET
-        quantity: float,
-        trigger_price: float
-    ) -> Dict[str, Any]:
-        """Coloca ordem condicional via Algo Order API (exigido para SL/TP na testnet e produção)."""
-        params = {
-            "algoType": "CONDITIONAL",
-            "symbol": symbol,
-            "side": side,
-            "type": order_type,
-            "quantity": quantity,
-            "triggerPrice": trigger_price,
-            "reduceOnly": "true",
-            "workingType": "CONTRACT_PRICE"
-        }
-        return await self._request("POST", "/fapi/v1/algoOrder", params, signed=True)
-
     async def place_stop_loss(
         self,
         symbol: str,
@@ -446,15 +425,26 @@ class BinanceFuturesExecutor:
         stop_price: float
     ) -> Dict[str, Any]:
         """
-        Coloca Stop Loss (via Algo Order API).
+        Coloca Stop Loss via API regular (/fapi/v1/order).
+        Usa STOP_MARKET que aparece em openOrders e é cancelado por allOpenOrders.
         """
         symbol_info = await self.get_symbol_info(symbol)
         if symbol_info:
             quantity = self._round_quantity(quantity, symbol_info.get("quantity_precision", 3))
             stop_price = self._round_price(stop_price, symbol_info.get("price_precision", 2))
 
+        params = {
+            "symbol": symbol,
+            "side": side,
+            "type": "STOP_MARKET",
+            "quantity": quantity,
+            "stopPrice": stop_price,
+            "reduceOnly": "true",
+            "workingType": "CONTRACT_PRICE"
+        }
+
         logger.warning(f"[STOP LOSS] {side} {quantity} {symbol} @ trigger ${stop_price}")
-        result = await self._place_algo_order(symbol, side, "STOP_MARKET", quantity, stop_price)
+        result = await self._request("POST", "/fapi/v1/order", params, signed=True)
 
         self._log_order(symbol, "STOP_LOSS", side, quantity, result, stop_price)
 
@@ -468,57 +458,36 @@ class BinanceFuturesExecutor:
         take_profit_price: float
     ) -> Dict[str, Any]:
         """
-        Coloca Take Profit (via Algo Order API).
+        Coloca Take Profit via API regular (/fapi/v1/order).
+        Usa TAKE_PROFIT_MARKET que aparece em openOrders e é cancelado por allOpenOrders.
         """
         symbol_info = await self.get_symbol_info(symbol)
         if symbol_info:
             quantity = self._round_quantity(quantity, symbol_info.get("quantity_precision", 3))
             take_profit_price = self._round_price(take_profit_price, symbol_info.get("price_precision", 2))
 
+        params = {
+            "symbol": symbol,
+            "side": side,
+            "type": "TAKE_PROFIT_MARKET",
+            "quantity": quantity,
+            "stopPrice": take_profit_price,
+            "reduceOnly": "true",
+            "workingType": "CONTRACT_PRICE"
+        }
+
         logger.warning(f"[TAKE PROFIT] {side} {quantity} {symbol} @ trigger ${take_profit_price}")
-        result = await self._place_algo_order(
-            symbol, side, "TAKE_PROFIT_MARKET", quantity, take_profit_price
-        )
+        result = await self._request("POST", "/fapi/v1/order", params, signed=True)
 
         self._log_order(symbol, "TAKE_PROFIT", side, quantity, result, take_profit_price)
 
         return result
 
     async def cancel_all_orders(self, symbol: str) -> Dict[str, Any]:
-        """Cancela todas as ordens abertas de um símbolo (normais + algo)"""
-        # 1. Cancelar ordens normais
+        """Cancela todas as ordens abertas de um símbolo (SL, TP, limit, etc.)"""
         result = await self._request("DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol}, signed=True)
-
-        # 2. Cancelar ordens ALGO (SL/TP colocados via Algo Order API)
-        try:
-            algo_orders = await self._request("GET", "/fapi/v1/algoOrder/openOrders", {"symbol": symbol}, signed=True)
-            if isinstance(algo_orders, dict) and algo_orders.get("rows"):
-                algo_orders_list = algo_orders["rows"]
-            elif isinstance(algo_orders, list):
-                algo_orders_list = algo_orders
-            else:
-                algo_orders_list = []
-
-            algo_cancelled = 0
-            for algo_order in algo_orders_list:
-                algo_id = algo_order.get("algoId")
-                if algo_id:
-                    try:
-                        cancel_result = await self._request(
-                            "DELETE", "/fapi/v1/algoOrder",
-                            {"algoId": algo_id}, signed=True
-                        )
-                        if not (isinstance(cancel_result, dict) and "error" in cancel_result):
-                            algo_cancelled += 1
-                    except Exception as e:
-                        logger.warning(f"[CANCEL] Erro ao cancelar algo order {algo_id} de {symbol}: {e}")
-
-            if algo_cancelled > 0:
-                logger.info(f"[CANCEL] {symbol}: {algo_cancelled} algo orders (SL/TP) canceladas")
-
-        except Exception as e:
-            logger.warning(f"[CANCEL] Erro ao buscar/cancelar algo orders de {symbol}: {e}")
-
+        if not (isinstance(result, dict) and "error" in result):
+            logger.info(f"[CANCEL] Todas as ordens de {symbol} canceladas")
         return result
 
     async def close_position(self, symbol: str) -> Dict[str, Any]:
@@ -730,9 +699,9 @@ class BinanceFuturesExecutor:
             close_side = "SELL" if signal_type == "BUY" else "BUY"
 
             def _order_id(r: dict) -> Optional[Any]:
-                return r.get("orderId") or r.get("algoId")
+                return r.get("orderId")
 
-            # 9. Colocar Stop Loss (Algo Order API)
+            # 9. Colocar Stop Loss
             sl_order = await self.place_stop_loss(symbol, close_side, position_size, stop_loss)
             if "error" in sl_order:
                 logger.error(f"Erro ao colocar Stop Loss: {sl_order}")
@@ -755,7 +724,7 @@ class BinanceFuturesExecutor:
             else:
                 logger.info(f"[TAKE PROFIT 2] Colocado: ID {_order_id(tp2_order)}")
 
-            # 12. Registrar execução completa (algo orders retornam algoId, ordem normal orderId)
+            # 12. Registrar execução completa
             execution_record = {
                 "timestamp": datetime.now().isoformat(),
                 "symbol": symbol,
@@ -833,46 +802,15 @@ class BinanceFuturesExecutor:
             logger.error(f"Erro ao salvar log de ordem: {e}")
 
     async def get_open_orders(self, symbol: str = None) -> List[Dict[str, Any]]:
-        """Obtém ordens abertas (normais + algo)"""
+        """Obtém todas as ordens abertas (incluindo STOP_MARKET e TAKE_PROFIT_MARKET)"""
         params = {}
         if symbol:
             params["symbol"] = symbol
 
-        # 1. Ordens normais
-        normal_orders = await self._request("GET", "/fapi/v1/openOrders", params, signed=True)
-        if isinstance(normal_orders, dict) and "error" in normal_orders:
-            normal_orders = []
-
-        # 2. Ordens algo (SL/TP colocados via Algo Order API)
-        try:
-            algo_params = {}
-            if symbol:
-                algo_params["symbol"] = symbol
-            algo_result = await self._request("GET", "/fapi/v1/algoOrder/openOrders", algo_params, signed=True)
-
-            algo_orders = []
-            if isinstance(algo_result, dict) and algo_result.get("rows"):
-                algo_orders = algo_result["rows"]
-            elif isinstance(algo_result, list):
-                algo_orders = algo_result
-
-            # Normalizar algo orders para formato compatível com ordens normais
-            for algo in algo_orders:
-                normal_orders.append({
-                    "symbol": algo.get("symbol", ""),
-                    "orderId": algo.get("algoId", ""),
-                    "algoId": algo.get("algoId", ""),
-                    "type": algo.get("type", algo.get("algoType", "ALGO")),
-                    "side": algo.get("side", ""),
-                    "quantity": algo.get("quantity", 0),
-                    "triggerPrice": algo.get("triggerPrice", 0),
-                    "time": algo.get("bookTime", 0),
-                    "is_algo": True
-                })
-        except Exception as e:
-            logger.warning(f"[ORDERS] Erro ao buscar algo orders: {e}")
-
-        return normal_orders
+        result = await self._request("GET", "/fapi/v1/openOrders", params, signed=True)
+        if isinstance(result, dict) and "error" in result:
+            return []
+        return result
 
     async def get_all_positions(self) -> List[Dict[str, Any]]:
         """Obtém todas as posições abertas"""

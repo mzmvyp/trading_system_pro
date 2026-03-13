@@ -102,6 +102,52 @@ with col4:
 st.markdown("---")
 
 # ================================================================
+# COMPARACAO: EXECUTADOS vs NAO EXECUTADOS
+# ================================================================
+exec_metrics = summary.get("executed_metrics", {})
+noexec_metrics = summary.get("not_executed_metrics", {})
+exec_count = summary.get("executed_count", 0)
+noexec_count = summary.get("not_executed_count", 0)
+
+if exec_count > 0 or noexec_count > 0:
+    st.header("Executados vs Apenas Gerados")
+    st.caption(f"Executados: {exec_count} sinais | Apenas gerados: {noexec_count} sinais")
+
+    comp_col1, comp_col2 = st.columns(2)
+
+    with comp_col1:
+        st.subheader("EXECUTADOS (Real/Paper)")
+        if exec_metrics and exec_metrics.get("closed", 0) > 0:
+            e1, e2, e3, e4 = st.columns(4)
+            with e1:
+                st.metric("Fechados", exec_metrics.get("closed", 0))
+            with e2:
+                st.metric("Win Rate", f"{exec_metrics.get('win_rate', 0):.1f}%")
+            with e3:
+                st.metric("PnL Total", f"{exec_metrics.get('total_pnl', 0):.2f}%")
+            with e4:
+                st.metric("Profit Factor", f"{exec_metrics.get('profit_factor', 0):.2f}")
+        else:
+            st.info("Nenhum sinal executado finalizado ainda")
+
+    with comp_col2:
+        st.subheader("NAO EXECUTADOS (Apenas gerados)")
+        if noexec_metrics and noexec_metrics.get("closed", 0) > 0:
+            n1, n2, n3, n4 = st.columns(4)
+            with n1:
+                st.metric("Fechados", noexec_metrics.get("closed", 0))
+            with n2:
+                st.metric("Win Rate", f"{noexec_metrics.get('win_rate', 0):.1f}%")
+            with n3:
+                st.metric("PnL Total", f"{noexec_metrics.get('total_pnl', 0):.2f}%")
+            with n4:
+                st.metric("Profit Factor", f"{noexec_metrics.get('profit_factor', 0):.2f}")
+        else:
+            st.info("Nenhum sinal nao-executado finalizado ainda")
+
+    st.markdown("---")
+
+# ================================================================
 # TABS DE ANALISE
 # ================================================================
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -120,7 +166,7 @@ with tab1:
     st.subheader("Todos os Sinais Emitidos")
 
     # Filtros
-    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+    col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
     with col_f1:
         filter_source = st.multiselect("Fonte", df["source"].unique().tolist(), default=df["source"].unique().tolist())
     with col_f2:
@@ -129,6 +175,9 @@ with tab1:
         filter_outcome = st.multiselect("Resultado", df["outcome"].unique().tolist(), default=df["outcome"].unique().tolist())
     with col_f4:
         filter_symbol = st.multiselect("Simbolo", sorted(df["symbol"].unique().tolist()), default=sorted(df["symbol"].unique().tolist()))
+    with col_f5:
+        exec_options = ["Todos", "Executados", "Nao Executados"]
+        filter_executed = st.selectbox("Execucao", exec_options, index=0)
 
     # Aplicar filtros
     mask = (
@@ -137,21 +186,33 @@ with tab1:
         df["outcome"].isin(filter_outcome) &
         df["symbol"].isin(filter_symbol)
     )
+    if filter_executed == "Executados":
+        mask = mask & (df["executed"] == True)
+    elif filter_executed == "Nao Executados":
+        mask = mask & ((df["executed"] == False) | (df["executed"].isna()))
     df_filtered = df[mask].copy()
+
+    # Preparar coluna de status de execucao para exibicao
+    df_filtered["exec_status"] = df_filtered["executed"].apply(
+        lambda x: "SIM" if x == True else "NAO"
+    )
+    df_filtered["ml_prob_display"] = df_filtered["ml_probability"].apply(
+        lambda x: f"{x:.0%}" if isinstance(x, (int, float)) and x == x else "-"
+    )
 
     # Formatacao
     display_df = df_filtered[[
         "timestamp", "symbol", "source", "signal", "confidence",
         "entry_price", "stop_loss", "take_profit_1", "take_profit_2",
         "outcome", "exit_price", "pnl_percent", "duration_hours",
-        "max_favorable", "max_adverse"
+        "exec_status", "ml_prob_display"
     ]].copy()
 
     display_df.columns = [
         "Data/Hora", "Simbolo", "Fonte", "Direcao", "Confianca",
         "Entry", "SL", "TP1", "TP2",
         "Resultado", "Exit", "PnL %", "Duracao (h)",
-        "MFE %", "MAE %"
+        "Executado", "ML Prob"
     ]
 
     # Colorir PnL
