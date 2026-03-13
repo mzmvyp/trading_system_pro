@@ -1,6 +1,6 @@
 """Tests for indicators module"""
 import pytest
-from src.analysis.indicators import (
+from src.analysis.agno_tools import (
     _classify_rsi,
     _interpret_adx,
     _interpret_macd_momentum,
