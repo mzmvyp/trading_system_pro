@@ -216,14 +216,15 @@ class PositionMonitor:
                 if last_reeval:
                     hours_since = (now - last_reeval).total_seconds() / 3600
                     if hours_since < settings.reevaluation_interval_hours:
+                        logger.debug(f"[REAVALIACAO] {symbol}: pulando, reavaliado ha {hours_since:.1f}h (min: {settings.reevaluation_interval_hours}h)")
                         continue
 
                 # Verificar tempo mínimo aberto
-                # Tentar obter do execution record
                 entry_time = await self._find_entry_time(symbol)
                 if entry_time:
                     hours_open = (now - entry_time).total_seconds() / 3600
                     if hours_open < settings.reevaluation_min_time_open_hours:
+                        logger.debug(f"[REAVALIACAO] {symbol}: pulando, aberta ha {hours_open:.1f}h (min: {settings.reevaluation_min_time_open_hours}h)")
                         continue
 
                 results["reevaluated"] += 1
@@ -232,6 +233,7 @@ class PositionMonitor:
                 try:
                     # Análise técnica rápida (sem chamar DeepSeek, só indicadores)
                     from src.analysis.agno_tools import analyze_technical_indicators
+                    logger.info(f"[REAVALIACAO] Analisando {symbol} ({side})...")
                     tech = await analyze_technical_indicators(symbol)
 
                     if not tech or "indicators" not in tech:
@@ -246,18 +248,24 @@ class PositionMonitor:
                     reason = ""
 
                     if side == "LONG":
-                        # Fechar long se: RSI sobrecomprado + tendência bearish + MACD negativo
-                        if rsi > 75 and trend == "bearish" and macd_hist < 0:
+                        # Fechar long se tendencia claramente contra a posicao
+                        if trend == "bearish" and macd_hist < 0 and rsi < 40:
                             should_close = True
-                            reason = f"Sinal inverteu: RSI={rsi:.0f}, trend={trend}, MACD={macd_hist:.4f}"
+                            reason = f"Tendencia contra LONG: RSI={rsi:.0f}, trend={trend}, MACD={macd_hist:.4f}"
+                        elif trend == "strong_bearish":
+                            should_close = True
+                            reason = f"Tendencia forte bearish contra LONG: trend={trend}"
                         elif rsi > 80:
                             should_close = True
                             reason = f"RSI extremo sobrecomprado: {rsi:.0f}"
                     else:  # SHORT
-                        # Fechar short se: RSI sobrevendido + tendência bullish + MACD positivo
-                        if rsi < 25 and trend == "bullish" and macd_hist > 0:
+                        # Fechar short se tendencia claramente contra a posicao
+                        if trend == "bullish" and macd_hist > 0 and rsi > 60:
                             should_close = True
-                            reason = f"Sinal inverteu: RSI={rsi:.0f}, trend={trend}, MACD={macd_hist:.4f}"
+                            reason = f"Tendencia contra SHORT: RSI={rsi:.0f}, trend={trend}, MACD={macd_hist:.4f}"
+                        elif trend == "strong_bullish":
+                            should_close = True
+                            reason = f"Tendencia forte bullish contra SHORT: trend={trend}"
                         elif rsi < 20:
                             should_close = True
                             reason = f"RSI extremo sobrevendido: {rsi:.0f}"
