@@ -51,7 +51,7 @@ class PositionMonitor:
             if not positions or (isinstance(positions, list) and len(positions) > 0 and isinstance(positions[0], dict) and "error" in positions[0]):
                 return results
 
-            # Obter todas as ordens abertas (uma vez só, para performance)
+            # Obter ordens abertas regulares
             all_orders = await executor.get_open_orders()
             if isinstance(all_orders, dict) and "error" in all_orders:
                 all_orders = []
@@ -63,6 +63,16 @@ class PositionMonitor:
                 if sym not in orders_by_symbol:
                     orders_by_symbol[sym] = []
                 orders_by_symbol[sym].append(order)
+
+            # Incluir ordens algo (SL/TP) por símbolo — Binance usa Algo API para STOP_MARKET/TAKE_PROFIT_MARKET
+            for pos in positions:
+                sym = pos.get("symbol", "")
+                if not sym:
+                    continue
+                algo_orders = await executor.get_open_algo_orders(sym)
+                if sym not in orders_by_symbol:
+                    orders_by_symbol[sym] = []
+                orders_by_symbol[sym].extend(algo_orders)
 
             for pos in positions:
                 symbol = pos.get("symbol", "")
