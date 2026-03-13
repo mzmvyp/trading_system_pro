@@ -592,12 +592,17 @@ class BinanceFuturesExecutor:
             if not symbol_info or "error" in symbol_info:
                 return {"success": False, "error": f"Erro ao obter info do simbolo: {symbol_info}"}
 
-            # 4. Calcular risco baseado no CAPITAL TOTAL
-            # CORRIGIDO: O risco é calculado sobre o CAPITAL TOTAL, não sobre o disponível
-            # Isso permite abrir até 20 posições simultâneas com 5% de risco cada
-            capital_total = total_balance
-            risk_percent = settings.risk_percent_per_trade / 100.0  # Converter para decimal
-            risk_amount = capital_total * risk_percent  # $ que estamos dispostos a perder
+            # 4. Calcular risco baseado no SALDO DISPONIVEL
+            # Usa o disponivel para evitar "Margin insufficient" da Binance
+            # Se tem pouca margem livre, reduz o risco proporcionalmente
+            capital_base = available  # Usar saldo DISPONIVEL, nao o total
+            risk_percent = settings.risk_percent_per_trade / 100.0
+            risk_amount = capital_base * risk_percent
+
+            # Garantir risco minimo viavel (evitar posicoes microscopicas)
+            if risk_amount < 1.0:
+                logger.warning(f"[RISCO] Risco calculado muito baixo: ${risk_amount:.2f} (disponivel: ${available:.2f})")
+                return {"success": False, "error": f"Saldo disponivel muito baixo: ${available:.2f}"}
 
             if position_size is None:
                 if stop_loss and stop_loss != entry_price:
@@ -615,7 +620,7 @@ class BinanceFuturesExecutor:
                     # Não é o valor_posicao / alavancagem, é o próprio risk_amount + buffer
                     margin_required = risk_amount * 1.2  # 20% de buffer para taxas e slippage
 
-                    logger.info(f"[RISCO] Capital Total: ${capital_total:.2f} | Risco: {settings.risk_percent_per_trade}% = ${risk_amount:.2f}")
+                    logger.info(f"[RISCO] Disponivel: ${available:.2f} | Total: ${total_balance:.2f} | Risco: {settings.risk_percent_per_trade}% = ${risk_amount:.2f}")
                     logger.info(f"[POSICAO] Entry: ${entry_price:.4f} | Stop: ${stop_loss:.4f} | Distancia: ${stop_distance:.4f}")
                     logger.info(f"[POSICAO] Tamanho: {position_size:.4f} unidades | Valor: ${position_value_calc:.2f}")
                     logger.info(f"[MARGEM] Margem isolada necessaria: ${margin_required:.2f} (risco + buffer)")
