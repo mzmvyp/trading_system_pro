@@ -151,6 +151,17 @@ binance_circuit_breaker = CircuitBreaker(
 )
 
 
+def _is_non_retryable_error(error: Exception) -> bool:
+    """Check if error is a client error (4xx) that should NOT be retried."""
+    error_str = str(error)
+    # HTTP 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden), 404 (Not Found), 422 (Unprocessable)
+    # These indicate the request itself is wrong — retrying won't fix it
+    for code in ("HTTP 400", "HTTP 401", "HTTP 403", "HTTP 404", "HTTP 422"):
+        if code in error_str:
+            return True
+    return False
+
+
 async def exponential_backoff_retry(
     func: Callable,
     max_retries: int = 4,
@@ -164,6 +175,10 @@ async def exponential_backoff_retry(
             return await func(*args, **kwargs)
         except Exception as e:
             last_exception = e
+            # Fail-fast on client errors (4xx) — retrying won't help
+            if _is_non_retryable_error(e):
+                logger.error(f"Non-retryable error for {func.__name__}: {e}")
+                raise
             if attempt < max_retries:
                 delay = base_delay * (2 ** attempt)
                 logger.warning(
