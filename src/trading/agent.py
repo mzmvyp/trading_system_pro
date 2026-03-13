@@ -218,10 +218,10 @@ class AgnoTradingAgent:
 
     # REFATORADO: Constante de preços padrão para evitar duplicação
     DEFAULT_PRICES = {
-        "BTCUSDT": 90000, "ETHUSDT": 3000, "SOLUSDT": 140,
-        "BNBUSDT": 600, "ADAUSDT": 0.5, "XRPUSDT": 2.0,
-        "DOGEUSDT": 0.15, "AVAXUSDT": 40, "DOTUSDT": 7,
-        "LINKUSDT": 20, "PAXGUSDT": 2700
+        "BTCUSDT": 95000, "ETHUSDT": 2500, "SOLUSDT": 150,
+        "BNBUSDT": 650, "ADAUSDT": 0.70, "XRPUSDT": 2.50,
+        "DOGEUSDT": 0.25, "AVAXUSDT": 35, "DOTUSDT": 7,
+        "LINKUSDT": 18, "PAXGUSDT": 5100
     }
 
     def _extract_price_from_text(self, text: str, min_price: float = 0.01, max_price: float = 1000000) -> Optional[float]:

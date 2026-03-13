@@ -1828,12 +1828,9 @@ def validate_risk_and_position(
         # UNIFICADO: Sempre usar escala 0-10, mínimo 7 para executar
         from src.core.config import settings
 
-        # Normalizar confiança para escala 0-10 se necessário
-        # Se confiança for <= 5, pode ser escala antiga (0-5), converter para 0-10
-        if confidence > 0 and confidence <= 5:
-            # Converter escala 0-5 para 0-10 (multiplicar por 2)
-            confidence = confidence * 2
-            logger.warning(f"[CONFIANCA] Convertendo escala 0-5 para 0-10: {signal.get('confidence')} -> {confidence}")
+        # CORRIGIDO: Não converter confiança automaticamente.
+        # O prompt do DeepSeek já pede escala 1-10 explicitamente.
+        # A conversão anterior dobrava confiança 5 para 10, causando falsos positivos.
 
         # Garantir que confiança está no range válido (1-10)
         if confidence < 1 or confidence > 10:
