@@ -150,39 +150,13 @@ class AgnoTradingAgent:
             ml_required = getattr(settings, 'ml_validation_required', False)
             ml_enabled = getattr(settings, 'ml_validation_enabled', True)
 
-            # Verificar accuracy do modelo - se < 50%, nao confiar no ML
-            # Tentar multiplos campos onde accuracy pode estar salva
-            model_accuracy = (
-                self.ml_validator.model_info.get('best_accuracy')
-                or self.ml_validator.model_info.get('accuracy')
-                or self.ml_validator.model_info.get('results', {}).get(
-                    self.ml_validator.best_model_name or '', {}
-                ).get('test_accuracy')
-                or 0.5
-            )
-
-            if model_accuracy < 0.50:
-                # Modelo pior que aleatorio - nao bloquear sinais
-                logger.warning(f"[ML] Accuracy {model_accuracy:.1%} < 50% - ML bypass ativo")
-                return {
-                    "skip_signal": False,
-                    "has_confluence": False,
-                    "probability": probability,
-                    "prediction": prediction,
-                    "reason": f"ML bypass: accuracy {model_accuracy:.1%} < 50% (modelo nao confiavel)"
-                }
-
             # has_confluence = True se modelo prevê sucesso E probabilidade > threshold
             has_confluence = prediction == 1 and probability >= ml_threshold
 
-            # Lógica de skip:
-            # - ml_required=True: só executa com confluência
-            # - ml_enabled=True: só bloqueia se prob muito baixa (< 0.4)
-            # - ml desabilitado: não bloqueia
+            # ML so bloqueia sinais se ml_required=True (configuracao explicita)
+            # Quando ml_required=False, ML apenas informa mas NUNCA bloqueia
             if ml_required:
                 skip_signal = not has_confluence
-            elif ml_enabled:
-                skip_signal = not has_confluence and probability < 0.4
             else:
                 skip_signal = False
 
@@ -191,7 +165,7 @@ class AgnoTradingAgent:
                 "has_confluence": has_confluence,
                 "probability": probability,
                 "prediction": prediction,
-                "reason": f"ML prob: {probability:.1%}, threshold: {ml_threshold:.1%}, accuracy: {model_accuracy:.1%}"
+                "reason": f"ML prob: {probability:.1%}, threshold: {ml_threshold:.1%}, required: {ml_required}"
             }
 
         except Exception as e:
