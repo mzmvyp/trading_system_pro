@@ -485,9 +485,41 @@ class BinanceFuturesExecutor:
         return result
 
     async def cancel_all_orders(self, symbol: str) -> Dict[str, Any]:
-        """Cancela todas as ordens abertas de um símbolo"""
-        params = {"symbol": symbol}
-        return await self._request("DELETE", "/fapi/v1/allOpenOrders", params, signed=True)
+        """Cancela todas as ordens abertas de um símbolo (normais + algo)"""
+        # 1. Cancelar ordens normais
+        result = await self._request("DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol}, signed=True)
+
+        # 2. Cancelar ordens ALGO (SL/TP colocados via Algo Order API)
+        try:
+            algo_orders = await self._request("GET", "/fapi/v1/algoOrder/openOrders", {"symbol": symbol}, signed=True)
+            if isinstance(algo_orders, dict) and algo_orders.get("rows"):
+                algo_orders_list = algo_orders["rows"]
+            elif isinstance(algo_orders, list):
+                algo_orders_list = algo_orders
+            else:
+                algo_orders_list = []
+
+            algo_cancelled = 0
+            for algo_order in algo_orders_list:
+                algo_id = algo_order.get("algoId")
+                if algo_id:
+                    try:
+                        cancel_result = await self._request(
+                            "DELETE", "/fapi/v1/algoOrder",
+                            {"algoId": algo_id}, signed=True
+                        )
+                        if not (isinstance(cancel_result, dict) and "error" in cancel_result):
+                            algo_cancelled += 1
+                    except Exception as e:
+                        logger.warning(f"[CANCEL] Erro ao cancelar algo order {algo_id} de {symbol}: {e}")
+
+            if algo_cancelled > 0:
+                logger.info(f"[CANCEL] {symbol}: {algo_cancelled} algo orders (SL/TP) canceladas")
+
+        except Exception as e:
+            logger.warning(f"[CANCEL] Erro ao buscar/cancelar algo orders de {symbol}: {e}")
+
+        return result
 
     async def close_position(self, symbol: str) -> Dict[str, Any]:
         """
@@ -801,12 +833,46 @@ class BinanceFuturesExecutor:
             logger.error(f"Erro ao salvar log de ordem: {e}")
 
     async def get_open_orders(self, symbol: str = None) -> List[Dict[str, Any]]:
-        """Obtém ordens abertas"""
+        """Obtém ordens abertas (normais + algo)"""
         params = {}
         if symbol:
             params["symbol"] = symbol
 
-        return await self._request("GET", "/fapi/v1/openOrders", params, signed=True)
+        # 1. Ordens normais
+        normal_orders = await self._request("GET", "/fapi/v1/openOrders", params, signed=True)
+        if isinstance(normal_orders, dict) and "error" in normal_orders:
+            normal_orders = []
+
+        # 2. Ordens algo (SL/TP colocados via Algo Order API)
+        try:
+            algo_params = {}
+            if symbol:
+                algo_params["symbol"] = symbol
+            algo_result = await self._request("GET", "/fapi/v1/algoOrder/openOrders", algo_params, signed=True)
+
+            algo_orders = []
+            if isinstance(algo_result, dict) and algo_result.get("rows"):
+                algo_orders = algo_result["rows"]
+            elif isinstance(algo_result, list):
+                algo_orders = algo_result
+
+            # Normalizar algo orders para formato compatível com ordens normais
+            for algo in algo_orders:
+                normal_orders.append({
+                    "symbol": algo.get("symbol", ""),
+                    "orderId": algo.get("algoId", ""),
+                    "algoId": algo.get("algoId", ""),
+                    "type": algo.get("type", algo.get("algoType", "ALGO")),
+                    "side": algo.get("side", ""),
+                    "quantity": algo.get("quantity", 0),
+                    "triggerPrice": algo.get("triggerPrice", 0),
+                    "time": algo.get("bookTime", 0),
+                    "is_algo": True
+                })
+        except Exception as e:
+            logger.warning(f"[ORDERS] Erro ao buscar algo orders: {e}")
+
+        return normal_orders
 
     async def get_all_positions(self) -> List[Dict[str, Any]]:
         """Obtém todas as posições abertas"""
