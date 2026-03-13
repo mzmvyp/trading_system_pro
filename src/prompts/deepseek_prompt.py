@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List
 
-from src.analysis.indicators import (
+from src.analysis.agno_tools import (
     _calculate_suggested_stops,
     _classify_bollinger_position,
     _classify_orderbook_imbalance,
