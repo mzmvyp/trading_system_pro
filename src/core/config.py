@@ -89,7 +89,7 @@ class Settings(BaseSettings):
         "AVAXUSDT",  # Avalanche
         "DOTUSDT",   # Polkadot
         "LINKUSDT",  # Chainlink
-        "PAXGUSDT"   # PAX Gold
+        "PAXGUSDT",  # PAX Gold
     ]
 
     # ========================================
