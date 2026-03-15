@@ -1,7 +1,7 @@
 """
 Market sentiment analysis based on market data
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from src.analysis.market_data import get_market_data
@@ -108,11 +108,11 @@ async def analyze_market_sentiment(symbol: str = "BTCUSDT") -> Dict[str, Any]:
                 "funding_rate": funding_rate,
                 "open_interest": open_interest
             },
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         return {
             "error": f"Erro na análise de sentimento: {str(e)}",
             "symbol": symbol,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }

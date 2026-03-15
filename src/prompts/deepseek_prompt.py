@@ -5,7 +5,7 @@ Handles LLM interaction for trading signal generation
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from src.analysis.agno_tools import (
@@ -220,7 +220,7 @@ async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
 
         if "error" in market_data or "error" in technical_indicators:
             error_summary = "; ".join(errors)
-            return {"error": f"Erro ao coletar dados de mercado: {error_summary}", "symbol": symbol, "timestamp": datetime.now().isoformat()}
+            return {"error": f"Erro ao coletar dados de mercado: {error_summary}", "symbol": symbol, "timestamp": datetime.now(timezone.utc).isoformat()}
 
         current_price = market_data.get("current_price", 0)
         price_change_24h = market_data.get("price_change_24h", 0)
@@ -283,7 +283,7 @@ async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
 
         analysis = {
             "symbol": symbol,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "price_context": {"current": current_price, "change_24h_pct": price_change_24h, "high_24h": high_24h, "low_24h": low_24h, "position_in_range_pct": position_in_range},
             "trend_analysis": {"primary_trend": primary_trend, "trend_strength_adx": adx_value, "trend_strength_interpretation": adx_interpretation, "momentum": momentum, "timeframe_alignment": timeframe_alignment, "confluence_score": confluence_score, "confluence_interpretation": confluence_interpretation},
             "key_indicators": {
@@ -312,7 +312,7 @@ async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
 
     except Exception as e:
         logger.exception(f"Erro ao preparar análise para LLM: {e}")
-        return {"error": f"Erro ao preparar análise: {str(e)}", "symbol": symbol, "timestamp": datetime.now().isoformat()}
+        return {"error": f"Erro ao preparar análise: {str(e)}", "symbol": symbol, "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 def _create_analysis_prompt(analysis: Dict[str, Any], market_classification: Dict[str, Any] = None) -> str:
@@ -459,7 +459,7 @@ async def get_deepseek_analysis(symbol: str) -> Dict[str, Any]:
                     "analysis_data": analysis,
                     "deepseek_prompt": prompt,
                     "raw_response": response_content,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 }
             except json.JSONDecodeError as e:
                 logger.warning(f"[DEEPSEEK] Erro ao decodificar JSON: {e}")
@@ -470,12 +470,12 @@ async def get_deepseek_analysis(symbol: str) -> Dict[str, Any]:
             "deepseek_prompt": prompt,
             "raw_response": response_content,
             "needs_agent_processing": True,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     except Exception as e:
         logger.exception(f"Erro na preparação para DeepSeek: {e}")
-        return {"error": f"Erro na preparação para DeepSeek: {str(e)}", "timestamp": datetime.now().isoformat()}
+        return {"error": f"Erro na preparação para DeepSeek: {str(e)}", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 async def backtest_strategy(symbol: str, start_date: str, end_date: str) -> Dict[str, Any]:
@@ -525,7 +525,7 @@ async def backtest_strategy(symbol: str, start_date: str, end_date: str) -> Dict
             "losing_trades": total_trades - winning_trades, "win_rate": win_rate,
             "total_return_percent": total_return * 100, "avg_return_percent": avg_return * 100,
             "results": results[-50:] if len(results) > 50 else results,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         return {"error": f"Erro no backtesting: {str(e)}", "symbol": symbol}

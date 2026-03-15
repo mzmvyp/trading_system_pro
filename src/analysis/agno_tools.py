@@ -3,7 +3,7 @@ Ferramentas AGNO com indicadores técnicos reais e análise de sentimento
 Updated with logging, constants, and improved error handling
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -252,7 +252,7 @@ async def get_market_data(symbol: str = "BTCUSDT") -> Dict[str, Any]:
             "open_interest": float(open_interest.get('openInterest', 0)),
             "klines_count": len(klines_df),
             # REMOVIDO: "recent_klines" - muito grande e causa erros de decodificação
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
         logger.info(f"Market data fetched for {symbol}: ${result['current_price']:.2f}")
@@ -265,7 +265,7 @@ async def get_market_data(symbol: str = "BTCUSDT") -> Dict[str, Any]:
         return {
             "error": f"Erro ao obter dados de mercado ({error_type}): {error_msg}",
             "symbol": symbol,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "error_type": error_type
         }
 
@@ -340,7 +340,8 @@ async def analyze_multiple_timeframes(symbol: str) -> Dict[str, Any]:
             for tf in timeframes:
                 try:
                     # Obter dados para timeframe específico usando BinanceClient
-                    klines_df = await client.get_klines(symbol, tf, limit=100)
+                    # exclude_forming=True: remove candle incompleto para evitar sinais falsos
+                    klines_df = await client.get_klines(symbol, tf, limit=100, exclude_forming=True)
 
                     if not klines_df.empty and len(klines_df) >= 20:
                         # Resetar índice para ter timestamp como coluna
@@ -424,7 +425,7 @@ async def analyze_multiple_timeframes(symbol: str) -> Dict[str, Any]:
             "neutral_count": neutral_timeframes,
             "weighted_bullish": weighted_bullish,
             "weighted_bearish": weighted_bearish,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     except Exception as e:
@@ -476,7 +477,7 @@ async def analyze_order_flow(symbol: str) -> Dict[str, Any]:
                 "buy_volume": buy_volume,
                 "sell_volume": sell_volume,
                 "buy_pressure": buy_volume > sell_volume * 1.2,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
     except Exception as e:
@@ -496,8 +497,10 @@ async def analyze_technical_indicators(symbol: str = "BTCUSDT") -> Dict[str, Any
         from src.exchange.client import BinanceClient
 
         # CORRIGIDO: Obter klines usando BinanceClient async
+        # exclude_forming=True: remove o último candle (incompleto) para evitar
+        # indicadores calculados com dados parciais que causam entradas atrasadas
         async with BinanceClient() as client:
-            klines_df = await client.get_klines(symbol, '1h', limit=200)  # Aumentado para ter dados suficientes para EMA 200
+            klines_df = await client.get_klines(symbol, '1h', limit=200, exclude_forming=True)
 
         if klines_df.empty or len(klines_df) < 50:  # Mínimo para indicadores confiáveis
             return {
@@ -712,7 +715,7 @@ async def analyze_technical_indicators(symbol: str = "BTCUSDT") -> Dict[str, Any
             "fibonacci_levels": fib_levels,
             "support": float(support) if not np.isnan(support) else current_price * 0.95,
             "resistance": float(resistance) if not np.isnan(resistance) else current_price * 1.05,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         error_type = type(e).__name__
@@ -721,7 +724,7 @@ async def analyze_technical_indicators(symbol: str = "BTCUSDT") -> Dict[str, Any
         return {
             "error": f"Erro na análise técnica ({error_type}): {error_msg}",
             "symbol": symbol,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "error_type": error_type
         }
 
@@ -824,13 +827,13 @@ async def analyze_market_sentiment(symbol: str = "BTCUSDT") -> Dict[str, Any]:
                 "funding_rate": funding_rate,
                 "open_interest": open_interest
             },
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         return {
             "error": f"Erro na análise de sentimento: {str(e)}",
             "symbol": symbol,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
 
@@ -1230,7 +1233,7 @@ async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
             return {
                 "error": f"Erro ao coletar dados de mercado: {error_summary}",
                 "symbol": symbol,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
         # Extrair valores principais
@@ -1311,7 +1314,7 @@ async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
         # Construir estrutura de análise
         analysis = {
             "symbol": symbol,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
 
             "price_context": {
                 "current": current_price,
@@ -1425,7 +1428,7 @@ async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
         return {
             "error": f"Erro ao preparar análise: {str(e)}",
             "symbol": symbol,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
 def _create_analysis_prompt(analysis: Dict[str, Any], market_classification: Dict[str, Any] = None) -> str:
@@ -1667,7 +1670,7 @@ async def get_deepseek_analysis(symbol: str) -> Dict[str, Any]:
                     "analysis_data": analysis,  # JSON de análise enviado
                     "deepseek_prompt": prompt,  # Prompt de texto enviado
                     "raw_response": response_content,  # Resposta bruta do DeepSeek
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 }
             except json.JSONDecodeError as e:
                 logger.warning(f"[DEEPSEEK] Erro ao decodificar JSON: {e}")
@@ -1679,14 +1682,14 @@ async def get_deepseek_analysis(symbol: str) -> Dict[str, Any]:
             "deepseek_prompt": prompt,  # Prompt de texto enviado
             "raw_response": response_content,  # Resposta bruta do DeepSeek
             "needs_agent_processing": True,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     except Exception as e:
         logger.exception(f"Erro na preparação para DeepSeek: {e}")
         return {
             "error": f"Erro na preparação para DeepSeek: {str(e)}",
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
 def _calculate_current_drawdown() -> float:
@@ -1727,7 +1730,7 @@ def _get_daily_trades_count() -> int:
     """
     try:
         from real_paper_trading import real_paper_trading
-        today = datetime.now().date()
+        today = datetime.now(timezone.utc).date()
         trades = real_paper_trading.get_trade_history()
         daily_trades = [t for t in trades if datetime.fromisoformat(t['timestamp']).date() == today]
         return len(daily_trades)
@@ -2040,7 +2043,7 @@ async def backtest_strategy(symbol: str, start_date: str, end_date: str) -> Dict
             "total_return_percent": total_return * 100,
             "avg_return_percent": avg_return * 100,
             "results": results[-50:] if len(results) > 50 else results,  # Últimos 50 trades
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     except Exception as e:

@@ -12,7 +12,7 @@ import hmac
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
@@ -726,7 +726,7 @@ class BinanceFuturesExecutor:
 
             # 12. Registrar execução completa
             execution_record = {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "symbol": symbol,
                 "source": source,
                 "signal": signal_type,
@@ -744,7 +744,7 @@ class BinanceFuturesExecutor:
             }
 
             # Salvar registro
-            record_file = self.orders_dir / f"execution_{symbol}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            record_file = self.orders_dir / f"execution_{symbol}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
             with open(record_file, "w") as f:
                 json.dump(execution_record, f, indent=2)
 
@@ -775,7 +775,7 @@ class BinanceFuturesExecutor:
     ):
         """Registra ordem em arquivo de log"""
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "symbol": symbol,
             "order_type": order_type,
             "side": side,
@@ -784,7 +784,7 @@ class BinanceFuturesExecutor:
             "result": result
         }
 
-        log_file = self.orders_dir / f"orders_{datetime.now().strftime('%Y%m%d')}.json"
+        log_file = self.orders_dir / f"orders_{datetime.now(timezone.utc).strftime('%Y%m%d')}.json"
 
         try:
             if log_file.exists():

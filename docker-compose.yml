@@ -10,6 +10,7 @@ services:
     container_name: trading_bot
     env_file: .env
     environment:
+      - TZ=UTC
       - PYTHONPATH=/app:/app/src
       - PYTHONUNBUFFERED=1
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
@@ -41,6 +42,7 @@ services:
     container_name: trading_dashboard
     env_file: .env
     environment:
+      - TZ=UTC
       - PYTHONPATH=/app:/app/src
     command: ["streamlit", "run", "src/dashboard/streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
     ports:
@@ -63,6 +65,7 @@ services:
     container_name: trading_ml_dashboard
     env_file: .env
     environment:
+      - TZ=UTC
       - PYTHONPATH=/app:/app/src
     command: ["streamlit", "run", "src/dashboard/ml_dashboard.py", "--server.port=8502", "--server.address=0.0.0.0"]
     ports:

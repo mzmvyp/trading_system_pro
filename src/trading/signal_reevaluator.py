@@ -20,7 +20,7 @@ NOVO: Time-Based Exit (saida por tempo)
 import asyncio
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -144,7 +144,7 @@ class SignalReevaluator:
                         if not context_timestamp:
                             # Assumir que foi aberta ha pelo menos o tempo minimo + intervalo
                             min_required_hours = settings.reevaluation_min_time_open_hours + settings.reevaluation_interval_hours
-                            assumed_open_time = datetime.now() - timedelta(hours=min_required_hours)
+                            assumed_open_time = datetime.now(timezone.utc) - timedelta(hours=min_required_hours)
                             context_timestamp = assumed_open_time.isoformat()
                             logger.info(f"[REEVALUATOR] {symbol}: Sem timestamp no state.json, assumindo aberta ha {min_required_hours}h")
 
@@ -219,8 +219,8 @@ class SignalReevaluator:
 
         # Verificar tempo que a posicao esta aberta
         try:
-            open_time = datetime.fromisoformat(position.get("timestamp", datetime.now().isoformat()))
-            hours_open = (datetime.now() - open_time).total_seconds() / 3600
+            open_time = datetime.fromisoformat(position.get("timestamp", datetime.now(timezone.utc).isoformat()))
+            hours_open = (datetime.now(timezone.utc) - open_time).total_seconds() / 3600
 
             if hours_open < settings.reevaluation_min_time_open_hours:
                 logger.info(f"[REEVALUATOR] {position_key}: Posicao aberta ha apenas {hours_open:.2f}h (min: {settings.reevaluation_min_time_open_hours}h) - PULANDO")
@@ -231,7 +231,7 @@ class SignalReevaluator:
         # Verificar tempo desde ultima reavaliacao
         last_eval = self.last_reevaluation.get(position_key)
         if last_eval:
-            hours_since_eval = (datetime.now() - last_eval).total_seconds() / 3600
+            hours_since_eval = (datetime.now(timezone.utc) - last_eval).total_seconds() / 3600
             if hours_since_eval < settings.reevaluation_interval_hours:
                 logger.info(f"[REEVALUATOR] {position_key}: Ultima reavaliacao ha {hours_since_eval:.2f}h (intervalo: {settings.reevaluation_interval_hours}h) - PULANDO")
                 return False
@@ -316,7 +316,7 @@ class SignalReevaluator:
 
             result = {
                 "symbol": symbol,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "market_data": market_data,
                 "technical_indicators": technical,
                 "sentiment": sentiment,
@@ -369,8 +369,8 @@ class SignalReevaluator:
 
         # Calcular tempo aberto
         try:
-            open_time = datetime.fromisoformat(position.get("timestamp", datetime.now().isoformat()))
-            hours_open = (datetime.now() - open_time).total_seconds() / 3600
+            open_time = datetime.fromisoformat(position.get("timestamp", datetime.now(timezone.utc).isoformat()))
+            hours_open = (datetime.now(timezone.utc) - open_time).total_seconds() / 3600
         except Exception:
             hours_open = 0
 
@@ -531,7 +531,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                     "confidence": 5,
                     "reasoning": "TP1 ainda nao foi atingido - aguardando",
                     "tp1_pending": True,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 }
 
         logger.info(f"[REEVALUATOR] Iniciando reavaliacao de {position_key} (TP1 atingido)...")
@@ -546,7 +546,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                     "action": "HOLD",
                     "confidence": 0,
                     "error": f"Erro ao coletar dados de mercado: {market_data.get('error')}",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 }
 
             # 2. Criar prompt de reavaliacao
@@ -561,10 +561,10 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
             result["entry_price"] = position.get("entry_price")
             result["current_price"] = market_data.get("current_price")
             result["pnl_percent"] = self._calculate_pnl_percent(position, market_data.get("current_price", 0))
-            result["timestamp"] = datetime.now().isoformat()
+            result["timestamp"] = datetime.now(timezone.utc).isoformat()
 
             # 5. Atualizar timestamp de ultima reavaliacao
-            self.last_reevaluation[position_key] = datetime.now()
+            self.last_reevaluation[position_key] = datetime.now(timezone.utc)
 
             # 6. Salvar no historico
             self.reevaluation_history.append(result)
@@ -581,7 +581,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                 "action": "HOLD",
                 "confidence": 0,
                 "error": str(e),
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
     def _calculate_pnl_percent(self, position: Dict[str, Any], current_price: float) -> float:
@@ -672,7 +672,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
     def _save_reevaluation_log(self, result: Dict[str, Any]):
         """Salva log de reavaliacao"""
         try:
-            date_str = datetime.now().strftime("%Y%m%d")
+            date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
             log_file = Path(f"reevaluation_logs/reevaluation_{date_str}.json")
 
             # Carregar logs existentes
@@ -890,7 +890,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                 if position_key in state.get("positions", {}):
                     old_stop = state["positions"][position_key].get("stop_loss")
                     state["positions"][position_key]["stop_loss"] = new_stop
-                    state["positions"][position_key]["stop_adjusted_at"] = datetime.now().isoformat()
+                    state["positions"][position_key]["stop_adjusted_at"] = datetime.now(timezone.utc).isoformat()
                     state["positions"][position_key]["stop_adjusted_reason"] = "REEVALUATION"
 
                     with open(state_file, "w", encoding="utf-8") as f:
@@ -1035,7 +1035,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                 if position_key in state.get("positions", {}):
                     old_tp = state["positions"][position_key].get("take_profit_1")
                     state["positions"][position_key]["take_profit_1"] = new_tp
-                    state["positions"][position_key]["tp_adjusted_at"] = datetime.now().isoformat()
+                    state["positions"][position_key]["tp_adjusted_at"] = datetime.now(timezone.utc).isoformat()
 
                     with open(state_file, "w", encoding="utf-8") as f:
                         json.dump(state, f, indent=2)
@@ -1143,7 +1143,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
 
             if result.get("success"):
                 # Marcar como ajustado
-                self.tp1_stop_adjusted[position_key] = datetime.now()
+                self.tp1_stop_adjusted[position_key] = datetime.now(timezone.utc)
                 logger.info(f"[TP1 AJUSTE] {position_key}: Stop ajustado de ${result.get('old_stop', 0):.4f} para ${result.get('new_stop', 0):.4f}")
 
                 # Atualizar state.json se em paper mode
@@ -1171,7 +1171,7 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
 
             if position_key in state.get("positions", {}):
                 state["positions"][position_key]["stop_loss"] = new_stop
-                state["positions"][position_key]["stop_adjusted_at"] = datetime.now().isoformat()
+                state["positions"][position_key]["stop_adjusted_at"] = datetime.now(timezone.utc).isoformat()
                 state["positions"][position_key]["stop_adjusted_reason"] = "TP1_HIT_DEEPSEEK"
 
                 with open(state_file, "w", encoding="utf-8") as f:

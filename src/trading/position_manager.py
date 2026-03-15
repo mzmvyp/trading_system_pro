@@ -11,7 +11,7 @@ Features:
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -91,7 +91,7 @@ class PositionManager:
     ):
         """Record a completed trade."""
         trade = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "symbol": symbol,
             "signal_type": signal_type,
             "result": result,
@@ -161,7 +161,7 @@ class PositionManager:
 
         try:
             open_time = datetime.fromisoformat(timestamp_str)
-            hours_open = (datetime.now() - open_time).total_seconds() / 3600
+            hours_open = (datetime.now(timezone.utc) - open_time).total_seconds() / 3600
 
             if "SCALP" in operation_type:
                 max_hours = self.config.time_exit_scalp_candles * (5 / 60)
@@ -182,7 +182,7 @@ class PositionManager:
         if not self.config.post_profit_cooldown_enabled:
             return False, 0
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         for trade in reversed(self.trade_history):
             if trade.get("symbol") != symbol:
                 continue
@@ -210,7 +210,7 @@ class PositionManager:
         if not self.config.trade_limit_enabled:
             return True, "OK"
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         trades_today_symbol = 0
         trades_today_total = 0
@@ -250,7 +250,7 @@ class PositionManager:
         if not self.config.dynamic_confidence_enabled:
             return self.config.base_confidence_threshold
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=self.config.recent_trade_hours)
 
         for trade in reversed(self.trade_history):

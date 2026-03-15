@@ -4,7 +4,7 @@ Extracts structured trading signals from text using JSON parsing and regex fallb
 """
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from src.core.logger import get_logger
@@ -117,7 +117,7 @@ async def process_agent_response(response: Any, symbol: str) -> Dict[str, Any]:
             logger.info(f"[SINAL DIRETO] Usando sinal do dict: {response.get('signal', 'N/A')}")
             return {
                 "symbol": symbol,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "signal": response.get("signal", "NO_SIGNAL"),
                 "entry_price": response.get("entry_price"),
                 "stop_loss": response.get("stop_loss"),
@@ -135,14 +135,14 @@ async def process_agent_response(response: Any, symbol: str) -> Dict[str, Any]:
 
     signal = {
         "symbol": symbol,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "agent_response": response_text[:500] if response_text else "N/A",
     }
 
     if not response_text:
         logger.error("[ERRO] Não foi possível extrair conteúdo da resposta do AGNO")
         return {
-            "symbol": symbol, "timestamp": datetime.now().isoformat(),
+            "symbol": symbol, "timestamp": datetime.now(timezone.utc).isoformat(),
             "signal": "NO_SIGNAL", "confidence": 0,
             "reason": "Erro ao extrair resposta do AGNO"
         }

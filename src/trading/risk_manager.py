@@ -3,7 +3,7 @@ Risk management and position validation
 """
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from src.core.logger import get_logger
@@ -18,7 +18,7 @@ _sl_cooldown_registry: Dict[str, datetime] = {}
 
 def register_sl_hit(symbol: str):
     """Registra que um símbolo teve SL atingido (para cooldown)"""
-    _sl_cooldown_registry[symbol] = datetime.now()
+    _sl_cooldown_registry[symbol] = datetime.now(timezone.utc)
     logger.warning(f"[COOLDOWN] {symbol}: bloqueado por {_sl_cooldown_hours}h após stop loss")
 
 
@@ -27,7 +27,7 @@ def _check_sl_cooldown(symbol: str) -> bool:
     last_sl = _sl_cooldown_registry.get(symbol)
     if not last_sl:
         return False
-    hours_since = (datetime.now() - last_sl).total_seconds() / 3600
+    hours_since = (datetime.now(timezone.utc) - last_sl).total_seconds() / 3600
     if hours_since < _sl_cooldown_hours:
         return True
     # Cooldown expirado, limpar
@@ -75,7 +75,7 @@ def _get_daily_trades_count() -> int:
     """Retorna o número de trades executados hoje."""
     try:
         from src.trading.paper_trading import real_paper_trading
-        today = datetime.now().date()
+        today = datetime.now(timezone.utc).date()
         trades = real_paper_trading.get_trade_history()
         daily_trades = [t for t in trades if datetime.fromisoformat(t['timestamp']).date() == today]
         return len(daily_trades)
@@ -107,7 +107,7 @@ def validate_risk_and_position(
 
         # Check cooldown pós-stop (evita whipsaw)
         if _check_sl_cooldown(symbol):
-            remaining = _sl_cooldown_hours - (datetime.now() - _sl_cooldown_registry[symbol]).total_seconds() / 3600
+            remaining = _sl_cooldown_hours - (datetime.now(timezone.utc) - _sl_cooldown_registry[symbol]).total_seconds() / 3600
             return {
                 "can_execute": False,
                 "reason": f"Cooldown pos-stop ativo para {symbol}: {remaining:.1f}h restantes (evita whipsaw)",

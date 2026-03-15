@@ -6,7 +6,7 @@ Monitora preços, executa stop loss/take profit automaticamente
 import asyncio
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -129,7 +129,7 @@ class RealPaperTradingSystem:
                     state = {
                         "positions": self.positions,
                         "trade_history": self.trade_history,
-                        "last_update": datetime.now().isoformat()
+                        "last_update": datetime.now(timezone.utc).isoformat()
                     }
 
                     state_file = Path("portfolio/state.json")
@@ -317,7 +317,7 @@ class RealPaperTradingSystem:
             # REMOVIDO: Verificação de saldo - sistema agora foca apenas em P&L
 
             # Criar trade
-            trade_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            trade_id = f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
             trade = {
                 "trade_id": trade_id,
                 "symbol": symbol,
@@ -332,7 +332,7 @@ class RealPaperTradingSystem:
                 "take_profit_1": take_profit_1,
                 "take_profit_2": take_profit_2,
                 "confidence": confidence,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "OPEN",
                 "max_profit_reached": 0.0,
                 "max_loss_reached": 0.0,
@@ -481,10 +481,10 @@ class RealPaperTradingSystem:
 
                     # NOVO: Verificar timeout baseado no tipo de operação
                     operation_type = position.get("operation_type", "SWING_TRADE")
-                    entry_time_str = position.get("timestamp", datetime.now().isoformat())
+                    entry_time_str = position.get("timestamp", datetime.now(timezone.utc).isoformat())
                     try:
                         entry_time = datetime.fromisoformat(entry_time_str)
-                        hours_open = (datetime.now() - entry_time).total_seconds() / 3600
+                        hours_open = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
 
                         max_hours = {
                             "SCALP": 0.5,        # 30 minutos
@@ -621,7 +621,7 @@ class RealPaperTradingSystem:
                 "pnl_percent": weighted_pnl_percent,  # P&L ponderado
                 "pnl_percent_raw": pnl_percent_this_part,  # P&L bruto para referência
                 "status": "CLOSED_PARTIAL",
-                "close_timestamp": datetime.now().isoformat(),
+                "close_timestamp": datetime.now(timezone.utc).isoformat(),
                 "close_reason": reason
             }
             self.trade_history.append(partial_close_entry)
@@ -685,7 +685,7 @@ class RealPaperTradingSystem:
                     trade["close_price"] = current_price
                     trade["pnl_percent"] = total_pnl_percent  # P&L em %
                     trade["status"] = "CLOSED"
-                    trade["close_timestamp"] = datetime.now().isoformat()
+                    trade["close_timestamp"] = datetime.now(timezone.utc).isoformat()
                     trade["close_reason"] = reason
                     break
 
@@ -693,7 +693,7 @@ class RealPaperTradingSystem:
             position["close_price"] = current_price
             position["pnl_percent"] = total_pnl_percent
             position["status"] = "CLOSED"
-            position["close_timestamp"] = datetime.now().isoformat()
+            position["close_timestamp"] = datetime.now(timezone.utc).isoformat()
             position["close_reason"] = reason
 
             # Remover da posição ativa (usar position_key, não symbol)
@@ -810,7 +810,7 @@ class RealPaperTradingSystem:
 
     def _log_trade_close(self, symbol: str, price: float, pnl_percent: float, reason: str):
         """Log de fechamento de trade (apenas %)"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         log_entry = {
             "timestamp": timestamp,
             "symbol": symbol,
@@ -820,7 +820,7 @@ class RealPaperTradingSystem:
         }
 
         # Salvar log
-        log_file = f"simulation_logs/trade_close_{datetime.now().strftime('%Y%m%d')}.json"
+        log_file = f"simulation_logs/trade_close_{datetime.now(timezone.utc).strftime('%Y%m%d')}.json"
         try:
             if os.path.exists(log_file):
                 with open(log_file, "r") as f:
@@ -988,14 +988,14 @@ class RealPaperTradingSystem:
             history = self.get_trade_history()
 
             report = {
-                "report_date": datetime.now().isoformat(),
+                "report_date": datetime.now(timezone.utc).isoformat(),
                 "summary": summary,
                 "trade_history": history,
                 "open_positions": self.get_open_positions(),
                 "simulation_type": "REAL_PAPER_TRADING"
             }
 
-            filename = f"portfolio/performance_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            filename = f"portfolio/performance_report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
             with open(filename, "w") as f:
                 json.dump(report, f, indent=2)
 

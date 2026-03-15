@@ -10,7 +10,7 @@ Verifica saúde das posições em tempo real:
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.core.logger import get_logger
@@ -211,7 +211,7 @@ class PositionMonitor:
                     continue
 
                 # Verificar intervalo mínimo de reavaliação
-                now = datetime.now()
+                now = datetime.now(timezone.utc)
                 last_reeval = self._last_reeval.get(symbol)
                 if last_reeval:
                     hours_since = (now - last_reeval).total_seconds() / 3600
@@ -370,7 +370,7 @@ class PositionMonitor:
                 normalized_side = "LONG" if side in ("BUY", "LONG") else "SHORT"
 
                 # Verificar intervalo mínimo de reavaliação
-                now = datetime.now()
+                now = datetime.now(timezone.utc)
                 last_reeval = self._last_reeval.get(symbol)
                 if last_reeval:
                     hours_since = (now - last_reeval).total_seconds() / 3600

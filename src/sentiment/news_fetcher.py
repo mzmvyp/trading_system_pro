@@ -5,7 +5,7 @@ Suporta CryptoCompare e mock para desenvolvimento.
 """
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import requests
@@ -47,7 +47,7 @@ class NewsFetcher:
             logger.debug("CryptoCompare falhou, usando mock: %s", e)
         if not news_items:
             news_items = self._fetch_mock_news(symbol)
-        cutoff_time = datetime.now() - timedelta(hours=hours_back)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_back)
         news_items = [n for n in news_items if n.published_at >= cutoff_time]
         return news_items[:max_items]
 
@@ -79,7 +79,7 @@ class NewsFetcher:
             return []
 
     def _fetch_mock_news(self, symbol: str) -> List[NewsItem]:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         mock = {
             "BTC": [("Bitcoin institutional adoption milestone", "positive"), ("Record BTC volume", "positive")],
             "ETH": [("Ethereum upgrade successful", "positive"), ("DeFi TVL growth", "positive")],
@@ -94,7 +94,7 @@ class NewsFetcher:
         """Converte NewsItems em strings para o LLM."""
         summaries = []
         for item in news_items:
-            age = datetime.now() - item.published_at
+            age = datetime.now(timezone.utc) - item.published_at
             hours_ago = int(age.total_seconds() / 3600)
             summaries.append(f"[{hours_ago}h ago] {item.title} ({item.source})")
         return summaries

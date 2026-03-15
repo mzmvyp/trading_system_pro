@@ -8,7 +8,7 @@ Rules:
 - NEUTRAL: Allows both
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, Optional, Tuple
 
@@ -151,7 +151,7 @@ class MarketRegimeFilter:
 
             self.current_regime = regime
             self.regime_confidence = confidence
-            self.last_analysis_time = datetime.now()
+            self.last_analysis_time = datetime.now(timezone.utc)
             self.btc_data = {
                 "current_price": current_price,
                 "price_change_24h": price_change_24h,
@@ -172,7 +172,7 @@ class MarketRegimeFilter:
     def _is_cache_valid(self) -> bool:
         if not self.last_analysis_time:
             return False
-        return (datetime.now() - self.last_analysis_time).total_seconds() < self.cache_duration_minutes * 60
+        return (datetime.now(timezone.utc) - self.last_analysis_time).total_seconds() < self.cache_duration_minutes * 60
 
     def should_allow_signal(self, signal_type: str) -> Tuple[bool, str]:
         """Check if a signal should be allowed based on current regime."""

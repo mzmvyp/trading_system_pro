@@ -11,7 +11,7 @@ Le sinais salvos em signals/ e verifica contra dados reais da Binance:
 import glob
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List
 
 import requests
@@ -244,7 +244,7 @@ def evaluate_signal(signal: Dict) -> Dict:
                 return result
 
     # Se não atingiu nada, sinal ainda ativo ou expirou
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     hours_since = (now - sig_time).total_seconds() / 3600
 
     if hours_since > 120:  # > 5 dias

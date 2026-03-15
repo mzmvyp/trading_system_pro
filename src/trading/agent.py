@@ -5,7 +5,7 @@ import asyncio
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -77,7 +77,7 @@ class AgnoTradingAgent:
         Path("paper_trades").mkdir(exist_ok=True)
 
         # Criar estrutura de diretórios para respostas do DeepSeek (ano/mês/dia)
-        today = datetime.now()
+        today = datetime.now(timezone.utc)
         deepseek_logs_dir = Path(f"deepseek_logs/{today.year}/{today.month:02d}/{today.day:02d}")
         deepseek_logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -371,7 +371,7 @@ Responda APENAS com JSON:
                         "signal": "NO_SIGNAL",
                         "confidence": 0,
                         "reason": f"Ja existe posicao {side} aberta na Binance para {symbol}",
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                         "source": "AGNO"
                     }
             except Exception as e:
@@ -388,7 +388,7 @@ Responda APENAS com JSON:
         min_interval = settings.min_analysis_interval_hours
 
         # 1. Verificação em MEMÓRIA (impossível de bypassar)
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         if symbol in AgnoTradingAgent._last_analysis_time:
             last_time = AgnoTradingAgent._last_analysis_time[symbol]
             hours_since = (now - last_time).total_seconds() / 3600
@@ -416,8 +416,9 @@ Responda APENAS com JSON:
                         except ValueError:
                             last_timestamp = datetime.fromisoformat(last_timestamp_str)
 
-                        if last_timestamp.tzinfo is not None:
-                            last_timestamp = last_timestamp.replace(tzinfo=None)
+                        # Garantir que last_timestamp é timezone-aware (UTC)
+                        if last_timestamp.tzinfo is None:
+                            last_timestamp = last_timestamp.replace(tzinfo=timezone.utc)
 
                         hours_since = (now - last_timestamp).total_seconds() / 3600
                         if hours_since < min_interval:
@@ -452,7 +453,7 @@ Responda APENAS com JSON:
                     deepseek_signal = {
                         "symbol": symbol,
                         "source": "DEEPSEEK",
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                         "signal": deepseek_result.get("signal", "NO_SIGNAL"),
                         "entry_price": deepseek_result.get("entry_price"),
                         "stop_loss": deepseek_result.get("stop_loss"),
@@ -731,7 +732,7 @@ Responda APENAS com JSON:
             signal = agno_signal
 
             # Salvar timestamp da última análise (MEMÓRIA + ARQUIVO)
-            analysis_time = datetime.now()
+            analysis_time = datetime.now(timezone.utc)
             AgnoTradingAgent._last_analysis_time[symbol] = analysis_time
             try:
                 last_analysis_file = f"signals/agno_{symbol}_last_analysis.json"
@@ -828,7 +829,7 @@ Responda APENAS com JSON:
                 logger.info(f"[SINAL DIRETO] Usando sinal do dict: {response.get('signal', 'N/A')}")
                 return {
                     "symbol": symbol,
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "signal": response.get("signal", "NO_SIGNAL"),
                     "entry_price": response.get("entry_price"),
                     "stop_loss": response.get("stop_loss"),
@@ -848,7 +849,7 @@ Responda APENAS com JSON:
         # Extrair informações da resposta
         signal = {
             "symbol": symbol,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "agent_response": response_text[:500] if response_text else "N/A",  # Limitar tamanho
         }
 
@@ -856,7 +857,7 @@ Responda APENAS com JSON:
             logger.error("[ERRO] Não foi possível extrair conteúdo da resposta do AGNO")
             return {
                 "symbol": symbol,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "signal": "NO_SIGNAL",
                 "confidence": 0,
                 "reason": "Erro ao extrair resposta do AGNO"
@@ -1310,7 +1311,7 @@ Responda APENAS com JSON:
         signal["execution_result"] = None
         signal["ml_probability"] = signal.get("ml_probability", None)
 
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
         filename = f"signals/agno_{symbol}_{timestamp}.json"
         signal["_signal_file"] = filename
 
@@ -1345,7 +1346,7 @@ Responda APENAS com JSON:
             saved["executed"] = success
             saved["execution_mode"] = mode
             saved["execution_result"] = "SUCCESS" if success else f"FAILED: {details}"
-            saved["execution_time"] = datetime.now().isoformat()
+            saved["execution_time"] = datetime.now(timezone.utc).isoformat()
 
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
@@ -1369,7 +1370,7 @@ Responda APENAS com JSON:
             analysis_data: JSON de análise enviado (dados sumarizados)
         """
         try:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             # Criar diretório: deepseek_logs/YYYY/MM/DD
             log_dir = Path(f"deepseek_logs/{now.year}/{now.month:02d}/{now.day:02d}")
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -1419,7 +1420,7 @@ Responda APENAS com JSON:
             "signal": "HOLD",
             "confidence": 0,
             "error": error,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     async def monitor_continuous(self, symbols: List[str], interval: int = 300):
