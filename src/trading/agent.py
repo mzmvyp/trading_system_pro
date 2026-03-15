@@ -472,11 +472,26 @@ Responda APENAS com JSON:
                     self._save_signal(deepseek_signal)
 
                     if deepseek_signal.get("signal") in ["BUY", "SELL"]:
+                        # HARD BLOCK: Verificar tendência 4h ANTES de tudo
                         try:
                             trend_data = await get_trend(symbol)
                         except Exception as e:
                             logger.warning(f"[TREND] Erro ao obter tendência: {e}")
                             trend_data = None
+
+                        # Bloquear sinais contra tendência antes de validar
+                        if trend_data:
+                            ds_dir = deepseek_signal.get("signal")
+                            if ds_dir == "BUY" and not trend_data.get("allow_long", True):
+                                logger.warning(f"[TREND BLOCK] DEEPSEEK BUY {symbol} BLOQUEADO: tendência bearish")
+                                print(f"[TREND] DEEPSEEK BUY {symbol} BLOQUEADO - tendência de baixa no 4h")
+                                deepseek_signal["signal"] = "NO_SIGNAL"
+                            elif ds_dir == "SELL" and not trend_data.get("allow_short", True):
+                                logger.warning(f"[TREND BLOCK] DEEPSEEK SELL {symbol} BLOQUEADO: tendência bullish")
+                                print(f"[TREND] DEEPSEEK SELL {symbol} BLOQUEADO - tendência de alta no 4h")
+                                deepseek_signal["signal"] = "NO_SIGNAL"
+
+                    if deepseek_signal.get("signal") in ["BUY", "SELL"]:
                         validation = validate_risk_and_position(deepseek_signal, symbol, _trend_data=trend_data)
                         if validation.get("can_execute"):
                             logger.info(f"[DEEPSEEK] Executando sinal {deepseek_signal.get('signal')} para {symbol}")
@@ -567,20 +582,53 @@ Responda APENAS com JSON:
                 logger.warning(f"[ML] Erro ao coletar indicadores para ML: {e}")
 
             # CORRIGIDO: Se não tem entry_price, obter do mercado (async)
+            # Se não tem SL/TP, calcular baseado em ATR (não % arbitrário)
             if agno_signal.get("signal") in ["BUY", "SELL"] and not agno_signal.get("entry_price"):
                 try:
                     market_data = await get_market_data(symbol)
                     if market_data and "current_price" in market_data:
                         agno_signal["entry_price"] = market_data["current_price"]
-                        # Calcular stop loss se não tiver
-                        if not agno_signal.get("stop_loss"):
-                            if agno_signal["signal"] == "BUY":
-                                agno_signal["stop_loss"] = agno_signal["entry_price"] * 0.98
-                            else:  # SELL
-                                agno_signal["stop_loss"] = agno_signal["entry_price"] * 1.02
-                        logger.info(f"[AGNO] Preço atual obtido: Entry=${agno_signal['entry_price']}, SL=${agno_signal.get('stop_loss')}")
                 except Exception as e:
                     logger.error(f"[AGNO] Erro ao obter preço atual: {e}")
+
+            if agno_signal.get("signal") in ["BUY", "SELL"] and agno_signal.get("entry_price"):
+                entry = agno_signal["entry_price"]
+                # Usar ATR do analysis_data para SL/TP se disponível
+                atr_value = agno_signal.get("atr", 0)
+                if atr_value and atr_value > 0:
+                    # SL = 1.5x ATR, TP1 = 3x ATR, TP2 = 5x ATR (mínimo 2:1 R:R)
+                    sl_dist = atr_value * 1.5
+                    tp1_dist = atr_value * 3.0
+                    tp2_dist = atr_value * 5.0
+
+                    if not agno_signal.get("stop_loss"):
+                        if agno_signal["signal"] == "BUY":
+                            agno_signal["stop_loss"] = entry - sl_dist
+                        else:
+                            agno_signal["stop_loss"] = entry + sl_dist
+
+                    if not agno_signal.get("take_profit_1"):
+                        if agno_signal["signal"] == "BUY":
+                            agno_signal["take_profit_1"] = entry + tp1_dist
+                        else:
+                            agno_signal["take_profit_1"] = entry - tp1_dist
+
+                    if not agno_signal.get("take_profit_2"):
+                        if agno_signal["signal"] == "BUY":
+                            agno_signal["take_profit_2"] = entry + tp2_dist
+                        else:
+                            agno_signal["take_profit_2"] = entry - tp2_dist
+
+                    logger.info(f"[ATR SL/TP] ATR={atr_value:.4f}, SL_dist={sl_dist:.4f}, TP1_dist={tp1_dist:.4f}")
+                else:
+                    # Fallback: 1.5% SL, 3% TP1 (mantém 2:1 R:R mínimo)
+                    if not agno_signal.get("stop_loss"):
+                        if agno_signal["signal"] == "BUY":
+                            agno_signal["stop_loss"] = entry * 0.985
+                        else:
+                            agno_signal["stop_loss"] = entry * 1.015
+
+                logger.info(f"[AGNO] Entry=${entry}, SL=${agno_signal.get('stop_loss')}")
 
             # Salvar sinal AGNO
             self._save_signal(agno_signal)
@@ -589,6 +637,27 @@ Responda APENAS com JSON:
             if not settings.accept_agno_signals:
                 logger.info("[AGNO] Sinais AGNO desabilitados (accept_agno_signals=False). Sinal ignorado.")
             elif agno_signal.get("signal") in ["BUY", "SELL"]:
+                # ========================================
+                # HARD BLOCK 1: CONFLUÊNCIA MULTI-TIMEFRAME
+                # Requer pelo menos 3 timeframes na mesma direção do sinal
+                # Sem confluência = sem trade. Sem exceções.
+                # ========================================
+                sig_dir = agno_signal.get("signal")
+                bullish_count = agno_signal.get("bullish_tf_count", 0)
+                bearish_count = agno_signal.get("bearish_tf_count", 0)
+
+                if sig_dir == "BUY" and bullish_count < 3:
+                    logger.warning(f"[CONFLUENCE BLOCK] BUY {symbol} BLOQUEADO: apenas {bullish_count}/5 TFs bullish (minimo 3)")
+                    print(f"[CONFLUENCE] BUY {symbol} BLOQUEADO - apenas {bullish_count}/5 timeframes bullish")
+                    agno_signal["signal"] = "NO_SIGNAL"
+                    agno_signal["block_reason"] = f"Confluencia insuficiente: {bullish_count}/5 TFs bullish"
+                elif sig_dir == "SELL" and bearish_count < 3:
+                    logger.warning(f"[CONFLUENCE BLOCK] SELL {symbol} BLOQUEADO: apenas {bearish_count}/5 TFs bearish (minimo 3)")
+                    print(f"[CONFLUENCE] SELL {symbol} BLOQUEADO - apenas {bearish_count}/5 timeframes bearish")
+                    agno_signal["signal"] = "NO_SIGNAL"
+                    agno_signal["block_reason"] = f"Confluencia insuficiente: {bearish_count}/5 TFs bearish"
+
+            if agno_signal.get("signal") in ["BUY", "SELL"]:
                 # VALIDAÇÃO ML: Usar modelo treinado para validar confluência
                 ml_validation = self._validate_with_ml_model(agno_signal)
                 ml_prob = ml_validation.get('probability', 0)

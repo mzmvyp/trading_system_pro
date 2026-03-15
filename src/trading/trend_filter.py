@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 
 # Cache: {symbol: {"trend": str, "ema50": float, "ema200": float, "timestamp": float, "strength": float}}
 _trend_cache: Dict[str, Dict[str, Any]] = {}
-CACHE_TTL_SECONDS = 3600  # 1 hora de cache
+CACHE_TTL_SECONDS = 900  # 15 minutos de cache - adaptar rápido a mudanças
 
 
 async def _fetch_klines_4h(symbol: str, limit: int = 250) -> Optional[pd.DataFrame]:
@@ -144,45 +144,33 @@ async def get_trend(symbol: str) -> Dict[str, Any]:
 
     elif ema50_val > ema200_val:
         # EMA 50 acima da 200 = BULLISH
+        # REGRA ABSOLUTA: NUNCA shortar em tendência bullish. Sem exceções.
         trend = "BULLISH"
-        strength = min(ema_distance_pct / 2.0, 1.0)  # Normalizar para 0-1
+        strength = min(ema_distance_pct / 2.0, 1.0)
+        allow_long = True
+        allow_short = False  # NUNCA short em bullish
 
         if price_above_ema50 and price_above_ema200:
-            # Preço acima de ambas EMAs = tendência forte
-            allow_long = True
-            allow_short = False
             description = f"Tendência ALTA forte - preço acima de EMA50 e EMA200 ({ema_distance_pct:.2f}%)"
         elif price_above_ema200:
-            # Preço entre EMAs = pode estar corrigindo
-            allow_long = True
-            allow_short = True  # Permite short como correção
-            description = f"Tendência ALTA com correção - preço entre EMAs ({ema_distance_pct:.2f}%)"
+            description = f"Tendência ALTA - preço corrigindo entre EMAs ({ema_distance_pct:.2f}%)"
         else:
-            # Preço abaixo de ambas mas EMAs bullish = possível reversão
-            allow_long = True
-            allow_short = True
-            description = f"Tendência ALTA fraca - preço abaixo das EMAs ({ema_distance_pct:.2f}%)"
+            description = f"Tendência ALTA - preço testando suporte ({ema_distance_pct:.2f}%)"
 
     else:
         # EMA 50 abaixo da 200 = BEARISH
+        # REGRA ABSOLUTA: NUNCA comprar em tendência bearish. Sem exceções.
         trend = "BEARISH"
         strength = min(ema_distance_pct / 2.0, 1.0)
+        allow_long = False  # NUNCA long em bearish
+        allow_short = True
 
         if not price_above_ema50 and not price_above_ema200:
-            # Preço abaixo de ambas = tendência forte
-            allow_long = False
-            allow_short = True
             description = f"Tendência BAIXA forte - preço abaixo de EMA50 e EMA200 ({ema_distance_pct:.2f}%)"
         elif not price_above_ema200:
-            # Preço entre EMAs = pode estar corrigindo
-            allow_long = True  # Permite long como bounce
-            allow_short = True
-            description = f"Tendência BAIXA com correção - preço entre EMAs ({ema_distance_pct:.2f}%)"
+            description = f"Tendência BAIXA - preço corrigindo entre EMAs ({ema_distance_pct:.2f}%)"
         else:
-            # Preço acima de ambas mas EMAs bearish = possível reversão
-            allow_long = True
-            allow_short = True
-            description = f"Tendência BAIXA fraca - preço acima das EMAs ({ema_distance_pct:.2f}%)"
+            description = f"Tendência BAIXA - preço testando resistência ({ema_distance_pct:.2f}%)"
 
     result = {
         "trend": trend,

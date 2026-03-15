@@ -351,35 +351,66 @@ async def analyze_multiple_timeframes(symbol: str) -> Dict[str, Any]:
                             if col in df.columns:
                                 df[col] = pd.to_numeric(df[col], errors='coerce')
 
-                        # Calcular tendência simples
+                        # Calcular tendência usando EMA 20 e EMA 50 (mais robusto que SMA 20)
                         close_prices = df['close'].values
-                        sma_20 = talib.SMA(close_prices, timeperiod=20)[-1]
                         current_price = close_prices[-1]
 
-                        if current_price > sma_20:
-                            trend = "bullish"
-                        elif current_price < sma_20:
-                            trend = "bearish"
+                        if len(close_prices) >= 50:
+                            ema_20 = talib.EMA(close_prices, timeperiod=20)[-1]
+                            ema_50 = talib.EMA(close_prices, timeperiod=50)[-1]
+
+                            # Tendência = preço acima de AMBAS EMAs e EMA20 > EMA50
+                            if current_price > ema_20 > ema_50:
+                                trend = "bullish"
+                            elif current_price < ema_20 < ema_50:
+                                trend = "bearish"
+                            else:
+                                trend = "neutral"
                         else:
-                            trend = "neutral"
+                            ema_20 = talib.EMA(close_prices, timeperiod=20)[-1]
+                            ema_50 = ema_20  # fallback
+                            if current_price > ema_20:
+                                trend = "bullish"
+                            elif current_price < ema_20:
+                                trend = "bearish"
+                            else:
+                                trend = "neutral"
 
                         analyses[tf] = {
                             "trend": trend,
                             "current_price": float(current_price),
-                            "sma_20": float(sma_20)
+                            "ema_20": float(ema_20),
+                            "ema_50": float(ema_50)
                         }
                 except Exception as e:
                     logger.warning(f"Erro no timeframe {tf}: {e}")
                     continue
 
-        # Calcular confluência
-        bullish_timeframes = sum(1 for tf in analyses.values() if tf['trend'] == 'bullish')
-        bearish_timeframes = sum(1 for tf in analyses.values() if tf['trend'] == 'bearish')
-        neutral_timeframes = sum(1 for tf in analyses.values() if tf['trend'] == 'neutral')
+        # Calcular confluência COM PESO por timeframe
+        # Timeframes maiores têm MAIS peso (4h e 1d dominam a decisão)
+        tf_weights = {'5m': 0.5, '15m': 0.5, '1h': 1.0, '4h': 2.0, '1d': 3.0}
 
-        if bullish_timeframes > bearish_timeframes:
+        weighted_bullish = 0
+        weighted_bearish = 0
+        bullish_timeframes = 0
+        bearish_timeframes = 0
+        neutral_timeframes = 0
+
+        for tf_name, tf_data in analyses.items():
+            weight = tf_weights.get(tf_name, 1.0)
+            if tf_data['trend'] == 'bullish':
+                bullish_timeframes += 1
+                weighted_bullish += weight
+            elif tf_data['trend'] == 'bearish':
+                bearish_timeframes += 1
+                weighted_bearish += weight
+            else:
+                neutral_timeframes += 1
+
+        # Confluência baseada em peso (4h+1d = 5.0, supera 5m+15m+1h = 2.0)
+        if weighted_bullish > weighted_bearish:
             confluence = "bullish"
-        elif bearish_timeframes > bullish_timeframes:
+        elif weighted_bearish > weighted_bullish:
             confluence = "bearish"
         else:
             confluence = "neutral"
@@ -391,6 +422,8 @@ async def analyze_multiple_timeframes(symbol: str) -> Dict[str, Any]:
             "bullish_count": bullish_timeframes,
             "bearish_count": bearish_timeframes,
             "neutral_count": neutral_timeframes,
+            "weighted_bullish": weighted_bullish,
+            "weighted_bearish": weighted_bearish,
             "timestamp": datetime.now().isoformat()
         }
 
