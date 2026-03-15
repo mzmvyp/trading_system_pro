@@ -466,14 +466,15 @@ Analise os dados e decida com base nestas REGRAS OBJETIVAS:
 - TP1 no proximo nivel de resistencia/suporte. TP2 no nivel seguinte
 - Minimo 2:1 reward/risk (TP1 deve ser 2x a distancia do SL)
 
-## CONFIDENCE:
+## CONFIDENCE (escala 1-10):
+- Para BUY ou SELL: use SEMPRE confidence entre 6 e 10. Nunca devolva BUY/SELL com confidence 1-5.
 - 8-10: 6+ regras confirmando, sem conflitos, tendencia forte
-- 6-7: 4-5 regras confirmando, conflitos menores
-- 1-5: poucos sinais alinhados = USE NO_SIGNAL
+- 6-7: 4-5 regras confirmando, conflitos menores (minimo para dar sinal)
+- Se so tiver 1-5 regras alinhadas = devolva NO_SIGNAL (nao de sinal com confianca baixa)
 
 Responda APENAS com JSON:
 ```json
-{"signal":"BUY/SELL/NO_SIGNAL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":1-10,"reasoning":"Regras X,Y,Z confirmadas. Conflitos: nenhum/ABC"}
+{"signal":"BUY/SELL/NO_SIGNAL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":7,"reasoning":"Regras X,Y,Z confirmadas. Conflitos: nenhum/ABC"}
 ```"""
 
     async def analyze(self, symbol: str = "BTCUSDT") -> Dict[str, Any]:
@@ -1104,13 +1105,18 @@ Responda APENAS com JSON:
                 logger.info(f"[JSON ESTRUTURADO] Sinal extraído via JSON: {structured.get('signal', 'N/A')}")
                 # Validar campos obrigatórios
                 if structured.get("signal") in ["BUY", "SELL", "NO_SIGNAL"]:
+                    raw_conf = structured.get("confidence", 5)
+                    if isinstance(raw_conf, (int, float)):
+                        raw_conf = max(1, min(10, raw_conf))
+                    else:
+                        raw_conf = 5
                     signal.update({
                         "signal": structured.get("signal", "NO_SIGNAL"),
                         "entry_price": structured.get("entry_price"),
                         "stop_loss": structured.get("stop_loss"),
                         "take_profit_1": structured.get("take_profit_1"),
                         "take_profit_2": structured.get("take_profit_2"),
-                        "confidence": structured.get("confidence", 5)
+                        "confidence": raw_conf
                     })
                     # Validar se tem entrada para BUY/SELL
                     if signal["signal"] in ["BUY", "SELL"] and not signal.get("entry_price"):
@@ -1509,6 +1515,7 @@ Responda APENAS com JSON:
             if conf_match:
                 signal["confidence"] = int(conf_match.group(1))
                 break
+        signal["confidence"] = max(1, min(10, signal.get("confidence", 5)))
 
         return signal
 
