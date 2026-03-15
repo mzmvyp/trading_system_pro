@@ -115,14 +115,16 @@ class ContinuousOptimizer:
         symbols: list = None,
         interval: str = "1h",
         cycle_hours: int = 6,
-        days_back: int = 30,
-        n_iterations: int = 50,
+        days_back: int = 60,
+        n_iterations: int = 300,
+        min_score: float = 0.35,
     ):
         self.symbols = symbols or ["BTCUSDT"]
         self.interval = interval
         self.cycle_hours = cycle_hours
         self.days_back = days_back
         self.n_iterations = n_iterations
+        self.min_score = min_score
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._status: Dict = {
@@ -219,8 +221,8 @@ class ContinuousOptimizer:
 
                 best = results[0]
 
-                # Salvar se score é razoável (mínimo 0.3)
-                if best.score >= 0.3:
+                # Salvar apenas se score >= min_score (evita gravar estratégias ruins)
+                if best.score >= self.min_score:
                     save_best_config(
                         symbol=symbol,
                         interval=self.interval,
@@ -239,7 +241,7 @@ class ContinuousOptimizer:
                 else:
                     logger.warning(
                         f"[OPTIMIZER] Score too low for {symbol}: {best.score:.4f} "
-                        f"(min 0.3). Config NOT saved."
+                        f"(min {self.min_score}). Config NOT saved."
                     )
 
                 # Salvar resultados completos
@@ -258,14 +260,15 @@ def get_global_optimizer() -> Optional[ContinuousOptimizer]:
 
 
 def start_global_optimizer(symbols: list, interval: str = "1h",
-                           cycle_hours: int = 6, **kwargs) -> ContinuousOptimizer:
+                           cycle_hours: int = 6, min_score: float = 0.35, **kwargs) -> ContinuousOptimizer:
     """Inicia o otimizador global (chamado de main.py)."""
     global _global_optimizer
     if _global_optimizer and _global_optimizer._running:
         return _global_optimizer
 
     _global_optimizer = ContinuousOptimizer(
-        symbols=symbols, interval=interval, cycle_hours=cycle_hours, **kwargs
+        symbols=symbols, interval=interval, cycle_hours=cycle_hours,
+        min_score=min_score, **kwargs
     )
     _global_optimizer.start_continuous()
     return _global_optimizer

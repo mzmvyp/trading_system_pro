@@ -1081,7 +1081,12 @@ with tab4:
     st.markdown("Avalia cada sinal emitido contra dados reais do mercado (Binance klines)")
 
     try:
-        from src.trading.signal_tracker import evaluate_all_signals, get_performance_summary
+        from src.trading.signal_tracker import (
+            evaluate_all_signals,
+            get_performance_summary,
+            get_model_validator_metrics,
+            get_system_accuracy_report,
+        )
 
         @st.cache_data(ttl=120)
         def _load_evaluations():
@@ -1095,6 +1100,62 @@ with tab4:
         else:
             summary = get_performance_summary(evals)
             df_evals = pd.DataFrame(evals)
+
+            # Métricas por modelo (ML / LSTM acertaram ou erraram?)
+            model_metrics = get_model_validator_metrics(evals)
+            st.subheader("🎯 Validador de Modelos (quem acertou/errou)")
+            st.caption("Para cada sinal finalizado, registramos se o ML e o LSTM previram certo. Use para decidir se vale manter ou tirar um modelo.")
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            with mc1:
+                ml_acc = model_metrics.get("ml_accuracy")
+                st.metric("ML (sklearn) acurácia", f"{ml_acc:.1f}%" if ml_acc is not None else "—", help=f"Acertos: {model_metrics.get('ml_correct', 0)} / {model_metrics.get('ml_total', 0)}")
+            with mc2:
+                lstm_acc = model_metrics.get("lstm_accuracy")
+                st.metric("Bi-LSTM acurácia", f"{lstm_acc:.1f}%" if lstm_acc is not None else "—", help=f"Acertos: {model_metrics.get('lstm_correct', 0)} / {model_metrics.get('lstm_total', 0)}")
+            with mc3:
+                both_pct = model_metrics.get("both_agree_right_pct")
+                st.metric("Quando ML e LSTM concordaram e acertaram", f"{both_pct:.1f}%" if both_pct is not None else "—", help=f"Em {model_metrics.get('both_agree_total', 0)} sinais com ambos com opinião")
+            with mc4:
+                st.metric("Sinais finalizados (base)", model_metrics.get("total_closed", 0))
+            st.markdown("---")
+
+            # Acertividade por sistema (log: quem disse long/short e acertou)
+            st.subheader("📋 Acertividade por sistema (Long vs Short)")
+            st.caption("Registo em signals/model_votes_log.jsonl: cada sinal guarda o que cada sistema disse (LLM=BUY/SELL, ML, LSTM). Assim contabilizamos qual fonte ou direção tem maior acertividade.")
+            sys_report = get_system_accuracy_report()
+            if sys_report.get("total_records", 0) == 0:
+                st.info("Ainda não há registos no log. Execute uma reavaliação de sinais para popular (ou aguarde o cache atualizar).")
+            else:
+                # Por fonte (AGNO, DEEPSEEK)
+                by_src = sys_report.get("by_source", {})
+                if by_src:
+                    st.markdown("**Por fonte**")
+                    src_rows = []
+                    for src, d in by_src.items():
+                        src_rows.append({
+                            "Fonte": src,
+                            "Total": d["total"],
+                            "Acertos": d["wins"],
+                            "Acertividade %": f"{d.get('accuracy_pct', 0):.1f}",
+                            "BUY (long)": f"{d.get('buys', 0)} ({(d.get('buy_accuracy_pct') or 0):.0f}% acertos)" if d.get("buys") else "—",
+                            "SELL (short)": f"{d.get('sells', 0)} ({(d.get('sell_accuracy_pct') or 0):.0f}% acertos)" if d.get("sells") else "—",
+                        })
+                    st.dataframe(pd.DataFrame(src_rows), use_container_width=True, hide_index=True)
+                # Por direção (Long vs Short)
+                by_dir = sys_report.get("by_direction", {})
+                if by_dir:
+                    st.markdown("**Por direção (o que o sistema disse)**")
+                    dir_rows = [
+                        {"Direção": "Long (BUY)", "Total": by_dir.get("BUY", {}).get("total", 0), "Acertos": by_dir.get("BUY", {}).get("wins", 0), "Acertividade %": f"{by_dir.get('BUY', {}).get('accuracy_pct', 0):.1f}"},
+                        {"Direção": "Short (SELL)", "Total": by_dir.get("SELL", {}).get("total", 0), "Acertos": by_dir.get("SELL", {}).get("wins", 0), "Acertividade %": f"{by_dir.get('SELL', {}).get('accuracy_pct', 0):.1f}"},
+                    ]
+                    st.dataframe(pd.DataFrame(dir_rows), use_container_width=True, hide_index=True)
+                # ML e LSTM (resumo)
+                ml_d = sys_report.get("ml", {})
+                lstm_d = sys_report.get("lstm", {})
+                st.markdown("**ML e LSTM (acertaram a previsão de sucesso/falha?)**")
+                st.write(f"ML: {ml_d.get('correct', 0)} / {ml_d.get('total', 0)} acertos ({(ml_d.get('accuracy_pct') or 0):.1f}%)  |  LSTM: {lstm_d.get('correct', 0)} / {lstm_d.get('total', 0)} acertos ({(lstm_d.get('accuracy_pct') or 0):.1f}%)")
+            st.markdown("---")
 
             # KPIs
             c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -1120,10 +1181,11 @@ with tab4:
             stab1, stab2, stab3, stab4 = st.tabs(["📋 Sinais", "📈 Por Fonte", "🎯 Por Simbolo", "📊 Graficos"])
 
             with stab1:
-                # Tabela completa de sinais
+                # Tabela completa de sinais (inclui acerto/erro por modelo quando disponível)
                 display_cols = ["timestamp", "symbol", "source", "signal", "confidence",
                                 "entry_price", "stop_loss", "take_profit_1", "take_profit_2",
-                                "outcome", "exit_price", "pnl_percent", "duration_hours"]
+                                "outcome", "exit_price", "pnl_percent", "duration_hours",
+                                "ml_correct", "lstm_correct"]
                 available_cols = [c for c in display_cols if c in df_evals.columns]
                 disp = df_evals[available_cols].copy()
                 disp.columns = [c.replace("_", " ").title() for c in available_cols]

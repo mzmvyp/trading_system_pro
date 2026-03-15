@@ -258,10 +258,13 @@ class BinanceClient:
         for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = pd.to_numeric(df[col])
 
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
         df.set_index('timestamp', inplace=True)
 
-        # Filtrar por período exato
-        df = df[df.index <= end_time]
+        # Filtrar por período exato (index e end em UTC para evitar "Invalid comparison dtype=datetime64[ns] and datetime")
+        end_ts = pd.Timestamp(end_time)
+        if end_ts.tz is None:
+            end_ts = end_ts.tz_localize('UTC')
+        df = df[df.index <= end_ts]
 
         return df

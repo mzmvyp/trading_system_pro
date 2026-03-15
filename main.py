@@ -196,20 +196,26 @@ async def main():
             print("="*60)
 
             # ============================================================
-            # MELHORIA do sinais: Iniciar otimizador contínuo em background
-            # Roda a cada 6h, acha melhores params, salva best_config.json
-            # O agent.py lê esse config antes de gerar sinais
+            # Otimizador contínuo: roda a cada N h, testa M combinações
+            # aleatórias de indicadores (RSI, EMA, MACD, BB, ADX, SL/TP)
+            # e salva o melhor em best_config. Agent usa esse config.
+            # Ajuste via .env: OPTIMIZER_ITERATIONS, OPTIMIZER_DAYS_BACK, etc.
             # ============================================================
             try:
                 from src.backtesting.continuous_optimizer import start_global_optimizer
+                _opt_iter = int(os.getenv("OPTIMIZER_ITERATIONS", "300"))
+                _opt_days = int(os.getenv("OPTIMIZER_DAYS_BACK", "60"))
+                _opt_cycle = int(os.getenv("OPTIMIZER_CYCLE_HOURS", "6"))
+                _opt_min_score = float(os.getenv("OPTIMIZER_MIN_SCORE", "0.35"))
                 optimizer = start_global_optimizer(
                     symbols=symbols,
                     interval="1h",
-                    cycle_hours=6,
-                    days_back=30,
-                    n_iterations=50,
+                    cycle_hours=_opt_cycle,
+                    days_back=_opt_days,
+                    n_iterations=_opt_iter,
+                    min_score=_opt_min_score,
                 )
-                print("[OPTIMIZER] Otimizacao continua iniciada em background (ciclo: 6h)")
+                print(f"[OPTIMIZER] Otimizacao continua: {_opt_iter} iter/simbolo, {_opt_days}d dados, ciclo {_opt_cycle}h, min_score={_opt_min_score}")
             except Exception as e:
                 logger.warning(f"[OPTIMIZER] Falha ao iniciar otimizador: {e}")
                 print(f"[OPTIMIZER] Falha ao iniciar otimizador: {e} (continuando sem)")

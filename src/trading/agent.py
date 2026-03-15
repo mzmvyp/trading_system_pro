@@ -254,11 +254,11 @@ class AgnoTradingAgent:
         except Exception:
             best = None
 
-        # Thresholds padrão (sobrescritos por best_config se existir)
-        rsi_oversold = best.rsi_oversold if best else 30
-        rsi_overbought = best.rsi_overbought if best else 70
-        adx_threshold = best.adx_threshold if best else 25
-        volume_threshold = best.volume_spike_threshold if best else 1.5
+        # Thresholds padrão (sobrescritos por best_config se existir; BacktestParams usa adx_min_strength e volume_surge_multiplier)
+        rsi_oversold = getattr(best, "rsi_oversold", 30) if best else 30
+        rsi_overbought = getattr(best, "rsi_overbought", 70) if best else 70
+        adx_threshold = getattr(best, "adx_min_strength", getattr(best, "adx_threshold", 25)) if best else 25
+        volume_threshold = getattr(best, "volume_surge_multiplier", getattr(best, "volume_spike_threshold", 1.5)) if best else 1.5
 
         indicators = analysis_data.get("key_indicators", {})
         trend_data = analysis_data.get("trend_analysis", {})
@@ -946,7 +946,19 @@ Responda APENAS com JSON:
                                 self._mark_signal_executed(agno_signal, "paper", False, execution_result.get("error", ""))
                                 logger.warning(f"[AGNO PAPER] Falha ao executar trade PAPER: {execution_result.get('error', '')}")
                     else:
-                        logger.info(f"[AGNO] Sinal nao executado: {validation.get('reason', '')}")
+                        reason = validation.get("reason", "Desconhecido")
+                        logger.info(f"[AGNO] Sinal nao executado: {reason}")
+                        # Guardar motivo no ficheiro do sinal para análise no dashboard
+                        filepath = agno_signal.get("_signal_file")
+                        if filepath and os.path.exists(filepath):
+                            try:
+                                with open(filepath, "r", encoding="utf-8") as f:
+                                    saved = json.load(f)
+                                saved["non_execution_reason"] = reason
+                                with open(filepath, "w", encoding="utf-8") as f:
+                                    json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
+                            except Exception:
+                                pass
 
             # Retornar o sinal AGNO como principal (para compatibilidade)
             signal = agno_signal

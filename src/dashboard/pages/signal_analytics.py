@@ -145,6 +145,21 @@ if exec_count > 0 or noexec_count > 0:
         else:
             st.info("Nenhum sinal nao-executado finalizado ainda")
 
+    # Motivos pelos quais os sinais NAO foram executados (para ajustar filtros)
+    if noexec_count > 0 and "non_execution_reason" in df.columns:
+        exec_col = df["executed"] if "executed" in df.columns else pd.Series([False] * len(df))
+        not_exec = df[exec_col != True]
+        reasons = not_exec["non_execution_reason"].fillna("(nao registado)").replace("", "(nao registado)")
+        reason_counts = reasons.value_counts()
+        if not reason_counts.empty:
+            st.subheader("Por que nao foram executados?")
+            st.caption("Motivo registado no momento em que o sinal foi gerado (validate_risk_and_position). Sinais antigos podem mostrar (nao registado).")
+            reason_df = pd.DataFrame({
+                "Motivo": reason_counts.index.tolist(),
+                "Quantidade": reason_counts.values.tolist(),
+            })
+            st.dataframe(reason_df, use_container_width=True, hide_index=True)
+
     st.markdown("---")
 
 # ================================================================
