@@ -224,7 +224,7 @@ pnl_all = df_all['pnl_percent'].sum()
 
 # Com filtro ML
 executed = df_ml[df_ml['executed']]
-skipped = df_ml[not df_ml['executed']]
+skipped = df_ml[~df_ml['executed']]
 total_exec = len(executed)
 wins_exec = len(executed[executed['original_pnl'] > 0]) if total_exec > 0 else 0
 wr_exec = wins_exec / total_exec * 100 if total_exec else 0

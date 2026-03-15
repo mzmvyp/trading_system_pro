@@ -251,11 +251,11 @@ class AgnoTradingAgent:
         except Exception:
             best = None
 
-        # Thresholds padrão (sobrescritos por best_config se existir)
-        rsi_oversold = best.rsi_oversold if best else 30
-        rsi_overbought = best.rsi_overbought if best else 70
-        adx_threshold = best.adx_threshold if best else 25
-        volume_threshold = best.volume_spike_threshold if best else 1.5
+        # Thresholds padrão (sobrescritos por best_config se existir; BacktestParams usa adx_min_strength e volume_surge_multiplier)
+        rsi_oversold = getattr(best, "rsi_oversold", 30) if best else 30
+        rsi_overbought = getattr(best, "rsi_overbought", 70) if best else 70
+        adx_threshold = getattr(best, "adx_min_strength", getattr(best, "adx_threshold", 25)) if best else 25
+        volume_threshold = getattr(best, "volume_surge_multiplier", getattr(best, "volume_spike_threshold", 1.5)) if best else 1.5
 
         indicators = analysis_data.get("key_indicators", {})
         trend_data = analysis_data.get("trend_analysis", {})
@@ -463,14 +463,15 @@ Analise os dados e decida com base nestas REGRAS OBJETIVAS:
 - TP1 no proximo nivel de resistencia/suporte. TP2 no nivel seguinte
 - Minimo 2:1 reward/risk (TP1 deve ser 2x a distancia do SL)
 
-## CONFIDENCE:
+## CONFIDENCE (escala 1-10):
+- Para BUY ou SELL: use SEMPRE confidence entre 6 e 10. Nunca devolva BUY/SELL com confidence 1-5.
 - 8-10: 6+ regras confirmando, sem conflitos, tendencia forte
-- 6-7: 4-5 regras confirmando, conflitos menores
-- 1-5: poucos sinais alinhados = USE NO_SIGNAL
+- 6-7: 4-5 regras confirmando, conflitos menores (minimo para dar sinal)
+- Se so tiver 1-5 regras alinhadas = devolva NO_SIGNAL (nao de sinal com confianca baixa)
 
 Responda APENAS com JSON:
 ```json
-{"signal":"BUY/SELL/NO_SIGNAL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":1-10,"reasoning":"Regras X,Y,Z confirmadas. Conflitos: nenhum/ABC"}
+{"signal":"BUY/SELL/NO_SIGNAL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":7,"reasoning":"Regras X,Y,Z confirmadas. Conflitos: nenhum/ABC"}
 ```"""
 
     async def analyze(self, symbol: str = "BTCUSDT") -> Dict[str, Any]:
@@ -723,6 +724,13 @@ Responda APENAS com JSON:
             except Exception as e:
                 logger.warning(f"[ML] Erro ao coletar indicadores para ML: {e}")
 
+            # Log único: o que o DeepSeek devolveu (sempre visível no fluxo de trading)
+            _sig = agno_signal.get("signal", "N/A")
+            _conf = agno_signal.get("confidence", 0)
+            logger.info(f"[AGNO] DeepSeek devolveu: Sinal={_sig}, Confiança={_conf}/10")
+            if _sig == "NO_SIGNAL" and _conf > 5:
+                logger.warning(f"[AGNO] Inconsistência: NO_SIGNAL com confiança {_conf}>5 — esperado BUY/SELL")
+
             # ========================================
             # CONFLUÊNCIA: LLM é um voto, não a decisão final
             # Calcular score técnico local + voto LLM → decisão por confluência
@@ -793,21 +801,24 @@ Responda APENAS com JSON:
                     f"| thresholds: {confluence['thresholds_source']}"
                 )
 
-                if total_for < MIN_VOTES_FOR or combined_score < MIN_COMBINED_SCORE:
-                    # Log detalhado com cada voto individual pra saber exatamente o que bloqueou
+                # Regra: confiança > 5 = DeepSeek aceitou o sinal → vai sempre aos próximos validadores (ML, risco).
+                # Confluência só pode bloquear quando confiança <= 5.
+                if llm_confidence > 5:
+                    logger.info(
+                        f"[CONFLUENCE] {llm_signal_dir} {symbol} confiança LLM={llm_confidence}>5: "
+                        f"aceite DeepSeek, segue para ML/risco (confluência informativa: score={combined_score:.1%})"
+                    )
+                elif total_for < MIN_VOTES_FOR or combined_score < MIN_COMBINED_SCORE:
                     details_str = " | ".join(confluence["details"])
-                    logger.warning(
-                        f"[CONFLUENCE BLOCK] {llm_signal_dir} {symbol} BLOQUEADO: "
-                        f"score={combined_score:.1%} (min {MIN_COMBINED_SCORE:.0%}) | "
-                        f"votos={total_for:.0f} (min {MIN_VOTES_FOR}) | "
-                        f"LLM_conf={agno_signal.get('confidence', '?')}/10 | "
+                    motivo_confl = (
+                        f"confiança LLM={llm_confidence} (<=5) e confluência insuficiente: "
+                        f"score={combined_score:.1%} (mín {MIN_COMBINED_SCORE:.0%}), "
+                        f"votos={total_for:.0f} (mín {MIN_VOTES_FOR}). "
                         f"Votos: [{details_str}]"
                     )
+                    logger.warning(f"[CONFLUENCE BLOCK] {llm_signal_dir} {symbol} BLOQUEADO: {motivo_confl}")
                     agno_signal["signal"] = "NO_SIGNAL"
-                    agno_signal["block_reason"] = (
-                        f"Confluência insuficiente: score={combined_score:.3f}, "
-                        f"votes_for={total_for:.0f}, details={confluence['details']}"
-                    )
+                    agno_signal["block_reason"] = f"Confluência: {motivo_confl}"
 
             # CORRIGIDO: Se não tem entry_price, obter do mercado (async)
             # Se não tem SL/TP, calcular baseado em ATR (não % arbitrário)
@@ -862,10 +873,16 @@ Responda APENAS com JSON:
             self._save_signal(agno_signal)
 
             # FILTRO DE SINAIS: Verificar se sinais AGNO estão habilitados
-            if not settings.accept_agno_signals:
+            if not settings.accept_agno_signals and agno_signal.get("signal") in ["BUY", "SELL"]:
                 logger.info("[AGNO] Sinais AGNO desabilitados (accept_agno_signals=False). Sinal ignorado.")
 
+            # Quando o sinal é NO_SIGNAL (do modelo ou bloqueado por confluência), não há validadores ML/risco
+            if agno_signal.get("signal") == "NO_SIGNAL":
+                _reason = agno_signal.get("block_reason") or "Modelo optou por não dar sinal (confiança/regras)."
+                logger.info(f"[AGNO] Sem execução: {_reason}")
+
             if agno_signal.get("signal") in ["BUY", "SELL"]:
+                logger.info(f"[AGNO] Validando {agno_signal.get('signal')} {symbol} (ML -> risco -> execução)...")
                 # VALIDAÇÃO ML: Usar modelo treinado para validar confluência
                 ml_validation = self._validate_with_ml_model(agno_signal)
                 ml_prob = ml_validation.get('probability', 0)
@@ -892,7 +909,10 @@ Responda APENAS com JSON:
                     logger.info(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML discorda (prob={ml_prob:.1%}, predicao={ml_opinion})")
 
                 if ml_validation.get("skip_signal"):
-                    logger.warning(f"[ML BLOCK] {agno_signal.get('signal')} {symbol} BLOQUEADO (ml_required=True): prob={ml_prob:.1%}")
+                    logger.warning(
+                        f"[ML BLOCK] {agno_signal.get('signal')} {symbol} BLOQUEADO (ml_required=True): "
+                        f"prob={ml_prob:.1%}, predicao={ml_opinion}"
+                    )
                 else:
                     # Obter tendência dinâmica para filtro
                     try:
@@ -902,7 +922,7 @@ Responda APENAS com JSON:
                         trend_data = None
                     validation = validate_risk_and_position(agno_signal, symbol, _trend_data=trend_data)
                     if validation.get("can_execute"):
-                        logger.info(f"[AGNO] Validando e executando sinal {agno_signal.get('signal')} para {symbol}")
+                        logger.info(f"[AGNO] Risco/posição OK. Executando sinal {agno_signal.get('signal')} para {symbol}")
                         position_size = validation.get("recommended_position_size", validation.get("position_size"))
 
                         # VERIFICAR MODO DE TRADING: paper ou real
@@ -915,7 +935,7 @@ Responda APENAS com JSON:
                             execution_result = await executor.execute_signal(agno_signal, position_size=None)
                             if execution_result.get("success"):
                                 self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
-                                logger.info(f"[AGNO REAL] Trade REAL executado com sucesso: {execution_result.get('message', '')}")
+                                logger.info(f"[AGNO REAL] Trade REAL executado: {execution_result.get('message', '')}")
                             else:
                                 self._mark_signal_executed(agno_signal, "real", False, execution_result.get("error", ""))
                                 logger.warning(f"[AGNO REAL] Falha ao executar trade REAL: {execution_result.get('error', '')}")
@@ -924,12 +944,24 @@ Responda APENAS com JSON:
                             execution_result = execute_paper_trade(agno_signal, position_size)
                             if execution_result.get("success"):
                                 self._mark_signal_executed(agno_signal, "paper", True, execution_result.get("message", ""))
-                                logger.info(f"[AGNO PAPER] Trade PAPER executado com sucesso: {execution_result.get('message', '')}")
+                                logger.info(f"[AGNO PAPER] Trade PAPER executado: {execution_result.get('message', '')}")
                             else:
                                 self._mark_signal_executed(agno_signal, "paper", False, execution_result.get("error", ""))
                                 logger.warning(f"[AGNO PAPER] Falha ao executar trade PAPER: {execution_result.get('error', '')}")
                     else:
-                        logger.info(f"[AGNO] Sinal nao executado: {validation.get('reason', '')}")
+                        reason = validation.get("reason", "Desconhecido")
+                        logger.info(f"[AGNO] Sinal nao executado (risco/posição): {reason}")
+                        # Guardar motivo no ficheiro do sinal para análise no dashboard
+                        filepath = agno_signal.get("_signal_file")
+                        if filepath and os.path.exists(filepath):
+                            try:
+                                with open(filepath, "r", encoding="utf-8") as f:
+                                    saved = json.load(f)
+                                saved["non_execution_reason"] = reason
+                                with open(filepath, "w", encoding="utf-8") as f:
+                                    json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
+                            except Exception:
+                                pass
 
             # Retornar o sinal AGNO como principal (para compatibilidade)
             signal = agno_signal
@@ -1075,13 +1107,18 @@ Responda APENAS com JSON:
                 logger.info(f"[JSON ESTRUTURADO] Sinal extraído via JSON: {structured.get('signal', 'N/A')}")
                 # Validar campos obrigatórios
                 if structured.get("signal") in ["BUY", "SELL", "NO_SIGNAL"]:
+                    raw_conf = structured.get("confidence", 5)
+                    if isinstance(raw_conf, (int, float)):
+                        raw_conf = max(1, min(10, raw_conf))
+                    else:
+                        raw_conf = 5
                     signal.update({
                         "signal": structured.get("signal", "NO_SIGNAL"),
                         "entry_price": structured.get("entry_price"),
                         "stop_loss": structured.get("stop_loss"),
                         "take_profit_1": structured.get("take_profit_1"),
                         "take_profit_2": structured.get("take_profit_2"),
-                        "confidence": structured.get("confidence", 5)
+                        "confidence": raw_conf
                     })
                     # Validar se tem entrada para BUY/SELL
                     if signal["signal"] in ["BUY", "SELL"] and not signal.get("entry_price"):
@@ -1480,6 +1517,7 @@ Responda APENAS com JSON:
             if conf_match:
                 signal["confidence"] = int(conf_match.group(1))
                 break
+        signal["confidence"] = max(1, min(10, signal.get("confidence", 5)))
 
         return signal
 

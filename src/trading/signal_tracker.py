@@ -23,6 +23,9 @@ logger = get_logger(__name__)
 # Binance public API (sem auth)
 BINANCE_KLINES_URL = "https://fapi.binance.com/fapi/v1/klines"
 
+# Log onde cada sinal registra o que cada sistema disse (LLM, ML, LSTM) para contabilizar acertividade
+MODEL_VOTES_LOG = "signals/model_votes_log.jsonl"
+
 
 def get_klines(symbol: str, interval: str = "1m", start_time_ms: int = None, limit: int = 1500) -> List:
     """Busca klines (candles) da Binance Futures"""
@@ -108,20 +111,21 @@ def evaluate_signal(signal: Dict) -> Dict:
         "execution_mode": execution_mode,
         "ml_probability": ml_probability,
         "ml_prediction": ml_prediction,
+        "non_execution_reason": signal.get("non_execution_reason", ""),
     }
 
     if signal_type not in ("BUY", "SELL") or not entry_price or not symbol:
         result["outcome"] = "INVALID"
         return result
 
-    # Parse timestamp
+    # Parse timestamp (manter UTC-aware para subtração com now/candle_time)
     try:
         if "T" in timestamp_str:
             sig_time = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            if sig_time.tzinfo:
-                sig_time = sig_time.replace(tzinfo=None)
+            if sig_time.tzinfo is None:
+                sig_time = sig_time.replace(tzinfo=timezone.utc)
         else:
-            sig_time = datetime.strptime(timestamp_str[:19], "%Y-%m-%d %H:%M:%S")
+            sig_time = datetime.strptime(timestamp_str[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         result["outcome"] = "INVALID"
         return result
@@ -147,7 +151,7 @@ def evaluate_signal(signal: Dict) -> Dict:
         high = float(candle[2])
         low = float(candle[3])
         candle_time_ms = candle[0]
-        candle_time = datetime.fromtimestamp(candle_time_ms / 1000)
+        candle_time = datetime.fromtimestamp(candle_time_ms / 1000, tz=timezone.utc)
 
         if is_long:
             # LONG: favorável = preço sobe, adverso = preço desce
@@ -180,6 +184,7 @@ def evaluate_signal(signal: Dict) -> Dict:
                     result["pnl_percent"] = (entry_price - stop_loss) / entry_price * 100
                 result["max_favorable"] = max_favorable
                 result["max_adverse"] = max_adverse
+                _add_model_attribution(result, signal)
                 return result
 
         # Verificar TP1
@@ -206,7 +211,7 @@ def evaluate_signal(signal: Dict) -> Dict:
                 for candle2 in klines[klines.index(candle):]:
                     h2 = float(candle2[2])
                     l2 = float(candle2[3])
-                    ct2 = datetime.fromtimestamp(candle2[0] / 1000)
+                    ct2 = datetime.fromtimestamp(candle2[0] / 1000, tz=timezone.utc)
 
                     # Após TP1, SL move para break-even (entry_price)
                     if is_long and l2 <= entry_price:
@@ -241,6 +246,7 @@ def evaluate_signal(signal: Dict) -> Dict:
 
                 result["max_favorable"] = max_favorable
                 result["max_adverse"] = max_adverse
+                _add_model_attribution(result, signal)
                 return result
 
     # Se não atingiu nada, sinal ainda ativo ou expirou
@@ -264,7 +270,87 @@ def evaluate_signal(signal: Dict) -> Dict:
     result["duration_hours"] = hours_since
     result["max_favorable"] = max_favorable
     result["max_adverse"] = max_adverse
+    _add_model_attribution(result, signal)
     return result
+
+
+def _add_model_attribution(result: Dict, signal: Dict) -> None:
+    """
+    Preenche no result se cada modelo acertou ou errou (para relatório de validadores).
+    Só aplica quando o sinal está finalizado (SL/TP/EXPIRED).
+    """
+    outcome = result.get("outcome", "")
+    if outcome not in ("SL_HIT", "TP1_HIT", "TP2_HIT", "EXPIRED"):
+        result["is_winner"] = False
+        result["ml_correct"] = None
+        result["lstm_correct"] = None
+        return
+
+    pnl = result.get("pnl_percent", 0)
+    is_winner = outcome in ("TP1_HIT", "TP2_HIT") or (outcome == "EXPIRED" and pnl > 0)
+    result["is_winner"] = is_winner
+
+    # ML: previu 1 (sucesso) ou 0 (falha) — acertou se previsão == resultado real
+    ml_pred = signal.get("ml_prediction")
+    if ml_pred is not None:
+        result["ml_correct"] = (int(ml_pred) == 1) == is_winner
+    else:
+        result["ml_correct"] = None
+
+    # LSTM: votou a favor (prob > 0.6) ou contra (prob < 0.4) — acertou se (a favor e win) ou (contra e loss)
+    lstm_prob = signal.get("lstm_probability")
+    if lstm_prob is not None:
+        if lstm_prob > 0.6:
+            result["lstm_correct"] = is_winner
+        elif lstm_prob < 0.4:
+            result["lstm_correct"] = not is_winner
+        else:
+            result["lstm_correct"] = None  # neutro
+    else:
+        result["lstm_correct"] = None
+
+
+def _append_model_votes_log(signal: Dict, evaluation: Dict) -> None:
+    """
+    Regista no log o que cada sistema disse neste sinal (LLM=direção, ML, LSTM)
+    para depois contabilizar qual tem maior acertividade. Inclui sinais não executados.
+    """
+    outcome = evaluation.get("outcome", "")
+    if outcome not in ("SL_HIT", "TP1_HIT", "TP2_HIT", "EXPIRED"):
+        return
+    is_winner = evaluation.get("is_winner", False)
+    lstm_prob = signal.get("lstm_probability")
+    if lstm_prob is not None:
+        if lstm_prob > 0.6:
+            lstm_vote = 1
+        elif lstm_prob < 0.4:
+            lstm_vote = -1
+        else:
+            lstm_vote = 0
+    else:
+        lstm_vote = None
+    record = {
+        "symbol": signal.get("symbol", ""),
+        "timestamp": signal.get("timestamp", ""),
+        "source": signal.get("source", ""),
+        "signal": signal.get("signal", ""),  # BUY = long, SELL = short (o que o LLM disse)
+        "outcome": outcome,
+        "is_winner": is_winner,
+        "executed": signal.get("executed", False),
+        "ml_prediction": signal.get("ml_prediction"),
+        "lstm_probability": lstm_prob,
+        "lstm_vote": lstm_vote,
+        "ml_correct": evaluation.get("ml_correct"),
+        "lstm_correct": evaluation.get("lstm_correct"),
+        "confluence_score": signal.get("confluence_score"),
+        "confluence_votes_for": signal.get("confluence_votes_for"),
+    }
+    try:
+        os.makedirs(os.path.dirname(MODEL_VOTES_LOG) or ".", exist_ok=True)
+        with open(MODEL_VOTES_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except Exception as e:
+        logger.warning(f"Erro ao registrar voto no log: {e}")
 
 
 def evaluate_all_signals(signals_dir: str = "signals", cache_file: str = "signals/evaluations_cache.json") -> List[Dict]:
@@ -309,6 +395,8 @@ def evaluate_all_signals(signals_dir: str = "signals", cache_file: str = "signal
         results.append(evaluation)
         cache[key] = evaluation
         updated = True
+        if evaluation.get("outcome") in ("SL_HIT", "TP1_HIT", "TP2_HIT", "EXPIRED"):
+            _append_model_votes_log(sig, evaluation)
 
     # Salvar cache atualizado
     if updated:
@@ -385,6 +473,145 @@ def _calc_metrics(evals: List[Dict]) -> Dict:
         "avg_duration_hours": avg_duration,
         "avg_mfe": sum(mfe_list) / len(mfe_list) if mfe_list else 0,
         "avg_mae": sum(mae_list) / len(mae_list) if mae_list else 0,
+    }
+
+
+def get_system_accuracy_report(log_path: str = None) -> Dict:
+    """
+    Lê o log de votos (model_votes_log.jsonl) e retorna acertividade por sistema:
+    - Por fonte (AGNO, DEEPSEEK): quantos disseram long/short e % acertos
+    - Por direção (BUY, SELL): quantos e % acertos
+    - ML e LSTM: acurácia
+    Deduplica por (symbol, timestamp, source) ficando com a última ocorrência.
+    """
+    path = log_path or MODEL_VOTES_LOG
+    if not os.path.exists(path):
+        return {"by_source": {}, "by_direction": {}, "ml": {}, "lstm": {}, "total_records": 0}
+
+    records = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except Exception as e:
+        logger.warning(f"Erro ao ler log de votos: {e}")
+        return {"by_source": {}, "by_direction": {}, "ml": {}, "lstm": {}, "total_records": 0}
+
+    if not records:
+        return {"by_source": {}, "by_direction": {}, "ml": {}, "lstm": {}, "total_records": 0}
+
+    # Deduplica por (symbol, timestamp, source) — fica a última
+    seen = {}
+    for r in records:
+        key = (r.get("symbol"), r.get("timestamp"), r.get("source"))
+        seen[key] = r
+    unique = list(seen.values())
+
+    # Por fonte (AGNO, DEEPSEEK)
+    by_source = {}
+    for r in unique:
+        src = r.get("source", "UNKNOWN")
+        if src not in by_source:
+            by_source[src] = {"total": 0, "wins": 0, "buys": 0, "sells": 0, "buy_wins": 0, "sell_wins": 0}
+        by_source[src]["total"] += 1
+        if r.get("is_winner"):
+            by_source[src]["wins"] += 1
+        sig = r.get("signal", "")
+        if sig == "BUY":
+            by_source[src]["buys"] += 1
+            if r.get("is_winner"):
+                by_source[src]["buy_wins"] += 1
+        elif sig == "SELL":
+            by_source[src]["sells"] += 1
+            if r.get("is_winner"):
+                by_source[src]["sell_wins"] += 1
+    for src, d in by_source.items():
+        d["accuracy_pct"] = (d["wins"] / d["total"] * 100) if d["total"] else 0
+        d["buy_accuracy_pct"] = (d["buy_wins"] / d["buys"] * 100) if d["buys"] else None
+        d["sell_accuracy_pct"] = (d["sell_wins"] / d["sells"] * 100) if d["sells"] else None
+
+    # Por direção (BUY=long, SELL=short)
+    by_direction = {"BUY": {"total": 0, "wins": 0}, "SELL": {"total": 0, "wins": 0}}
+    for r in unique:
+        sig = r.get("signal", "")
+        if sig in ("BUY", "SELL"):
+            by_direction[sig]["total"] += 1
+            if r.get("is_winner"):
+                by_direction[sig]["wins"] += 1
+    for sig in ("BUY", "SELL"):
+        t = by_direction[sig]["total"]
+        w = by_direction[sig]["wins"]
+        by_direction[sig]["accuracy_pct"] = (w / t * 100) if t else 0
+
+    # ML
+    ml_with = [r for r in unique if r.get("ml_correct") is not None]
+    ml_correct = sum(1 for r in ml_with if r["ml_correct"])
+    ml_total = len(ml_with)
+    ml_acc = (ml_correct / ml_total * 100) if ml_total else None
+
+    # LSTM
+    lstm_with = [r for r in unique if r.get("lstm_correct") is not None]
+    lstm_correct = sum(1 for r in lstm_with if r["lstm_correct"])
+    lstm_total = len(lstm_with)
+    lstm_acc = (lstm_correct / lstm_total * 100) if lstm_total else None
+
+    return {
+        "by_source": by_source,
+        "by_direction": by_direction,
+        "ml": {"accuracy_pct": ml_acc, "correct": ml_correct, "total": ml_total},
+        "lstm": {"accuracy_pct": lstm_acc, "correct": lstm_correct, "total": lstm_total},
+        "total_records": len(unique),
+    }
+
+
+def get_model_validator_metrics(evaluations: List[Dict]) -> Dict:
+    """
+    Calcula acurácia por modelo (ML, LSTM) sobre sinais finalizados.
+    Permite ver quem acerta/erra e se vale a pena manter ou remover um modelo.
+
+    Returns:
+        Dict com ml_accuracy, lstm_accuracy, both_agree_right_pct, counts, etc.
+    """
+    closed = [e for e in evaluations if e.get("outcome") in ("SL_HIT", "TP1_HIT", "TP2_HIT", "EXPIRED")]
+    if not closed:
+        return {
+            "total_closed": 0,
+            "ml_accuracy": None,
+            "ml_correct": 0,
+            "ml_total": 0,
+            "lstm_accuracy": None,
+            "lstm_correct": 0,
+            "lstm_total": 0,
+            "both_agree_right_pct": None,
+            "both_agree_total": 0,
+        }
+
+    ml_with_pred = [e for e in closed if e.get("ml_correct") is not None]
+    lstm_with_vote = [e for e in closed if e.get("lstm_correct") is not None]
+    ml_correct = sum(1 for e in ml_with_pred if e["ml_correct"])
+    lstm_correct = sum(1 for e in lstm_with_vote if e["lstm_correct"])
+
+    # Quando ML e LSTM ambos deram opinião (for/contra) e ambos acertaram
+    both_have = [e for e in closed if e.get("ml_correct") is not None and e.get("lstm_correct") is not None]
+    both_agree_right = sum(1 for e in both_have if e["ml_correct"] and e["lstm_correct"])
+    both_agree_total = len(both_have)
+
+    return {
+        "total_closed": len(closed),
+        "ml_accuracy": (ml_correct / len(ml_with_pred) * 100) if ml_with_pred else None,
+        "ml_correct": ml_correct,
+        "ml_total": len(ml_with_pred),
+        "lstm_accuracy": (lstm_correct / len(lstm_with_vote) * 100) if lstm_with_vote else None,
+        "lstm_correct": lstm_correct,
+        "lstm_total": len(lstm_with_vote),
+        "both_agree_right_pct": (both_agree_right / both_agree_total * 100) if both_agree_total else None,
+        "both_agree_total": both_agree_total,
     }
 
 
