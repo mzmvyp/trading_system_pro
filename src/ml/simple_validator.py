@@ -33,6 +33,10 @@ from sklearn.preprocessing import StandardScaler  # noqa: E402
 
 warnings.filterwarnings('ignore')
 
+from src.core.logger import get_logger
+
+logger = get_logger(__name__)
+
 # Configuracoes
 CONFIG = {
     "model_dir": "ml_models",
