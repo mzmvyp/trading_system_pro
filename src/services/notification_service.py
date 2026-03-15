@@ -9,7 +9,7 @@ Features:
 """
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Dict, List, Optional
 
@@ -86,7 +86,7 @@ class NotificationService:
 
     def _check_rate_limit(self, channel: str) -> bool:
         """Check if we're within rate limits for a channel."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         if channel not in self.rate_limits:
             self.rate_limits[channel] = []
 
@@ -101,7 +101,7 @@ class NotificationService:
         """Record a sent notification for rate limiting."""
         if channel not in self.rate_limits:
             self.rate_limits[channel] = []
-        self.rate_limits[channel].append(datetime.now())
+        self.rate_limits[channel].append(datetime.now(timezone.utc))
 
     async def send(
         self,
@@ -155,7 +155,7 @@ class NotificationService:
 
         # Record in history
         self.history.append({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "title": title,
             "message": message[:200],
             "priority": priority.value,
@@ -248,7 +248,7 @@ class NotificationService:
                 "title": title,
                 "message": message,
                 "priority": priority.value,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "metadata": metadata or {},
             }
 

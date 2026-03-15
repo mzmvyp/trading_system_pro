@@ -11,7 +11,7 @@ Features:
 import hashlib
 import json
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -43,7 +43,7 @@ class BackupService:
 
     def create_backup(self, label: Optional[str] = None) -> Dict:
         """Create a new backup."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         label_str = f"_{label}" if label else ""
         backup_name = f"backup_{timestamp}{label_str}"
         zip_path = self.backup_dir / f"{backup_name}.zip"
@@ -72,7 +72,7 @@ class BackupService:
             # Save metadata
             metadata = {
                 "backup_name": backup_name,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "files_count": files_backed_up,
                 "original_size": total_size,
                 "compressed_size": zip_path.stat().st_size,

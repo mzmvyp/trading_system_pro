@@ -9,7 +9,7 @@ Funcionalidades:
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -233,9 +233,9 @@ class StopAdjuster:
     def _save_adjustment_log(self, symbol: str, recommendation: Dict, result: Dict):
         """Salva log do ajuste"""
         try:
-            log_file = Path("stop_adjustment_logs") / f"{symbol}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            log_file = Path("stop_adjustment_logs") / f"{symbol}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
             log_data = {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "symbol": symbol,
                 "recommendation": recommendation,
                 "result": result

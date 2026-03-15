@@ -13,7 +13,7 @@ Data: 2026-01-14
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Set
 
 from src.core.config import settings
@@ -192,7 +192,7 @@ class OrphanOrderCleaner:
                         logger.error(f"[LIMPEZA] Fallback falhou para {sym}: {e2}")
 
             # 5. Atualizar estatísticas
-            self.last_cleanup = datetime.now()
+            self.last_cleanup = datetime.now(timezone.utc)
             self.cleanup_count += 1
             total_cancelled = len(cancelled_orders) + excess_cancelled
             self.orders_cancelled += total_cancelled

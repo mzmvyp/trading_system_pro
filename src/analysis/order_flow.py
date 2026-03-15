@@ -1,7 +1,7 @@
 """
 Order flow analysis
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 import aiohttp
@@ -52,7 +52,7 @@ async def analyze_order_flow(symbol: str) -> Dict[str, Any]:
                 "buy_volume": buy_volume,
                 "sell_volume": sell_volume,
                 "buy_pressure": buy_volume > sell_volume * 1.2,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
     except Exception as e:

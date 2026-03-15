@@ -46,16 +46,28 @@ class BinanceClient:
 
         return await binance_circuit_breaker.call(make_request)
 
-    async def get_klines(self, symbol: str, interval: str, limit: int = 500) -> pd.DataFrame:
+    async def get_klines(self, symbol: str, interval: str, limit: int = 500,
+                         exclude_forming: bool = False) -> pd.DataFrame:
         """
         Obtém dados de candlesticks da Binance (with rate limiting & circuit breaker)
+
+        Args:
+            symbol: Par de trading (ex: BTCUSDT)
+            interval: Intervalo dos candles (ex: 1h, 4h, 1d)
+            limit: Número de candles a buscar
+            exclude_forming: Se True, remove o último candle (que ainda está se formando).
+                           Essencial para cálculo de indicadores técnicos (EMA, RSI, MACD)
+                           que precisam apenas de candles FECHADOS para evitar sinais falsos.
         """
         try:
+            # Se vamos excluir o candle formando, buscar 1 a mais para manter o limit desejado
+            fetch_limit = limit + 1 if exclude_forming else limit
+
             url = f"{self.base_url}/fapi/v1/klines"
             params = {
                 'symbol': symbol,
                 'interval': interval,
-                'limit': limit
+                'limit': fetch_limit
             }
 
             data = await exponential_backoff_retry(
@@ -77,9 +89,21 @@ class BinanceClient:
                 df[col] = pd.to_numeric(df[col])
 
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df['close_time'] = pd.to_datetime(pd.to_numeric(df['close_time']), unit='ms')
             df.set_index('timestamp', inplace=True)
 
-            logger.debug(f"Fetched {len(df)} klines for {symbol} @ {interval}")
+            # Remover o último candle (que está se formando e ainda não fechou)
+            # Isso evita que indicadores sejam calculados com dados incompletos,
+            # o que causa entradas atrasadas (sinal gerado no meio do movimento)
+            if exclude_forming and len(df) > 1:
+                import time
+                now_ms = int(time.time() * 1000)
+                last_close_time_ms = int(df['close_time'].iloc[-1].timestamp() * 1000)
+                if now_ms < last_close_time_ms:
+                    df = df.iloc[:-1]
+                    logger.debug(f"Excluded forming candle for {symbol} @ {interval} (candle closes at {df['close_time'].iloc[-1] if len(df) > 0 else 'N/A'})")
+
+            logger.debug(f"Fetched {len(df)} klines for {symbol} @ {interval} (exclude_forming={exclude_forming})")
             return df
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:

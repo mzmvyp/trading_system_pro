@@ -1,7 +1,7 @@
 """
 Market data collection from Binance
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from src.core.constants import DEFAULT_KLINES_LIMIT
@@ -35,7 +35,7 @@ async def get_market_data(symbol: str = "BTCUSDT") -> Dict[str, Any]:
             "funding_rate": float(funding.get('lastFundingRate', 0)),
             "open_interest": float(open_interest.get('openInterest', 0)),
             "klines_count": len(klines_df),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
         logger.info(f"Market data fetched for {symbol}: ${result['current_price']:.2f}")
@@ -48,6 +48,6 @@ async def get_market_data(symbol: str = "BTCUSDT") -> Dict[str, Any]:
         return {
             "error": f"Erro ao obter dados de mercado ({error_type}): {error_msg}",
             "symbol": symbol,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "error_type": error_type
         }

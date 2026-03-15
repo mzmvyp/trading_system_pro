@@ -1,7 +1,7 @@
 """
 Multi-timeframe analysis
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 import pandas as pd
@@ -23,7 +23,8 @@ async def analyze_multiple_timeframes(symbol: str) -> Dict[str, Any]:
         async with BinanceClient() as client:
             for tf in timeframes:
                 try:
-                    klines_df = await client.get_klines(symbol, tf, limit=100)
+                    # exclude_forming=True: remove candle incompleto para evitar sinais falsos
+                    klines_df = await client.get_klines(symbol, tf, limit=100, exclude_forming=True)
 
                     if not klines_df.empty and len(klines_df) >= 20:
                         df = klines_df.reset_index()
@@ -69,7 +70,7 @@ async def analyze_multiple_timeframes(symbol: str) -> Dict[str, Any]:
             "bullish_count": bullish_timeframes,
             "bearish_count": bearish_timeframes,
             "neutral_count": neutral_timeframes,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     except Exception as e:

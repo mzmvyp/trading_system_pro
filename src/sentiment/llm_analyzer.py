@@ -6,7 +6,7 @@ Usa variável de ambiente OPENAI_API_KEY.
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 try:
@@ -94,7 +94,7 @@ class LLMSentimentAnalyzer:
         if key not in self._cache:
             return None
         r = self._cache[key]
-        if (datetime.now() - r.timestamp).total_seconds() > self._cache_duration_sec:
+        if (datetime.now(timezone.utc) - r.timestamp).total_seconds() > self._cache_duration_sec:
             del self._cache[key]
             return None
         r.cached = True
@@ -130,7 +130,7 @@ Reply with JSON only: {{"sentiment_score": number, "confidence": 0-1, "reasoning
                 confidence=conf,
                 reasoning=str(data.get("reasoning", "")),
                 news_count=news_count,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(timezone.utc),
                 sources=[],
                 cached=False
             )

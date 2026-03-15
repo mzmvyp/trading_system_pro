@@ -39,6 +39,7 @@ USER appuser
 COPY --from=builder /root/.local /home/appuser/.local
 ENV PATH=/home/appuser/.local/bin:$PATH
 ENV PYTHONPATH=/app:/app/src
+ENV TZ=UTC
 
 # Copy application
 COPY --chown=appuser:appuser . .

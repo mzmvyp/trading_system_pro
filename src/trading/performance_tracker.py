@@ -10,7 +10,7 @@ Features:
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List
 
 import numpy as np
@@ -166,7 +166,7 @@ class PerformanceTracker:
 
         return {
             "period_days": period_days,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "basic_stats": {
                 "total_trades": stats.total_trades,
                 "win_rate": round(stats.win_rate, 2),
