@@ -78,6 +78,18 @@ Não foram copiados para `docs/extracted_backtest`; úteis como referência para
 - **backtest_engine.py**, **data_analyzer.py**, **__init__.py**: na mesma pasta.
 - **Walk-forward:** não há arquivo nomeado; a validação no sinais é por período recente (`recent_days`) e múltiplas configurações.
 
+### Sistema completo (3 partes no mesmo repo)
+
+O **sinais** é o sistema que reúne os 3 subsistemas num único repositório. Cópia completa (sem .git) em:
+
+**`docs/extracted_backtest/sistema_backtest_sinais_completo/`**
+
+1. **Coleta de candles** → `binance_data_collector.py`: grava Binance em SQLite (`data/crypto_stream.db`, tabela `crypto_ohlc`).
+2. **Bot/analisador** → `main.py`, `core/analyzer.py`, `core/data_reader.py`: lê do SQLite, analisa, emite sinais; `--continuous`.
+3. **Backtest contínuo + ranking** → `backtesting/optimization_engine.py`, `backtest_engine.py`, `data_analyzer.py`: testa setups aleatórios, rankeia por score, roda continuamente (ex.: a cada 6h). Período padrão = 7 dias; para 3–6 meses, usar `recent_days=90` ou `180` e garantir histórico no SQLite.
+
+Ver **`README_SISTEMA_3_PARTES.md`** dentro dessa pasta para detalhes e como passar ao Claude Code.
+
 ---
 
 ## Próximos passos para trading_system_pro
