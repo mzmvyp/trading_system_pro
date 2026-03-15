@@ -219,7 +219,14 @@ async def main():
                     closed_positions = previous_positions - active_positions_set
                     if closed_positions:
                         print(f"\n[POSICAO FECHADA] Detectado fechamento: {closed_positions}")
-                        print("[GERANDO NOVO SINAL] Analisando para gerar novo sinal...")
+
+                        # Registrar cooldown pós-stop para evitar whipsaw
+                        try:
+                            from src.trading.risk_manager import register_sl_hit
+                            for sym in closed_positions:
+                                register_sl_hit(sym)
+                        except Exception as e:
+                            logger.warning(f"Erro ao registrar cooldown: {e}")
 
                         # CORRIGIDO: Cancelar ordens órfãs das posições fechadas
                         if settings.trading_mode == "real":

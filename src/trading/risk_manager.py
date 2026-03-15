@@ -10,6 +10,30 @@ from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Cooldown pós-stop: símbolo bloqueado por N horas após SL ser atingido
+# Evita whipsaw (abre LONG, estopa, abre SHORT, estopa de novo)
+_sl_cooldown_hours = 4.0
+_sl_cooldown_registry: Dict[str, datetime] = {}
+
+
+def register_sl_hit(symbol: str):
+    """Registra que um símbolo teve SL atingido (para cooldown)"""
+    _sl_cooldown_registry[symbol] = datetime.now()
+    logger.warning(f"[COOLDOWN] {symbol}: bloqueado por {_sl_cooldown_hours}h após stop loss")
+
+
+def _check_sl_cooldown(symbol: str) -> bool:
+    """Retorna True se o símbolo ainda está em cooldown pós-stop"""
+    last_sl = _sl_cooldown_registry.get(symbol)
+    if not last_sl:
+        return False
+    hours_since = (datetime.now() - last_sl).total_seconds() / 3600
+    if hours_since < _sl_cooldown_hours:
+        return True
+    # Cooldown expirado, limpar
+    del _sl_cooldown_registry[symbol]
+    return False
+
 
 def _calculate_current_drawdown() -> float:
     """Calcula o drawdown atual baseado no histórico de trades."""
@@ -81,6 +105,15 @@ def validate_risk_and_position(
                 "risk_level": "low"
             }
 
+        # Check cooldown pós-stop (evita whipsaw)
+        if _check_sl_cooldown(symbol):
+            remaining = _sl_cooldown_hours - (datetime.now() - _sl_cooldown_registry[symbol]).total_seconds() / 3600
+            return {
+                "can_execute": False,
+                "reason": f"Cooldown pos-stop ativo para {symbol}: {remaining:.1f}h restantes (evita whipsaw)",
+                "risk_level": "medium"
+            }
+
         # Check existing position - verifica TODAS as posições do símbolo
         try:
             if os.path.exists("portfolio/state.json"):
@@ -122,6 +155,18 @@ def validate_risk_and_position(
                     "trend": trend
                 }
 
+        # Filtro de volatilidade: não operar se stop muito apertado (mercado choppy)
+        entry_price = signal.get('entry_price', 0)
+        stop_loss_check = signal.get('stop_loss', 0)
+        if entry_price and stop_loss_check:
+            sl_distance_pct = abs(entry_price - stop_loss_check) / entry_price * 100
+            if sl_distance_pct < 0.5:
+                return {
+                    "can_execute": False,
+                    "reason": f"Stop loss muito apertado: {sl_distance_pct:.2f}% (minimo 0.5%). Mercado choppy, evitar.",
+                    "risk_level": "high"
+                }
+
         # Validação de R:R mínimo
         entry_rr = signal.get('entry_price', 0)
         sl_rr = signal.get('stop_loss', 0)
@@ -131,10 +176,10 @@ def validate_risk_and_position(
             reward_d = abs(tp1_rr - entry_rr)
             if risk_d > 0:
                 rr = reward_d / risk_d
-                if rr < 1.5:
+                if rr < 2.0:
                     return {
                         "can_execute": False,
-                        "reason": f"Risk:Reward inadequado: {rr:.2f}:1 (minimo 1.5:1)",
+                        "reason": f"Risk:Reward inadequado: {rr:.2f}:1 (minimo 2.0:1)",
                         "risk_level": "high",
                         "rr_ratio": rr
                     }
@@ -213,10 +258,11 @@ def validate_risk_and_position(
         logger.info(f"[P&L MODE] Exposição atual: {total_exposure:.0%}")
 
         daily_trades = _get_daily_trades_count()
-        if daily_trades >= 3:
+        max_daily_trades = 2
+        if daily_trades >= max_daily_trades:
             return {
                 "can_execute": False,
-                "reason": f"Limite diário de trades atingido: {daily_trades} (máximo 3)",
+                "reason": f"Limite diario de trades atingido: {daily_trades} (maximo {max_daily_trades})",
                 "risk_level": "medium"
             }
 

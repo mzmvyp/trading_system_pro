@@ -69,7 +69,7 @@ class Settings(BaseSettings):
 
     # Configurações de Confiança
     # UNIFICADO: Sempre usar escala 0-10
-    min_confidence_0_10: int = 7  # Mínimo 7/10 para executar sinais
+    min_confidence_0_10: int = 8  # Mínimo 8/10 para executar sinais (aumentado de 7)
     # DEPRECATED: min_confidence_0_5 removido - sempre usar escala 0-10
 
     # Configurações de Intervalo de Análise
