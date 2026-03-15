@@ -2,8 +2,11 @@
 Centralized logging configuration for Agno Trading Bot
 Provides structured logging with file rotation and console output.
 
-Backtest, optimizer, ML and LSTM loggers write only to logs/backtest_ml.log
-(no console) so trading/reevaluation logs stay readable in Docker/main output.
+Logs separados:
+- logs/trading_bot.log  → log principal (trading, agent, etc.)
+- logs/ml.log           → ML, LSTM, online learning
+- logs/backtest.log     → backtesting, otimização
+- Console               → só trading (ML/backtest ficam só em arquivo)
 """
 
 import logging
@@ -12,8 +15,14 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
-# Loggers com estes prefixos vão só para logs/backtest_ml.log (sem console)
-BACKTEST_ML_LOG_PREFIXES = ("src.backtesting", "src.ml")
+# Loggers com estes prefixos vão só para arquivo (sem console)
+_ML_PREFIXES = ("src.ml",)
+_BACKTEST_PREFIXES = ("src.backtesting",)
+
+
+def _is_quiet_logger(name: str) -> bool:
+    """Retorna True se o logger não deve imprimir no console."""
+    return any(name.startswith(p) for p in _ML_PREFIXES + _BACKTEST_PREFIXES)
 
 
 def setup_logger(
@@ -29,7 +38,7 @@ def setup_logger(
 
     Args:
         name: Logger name (usually __name__)
-        log_file: Optional log file path. If None, uses logs/{name}.log
+        log_file: Optional log file path. If None, auto-routes by module
         level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         max_bytes: Maximum log file size before rotation (default 10MB)
         backup_count: Number of backup files to keep
@@ -50,9 +59,14 @@ def setup_logger(
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
-    # Determine log file path
+    # Determine log file path based on module
     if log_file is None:
-        log_file = log_dir / f"{name.replace('.', '_')}.log"
+        if any(name.startswith(p) for p in _ML_PREFIXES):
+            log_file = log_dir / "ml.log"
+        elif any(name.startswith(p) for p in _BACKTEST_PREFIXES):
+            log_file = log_dir / "backtest.log"
+        else:
+            log_file = log_dir / f"{name.replace('.', '_')}.log"
     else:
         log_file = Path(log_file)
 
@@ -84,17 +98,19 @@ def setup_logger(
         console_handler.setFormatter(console_formatter)
         logger.addHandler(console_handler)
 
+    # Evitar propagação para o root logger (previne duplicação)
+    logger.propagate = False
+
     return logger
 
 
 def get_logger(name: str) -> logging.Logger:
     """
     Get or create a logger with the given name.
-    Backtest/optimizer/ML/LSTM loggers go only to logs/backtest_ml.log (no console).
+    ML/backtest loggers go only to file (no console).
     """
-    use_console = not any(name.startswith(prefix) for prefix in BACKTEST_ML_LOG_PREFIXES)
-    log_file = "logs/backtest_ml.log" if not use_console else None
-    return setup_logger(name, log_file=log_file, use_console=use_console)
+    use_console = not _is_quiet_logger(name)
+    return setup_logger(name, use_console=use_console)
 
 
 # Create main application logger
