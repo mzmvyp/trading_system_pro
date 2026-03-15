@@ -727,7 +727,10 @@ Responda APENAS com JSON:
             # Log único: o que o DeepSeek devolveu (sempre visível no fluxo de trading)
             _sig = agno_signal.get("signal", "N/A")
             _conf = agno_signal.get("confidence", 0)
+            _reasoning = agno_signal.get("reasoning", "")
             logger.info(f"[AGNO] DeepSeek devolveu: Sinal={_sig}, Confiança={_conf}/10")
+            if _reasoning:
+                logger.info(f"[AGNO] Reasoning: {_reasoning[:200]}")
             if _sig == "NO_SIGNAL" and _conf > 5:
                 logger.warning(f"[AGNO] Inconsistência: NO_SIGNAL com confiança {_conf}>5 — esperado BUY/SELL")
 
@@ -878,8 +881,18 @@ Responda APENAS com JSON:
 
             # Quando o sinal é NO_SIGNAL (do modelo ou bloqueado por confluência), não há validadores ML/risco
             if agno_signal.get("signal") == "NO_SIGNAL":
-                _reason = agno_signal.get("block_reason") or "Modelo optou por não dar sinal (confiança/regras)."
-                logger.info(f"[AGNO] Sem execução: {_reason}")
+                _reason = agno_signal.get("block_reason") or "Modelo optou por não dar sinal."
+                # Logar indicadores técnicos pra saber o contexto do mercado
+                _rsi = agno_signal.get("rsi", "?")
+                _adx = agno_signal.get("adx", "?")
+                _macd = agno_signal.get("macd_histogram", "?")
+                _trend = agno_signal.get("trend", "?")
+                _bb = agno_signal.get("bb_position", "?")
+                logger.info(
+                    f"[AGNO] Sem execução: {_reason} | "
+                    f"RSI={_rsi}, ADX={_adx}, MACD_hist={_macd}, "
+                    f"Trend={_trend}, BB_pos={_bb}"
+                )
 
             if agno_signal.get("signal") in ["BUY", "SELL"]:
                 logger.info(f"[AGNO] Validando {agno_signal.get('signal')} {symbol} (ML -> risco -> execução)...")
@@ -1118,7 +1131,9 @@ Responda APENAS com JSON:
                         "stop_loss": structured.get("stop_loss"),
                         "take_profit_1": structured.get("take_profit_1"),
                         "take_profit_2": structured.get("take_profit_2"),
-                        "confidence": raw_conf
+                        "confidence": raw_conf,
+                        "reasoning": structured.get("reasoning", ""),
+                        "operation_type": structured.get("operation_type", ""),
                     })
                     # Validar se tem entrada para BUY/SELL
                     if signal["signal"] in ["BUY", "SELL"] and not signal.get("entry_price"):
