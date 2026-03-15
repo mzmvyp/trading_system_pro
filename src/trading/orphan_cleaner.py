@@ -16,6 +16,7 @@ import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Set
 
+from src.core.config import settings
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -67,12 +68,15 @@ class OrphanOrderCleaner:
                 pos = next((p for p in positions if p.get("symbol") == sym), {})
                 print(f"   - {sym}: {pos.get('side', 'N/A')} {abs(pos.get('position_amt', 0)):.4f}")
 
-            # 2. Obter todas as ordens abertas
+            # 2. Obter todas as ordens abertas (regulares + algo SL/TP)
             all_orders = await executor.get_open_orders()
-
             if isinstance(all_orders, dict) and "error" in all_orders:
                 logger.error(f"[LIMPEZA] Erro ao obter ordens: {all_orders.get('error')}")
                 return {"success": False, "error": all_orders.get("error")}
+
+            for sym in settings.top_crypto_pairs:
+                algo_orders = await executor.get_open_algo_orders(sym)
+                all_orders.extend(algo_orders)
 
             print(f"[LIMPEZA] Ordens abertas: {len(all_orders)}")
 
@@ -91,7 +95,8 @@ class OrphanOrderCleaner:
                 if order_symbol not in symbols_with_position:
                     # Órfã: ordem para símbolo sem posição
                     orphan_orders.append(order)
-                    print(f"   [ORFA] {order_symbol} {order_type} {order_side} (ID: {order_id})")
+                    ident = order.get("algoId") or order_id
+                    print(f"   [ORFA] {order_symbol} {order_type} {order_side} (ID: {ident})")
                 else:
                     valid_orders.append(order)
                     # Agrupar por símbolo para verificar excessos
@@ -160,16 +165,20 @@ class OrphanOrderCleaner:
                     orders_to_cancel = orders[MAX_ORDERS_PER_SYMBOL:]
                     for order in orders_to_cancel:
                         try:
-                            order_id = order.get("orderId")
-                            cancel_result = await executor._request(
-                                "DELETE", "/fapi/v1/order",
-                                {"symbol": sym, "orderId": order_id},
-                                signed=True
-                            )
+                            algo_id = order.get("algoId")
+                            if algo_id is not None:
+                                cancel_result = await executor.cancel_algo_order(algo_id)
+                            else:
+                                order_id = order.get("orderId")
+                                cancel_result = await executor._request(
+                                    "DELETE", "/fapi/v1/order",
+                                    {"symbol": sym, "orderId": order_id},
+                                    signed=True
+                                )
                             if not (isinstance(cancel_result, dict) and "error" in cancel_result):
                                 excess_cancelled += 1
                         except Exception as e:
-                            logger.warning(f"[LIMPEZA] Erro ao cancelar ordem {order.get('orderId')} de {sym}: {e}")
+                            logger.warning(f"[LIMPEZA] Erro ao cancelar ordem {order.get('algoId') or order.get('orderId')} de {sym}: {e}")
 
                     print(f"   [OK] {sym}: canceladas {total - MAX_ORDERS_PER_SYMBOL} ordens excessivas (mantidas {MAX_ORDERS_PER_SYMBOL} mais recentes)")
 

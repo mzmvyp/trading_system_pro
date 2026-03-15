@@ -596,13 +596,11 @@ class BinanceFuturesExecutor:
                     "error": f"Ja existe posicao aberta para {symbol}: {existing_position['side']} {abs(existing_position['position_amt'])}"
                 }
 
-            # 2b. Cancelar quaisquer ordens pendentes antes de abrir nova posição
-            # Evita acúmulo de ordens SL/TP de tentativas anteriores
+            # 2b. Cancelar TODAS as ordens pendentes (regulares + algo SL/TP) antes de abrir nova posição
+            # Evita acúmulo/duplicação de ordens; get_open_orders só retorna regulares, então sempre cancelar
             try:
-                existing_orders = await self.get_open_orders(symbol)
-                if existing_orders and len(existing_orders) > 0:
-                    logger.info(f"[LIMPEZA PRE-EXECUCAO] {symbol}: cancelando {len(existing_orders)} ordens pendentes antes de abrir nova posicao")
-                    await self.cancel_all_orders(symbol)
+                await self.cancel_all_orders(symbol)
+                logger.info(f"[LIMPEZA PRE-EXECUCAO] {symbol}: ordens limpas antes de abrir nova posicao")
             except Exception as e:
                 logger.warning(f"[LIMPEZA PRE-EXECUCAO] Erro ao limpar ordens de {symbol}: {e}")
 
@@ -845,8 +843,19 @@ class BinanceFuturesExecutor:
                 "side": o.get("side", ""),
                 "origQty": o.get("quantity", 0),
                 "stopPrice": o.get("triggerPrice", ""),
+                "algoId": o.get("algoId"),  # para cancelamento via Algo API
+                "time": o.get("createTime", 0),
             })
         return out
+
+    async def cancel_algo_order(self, algo_id: int) -> Dict[str, Any]:
+        """Cancela uma ordem algo (SL/TP) pelo algoId."""
+        result = await self._request(
+            "DELETE", "/fapi/v1/algoOrder",
+            {"algoId": algo_id},
+            signed=True
+        )
+        return result
 
     async def get_all_positions(self) -> List[Dict[str, Any]]:
         """Obtém todas as posições abertas"""

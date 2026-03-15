@@ -130,6 +130,16 @@ class PositionMonitor:
                         logger.warning(f"[SL AUSENTE] {symbol} ({side}) sem Stop Loss ativo!")
                         print(f"[SL AUSENTE] {symbol} ({side}) - Recolocando Stop Loss...")
 
+                        # Cancelar qualquer ordem algo STOP_MARKET existente (evita duplicação)
+                        algo_list = await executor.get_open_algo_orders(symbol)
+                        for order in algo_list:
+                            if (order.get("type") or "").upper() == "STOP_MARKET" and order.get("algoId") is not None:
+                                try:
+                                    await executor.cancel_algo_order(order["algoId"])
+                                    logger.info(f"[SL LIMPEZA] {symbol}: cancelada ordem SL duplicada algoId={order['algoId']}")
+                                except Exception as e:
+                                    logger.warning(f"[SL LIMPEZA] {symbol}: erro ao cancelar algoId {order.get('algoId')}: {e}")
+
                         # Tentar recolocar SL baseado no execution record
                         sl_price = await self._find_sl_price(symbol, entry_price, side)
                         if sl_price:
