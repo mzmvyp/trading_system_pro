@@ -92,11 +92,9 @@ class AgnoTradingAgent:
             validator = SimpleSignalValidator()
             validator.load_models()
             self.ml_validator = validator
-            logger.info("[ML] Validador ML carregado com sucesso")
-            print("[ML] Validador de sinais ML carregado - confluencia habilitada!")
+            logger.info("[ML] Validador de sinais ML carregado - confluencia habilitada!")
         except Exception as e:
             logger.warning(f"[ML] Validador ML nao disponivel: {e}")
-            print("[ML] Validador ML nao disponivel (execute simple_signal_validator.py para treinar)")
             self.ml_validator = None
 
     def _load_lstm_sequence_validator(self):
@@ -106,8 +104,7 @@ class AgnoTradingAgent:
             validator = LSTMSequenceValidator()
             if validator.load_model():
                 self.lstm_sequence_validator = validator
-                logger.info("[Bi-LSTM] Sequence validator carregado")
-                print("[Bi-LSTM] Validador de sequências temporais carregado!")
+                logger.info("[Bi-LSTM] Validador de sequências temporais carregado!")
             else:
                 logger.info("[Bi-LSTM] Modelo não encontrado (execute backtest_dataset_generator + lstm_sequence_validator para treinar)")
         except Exception as e:
@@ -487,8 +484,7 @@ Responda APENAS com JSON:
         Returns:
             Sinal de trading estruturado
         """
-        print(f"\n[AGNO] AGNO Agent iniciando analise de {symbol}")
-        print("="*60)
+        logger.info(f"[AGNO] === Iniciando analise de {symbol} ===")
 
         # Verificar posição e limpar ordens órfãs antes de analisar
         from src.core.config import settings
@@ -505,8 +501,7 @@ Responda APENAS com JSON:
                 if not has_position:
                     open_orders = await executor.get_open_orders(symbol)
                     if open_orders and len(open_orders) > 0:
-                        logger.info(f"[LIMPEZA] {symbol}: {len(open_orders)} ordens orfas encontradas. Cancelando...")
-                        print(f"[LIMPEZA] {symbol}: Cancelando {len(open_orders)} ordens orfas")
+                        logger.info(f"[LIMPEZA] {symbol}: Cancelando {len(open_orders)} ordens orfas")
                         await executor.cancel_all_orders(symbol)
 
                 # 3. Se TEM posição, pular análise
@@ -514,7 +509,6 @@ Responda APENAS com JSON:
                     side = existing_position.get("side", "UNKNOWN")
                     amt = abs(existing_position.get("position_amt", 0))
                     logger.warning(f"[BINANCE] Ja existe posicao {side} aberta para {symbol} ({amt} unidades). Pulando analise.")
-                    print(f"[BINANCE] Ja existe posicao {side} aberta para {symbol}. Pulando analise.")
                     return {
                         "symbol": symbol,
                         "signal": "NO_SIGNAL",
@@ -543,7 +537,7 @@ Responda APENAS com JSON:
             hours_since = (now - last_time).total_seconds() / 3600
             if hours_since < min_interval:
                 remaining = int((min_interval - hours_since) * 60)
-                print(f"[COOLDOWN] {symbol}: ultima analise ha {int(hours_since*60)}min. Proximo em {remaining}min (intervalo {min_interval}h)")
+                logger.info(f"[COOLDOWN] {symbol}: ultima analise ha {int(hours_since*60)}min. Proximo em {remaining}min (intervalo {min_interval}h)")
                 return {
                     "symbol": symbol,
                     "signal": "NO_SIGNAL",
@@ -574,7 +568,7 @@ Responda APENAS com JSON:
                             # Atualizar cache em memória também
                             AgnoTradingAgent._last_analysis_time[symbol] = last_timestamp
                             remaining = int((min_interval - hours_since) * 60)
-                            print(f"[COOLDOWN] {symbol}: ultima analise ha {int(hours_since*60)}min (arquivo). Proximo em {remaining}min")
+                            logger.info(f"[COOLDOWN] {symbol}: ultima analise ha {int(hours_since*60)}min (arquivo). Proximo em {remaining}min")
                             return {
                                 "symbol": symbol,
                                 "signal": "NO_SIGNAL",
@@ -633,12 +627,10 @@ Responda APENAS com JSON:
                         if trend_data:
                             ds_dir = deepseek_signal.get("signal")
                             if ds_dir == "BUY" and not trend_data.get("allow_long", True):
-                                logger.warning(f"[TREND BLOCK] DEEPSEEK BUY {symbol} BLOQUEADO: tendência bearish")
-                                print(f"[TREND] DEEPSEEK BUY {symbol} BLOQUEADO - tendência de baixa no 4h")
+                                logger.warning(f"[TREND BLOCK] DEEPSEEK BUY {symbol} BLOQUEADO: tendência de baixa no 4h")
                                 deepseek_signal["signal"] = "NO_SIGNAL"
                             elif ds_dir == "SELL" and not trend_data.get("allow_short", True):
-                                logger.warning(f"[TREND BLOCK] DEEPSEEK SELL {symbol} BLOQUEADO: tendência bullish")
-                                print(f"[TREND] DEEPSEEK SELL {symbol} BLOQUEADO - tendência de alta no 4h")
+                                logger.warning(f"[TREND BLOCK] DEEPSEEK SELL {symbol} BLOQUEADO: tendência de alta no 4h")
                                 deepseek_signal["signal"] = "NO_SIGNAL"
 
                     if deepseek_signal.get("signal") in ["BUY", "SELL"]:
@@ -795,26 +787,21 @@ Responda APENAS com JSON:
 
                 logger.info(
                     f"[CONFLUENCE] {llm_signal_dir} {symbol}: "
-                    f"tech={votes_for}v/{votes_against}a, LLM={llm_vote_weight}v, "
-                    f"combined={combined_score:.3f} (min {MIN_COMBINED_SCORE}), "
-                    f"total_for={total_for} (min {MIN_VOTES_FOR})"
-                )
-                print(
-                    f"[CONFLUENCE] {llm_signal_dir} {symbol}: "
                     f"score={combined_score:.1%} ({total_for:.0f} for / {total_against} against) "
+                    f"| LLM_conf={agno_signal.get('confidence', '?')}/10 (peso={llm_vote_weight}) "
+                    f"| LSTM={'prob=' + f'{lstm_prob:.1%}' if lstm_vote or lstm_prob != 0.5 else 'N/A'} "
                     f"| thresholds: {confluence['thresholds_source']}"
                 )
 
                 if total_for < MIN_VOTES_FOR or combined_score < MIN_COMBINED_SCORE:
+                    # Log detalhado com cada voto individual pra saber exatamente o que bloqueou
+                    details_str = " | ".join(confluence["details"])
                     logger.warning(
                         f"[CONFLUENCE BLOCK] {llm_signal_dir} {symbol} BLOQUEADO: "
-                        f"score={combined_score:.3f} < {MIN_COMBINED_SCORE} ou "
-                        f"votes={total_for} < {MIN_VOTES_FOR}"
-                    )
-                    print(
-                        f"[CONFLUENCE] {llm_signal_dir} {symbol} BLOQUEADO - "
-                        f"confluência insuficiente ({total_for:.0f}/{MIN_VOTES_FOR} votos, "
-                        f"{combined_score:.1%}/{MIN_COMBINED_SCORE:.0%} score)"
+                        f"score={combined_score:.1%} (min {MIN_COMBINED_SCORE:.0%}) | "
+                        f"votos={total_for:.0f} (min {MIN_VOTES_FOR}) | "
+                        f"LLM_conf={agno_signal.get('confidence', '?')}/10 | "
+                        f"Votos: [{details_str}]"
                     )
                     agno_signal["signal"] = "NO_SIGNAL"
                     agno_signal["block_reason"] = (
@@ -900,16 +887,12 @@ Responda APENAS com JSON:
                 # ML em modo OBSERVADOR: registra predicao mas NAO bloqueia sinais
                 ml_opinion = 'SUCESSO' if ml_pred == 1 else 'FALHA'
                 if ml_validation.get("has_confluence"):
-                    print(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML concorda (prob: {ml_prob:.1%})")
-                    logger.info(f"[ML OBSERVADOR] Confluencia: prob={ml_prob:.1%}, predicao={ml_opinion}")
+                    logger.info(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML concorda (prob={ml_prob:.1%}, predicao={ml_opinion})")
                 else:
-                    print(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML discorda (prob: {ml_prob:.1%}, predicao={ml_opinion})")
-                    logger.info(f"[ML OBSERVADOR] Sem confluencia: prob={ml_prob:.1%}, predicao={ml_opinion}")
+                    logger.info(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML discorda (prob={ml_prob:.1%}, predicao={ml_opinion})")
 
                 if ml_validation.get("skip_signal"):
-                    # Isso so acontece se ml_required=True (configuracao explicita)
-                    logger.warning(f"[ML] Sinal BLOQUEADO (ml_required=True): prob={ml_prob:.1%}")
-                    print(f"[ML] Sinal {agno_signal.get('signal')} BLOQUEADO - ml_required=True")
+                    logger.warning(f"[ML BLOCK] {agno_signal.get('signal')} {symbol} BLOQUEADO (ml_required=True): prob={ml_prob:.1%}")
                 else:
                     # Obter tendência dinâmica para filtro
                     try:
@@ -972,7 +955,7 @@ Responda APENAS com JSON:
             return signal
 
         except Exception as e:
-            print(f"[ERRO] Erro na analise: {e}")
+            logger.error(f"[AGNO] Erro na analise de {symbol}: {e}")
             return self._create_error_signal(symbol, str(e))
 
     def _extract_balanced_json(self, text: str) -> Optional[str]:
@@ -1519,7 +1502,6 @@ Responda APENAS com JSON:
             )
             if same_signal:
                 logger.info(f"[DEDUP] Sinal duplicado ignorado: {signal_type} {symbol} ({source})")
-                print(f"[DEDUP] Sinal duplicado ignorado: {signal_type} {symbol} ({source})")
                 return
 
         # Salvar no cache
@@ -1538,7 +1520,7 @@ Responda APENAS com JSON:
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(signal, f, indent=2, ensure_ascii=False, default=str)
 
-        print(f"[SALVO] Sinal salvo: {filename}")
+        logger.info(f"[SALVO] Sinal salvo: {filename}")
 
     def _mark_signal_executed(self, signal: Dict[str, Any], mode: str, success: bool, details: str = ""):
         """
@@ -1572,8 +1554,7 @@ Responda APENAS com JSON:
                 json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
 
             status = "EXECUTADO" if success else "FALHOU"
-            logger.info(f"[TRACK] {signal.get('symbol')} {signal.get('signal')} -> {status} ({mode})")
-            print(f"[TRACK] Sinal {status}: {filepath}")
+            logger.info(f"[TRACK] {signal.get('symbol')} {signal.get('signal')} -> {status} ({mode}) | {filepath}")
 
         except Exception as e:
             logger.warning(f"[TRACK] Erro ao atualizar sinal: {e}")
@@ -1614,24 +1595,20 @@ Responda APENAS com JSON:
                 json.dump(response_data, f, indent=2, ensure_ascii=False, default=str)
 
             logger.info(f"[DEEPSEEK LOG] Prompt e resposta salvos: {filename}")
-            print(f"[DEEPSEEK LOG] Resposta salva em: {filename}")
 
         except Exception as e:
             logger.error(f"Erro ao salvar resposta do DeepSeek: {e}")
             # Não bloquear o fluxo se houver erro ao salvar
 
     def _print_summary(self, signal: Dict[str, Any]):
-        """Imprime resumo do sinal"""
-        print("\n" + "="*60)
-        print("RESULTADO DA ANALISE")
-        print("="*60)
-        print(f"Sinal: {signal.get('signal', 'N/A')}")
-        print(f"Confianca: {signal.get('confidence', 0)}/10")
-        if signal.get('entry_price'):
-            print(f"Entrada: ${signal['entry_price']:,.2f}")
-        if signal.get('stop_loss'):
-            print(f"Stop Loss: ${signal['stop_loss']:,.2f}")
-        print("="*60)
+        """Loga resumo do sinal"""
+        entry = f"${signal['entry_price']:,.2f}" if signal.get('entry_price') else "N/A"
+        sl = f"${signal['stop_loss']:,.2f}" if signal.get('stop_loss') else "N/A"
+        logger.info(
+            f"[RESULTADO] {signal.get('signal', 'N/A')} | "
+            f"Conf={signal.get('confidence', 0)}/10 | "
+            f"Entry={entry} | SL={sl}"
+        )
 
     def _create_error_signal(self, symbol: str, error: str) -> Dict[str, Any]:
         """Cria sinal de erro"""
@@ -1651,17 +1628,16 @@ Responda APENAS com JSON:
             symbols: Lista de símbolos
             interval: Intervalo em segundos
         """
-        print(f"[MONITOR] Monitoramento continuo de {symbols}")
-        print(f"Intervalo: {interval}s")
+        logger.info(f"[MONITOR] Monitoramento continuo de {symbols} | Intervalo: {interval}s")
 
         while True:
             for symbol in symbols:
                 try:
                     await self.analyze(symbol)
                 except Exception as e:
-                    print(f"[ERRO] Erro em {symbol}: {e}")
+                    logger.error(f"[MONITOR] Erro em {symbol}: {e}")
 
                 await asyncio.sleep(10)  # Pausa entre símbolos
 
-            print(f"[AGUARDANDO] Aguardando {interval}s...")
+            logger.info(f"[MONITOR] Aguardando {interval}s...")
             await asyncio.sleep(interval)

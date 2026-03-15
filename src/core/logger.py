@@ -1,6 +1,12 @@
 """
 Centralized logging configuration for Agno Trading Bot
 Provides structured logging with file rotation and console output
+
+Logs separados:
+- logs/trading_bot.log  → log principal (trading, agent, etc.)
+- logs/ml.log           → ML, LSTM, online learning
+- logs/backtest.log     → backtesting, otimização
+- Console               → só trading (ML/backtest ficam só em arquivo)
 """
 
 import logging
@@ -8,6 +14,18 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
+
+# Módulos que vão pra logs separados (sem console)
+_ML_PREFIXES = ("src.ml",)
+_BACKTEST_PREFIXES = ("src.backtesting",)
+
+
+def _is_ml_logger(name: str) -> bool:
+    return any(name.startswith(p) for p in _ML_PREFIXES)
+
+
+def _is_backtest_logger(name: str) -> bool:
+    return any(name.startswith(p) for p in _BACKTEST_PREFIXES)
 
 
 def setup_logger(
@@ -42,9 +60,14 @@ def setup_logger(
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
-    # Determine log file path
+    # Determine log file path based on module
     if log_file is None:
-        log_file = log_dir / f"{name.replace('.', '_')}.log"
+        if _is_ml_logger(name):
+            log_file = log_dir / "ml.log"
+        elif _is_backtest_logger(name):
+            log_file = log_dir / "backtest.log"
+        else:
+            log_file = log_dir / f"{name.replace('.', '_')}.log"
     else:
         log_file = Path(log_file)
 
@@ -65,15 +88,19 @@ def setup_logger(
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    # Console handler (shorter format for readability)
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
-    console_formatter = logging.Formatter(
-        fmt='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%H:%M:%S'
-    )
-    console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
+    # Console handler - só para módulos de TRADING (ML/backtest ficam só em arquivo)
+    if not _is_ml_logger(name) and not _is_backtest_logger(name):
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(level)
+        console_formatter = logging.Formatter(
+            fmt='%(asctime)s - %(levelname)s - %(message)s',
+            datefmt='%H:%M:%S'
+        )
+        console_handler.setFormatter(console_formatter)
+        logger.addHandler(console_handler)
+
+    # Evitar propagação para o root logger (previne duplicação)
+    logger.propagate = False
 
     return logger
 
