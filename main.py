@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import sys
+from datetime import timedelta
 
 from src.core.logger import get_logger
 from src.trading.agent import AgnoTradingAgent
@@ -194,6 +195,25 @@ async def main():
             print(f"Modo: {settings.trading_mode.upper()}")
             print("="*60)
 
+            # ============================================================
+            # MELHORIA do sinais: Iniciar otimizador contínuo em background
+            # Roda a cada 6h, acha melhores params, salva best_config.json
+            # O agent.py lê esse config antes de gerar sinais
+            # ============================================================
+            try:
+                from src.backtesting.continuous_optimizer import start_global_optimizer
+                optimizer = start_global_optimizer(
+                    symbols=symbols,
+                    interval="1h",
+                    cycle_hours=6,
+                    days_back=30,
+                    n_iterations=50,
+                )
+                print("[OPTIMIZER] Otimizacao continua iniciada em background (ciclo: 6h)")
+            except Exception as e:
+                logger.warning(f"[OPTIMIZER] Falha ao iniciar otimizador: {e}")
+                print(f"[OPTIMIZER] Falha ao iniciar otimizador: {e} (continuando sem)")
+
             # Rastrear posições anteriores para detectar fechamentos
             previous_positions = set()
             _cleanup_cycle = 0  # Contador para limpeza periódica de ordens órfãs
@@ -308,8 +328,29 @@ async def main():
                     # Atualizar rastreamento de posições
                     previous_positions = active_positions_set
 
-                    print(f"\n[AGUARDANDO] Aguardando {args.interval}s...")
-                    await asyncio.sleep(args.interval)
+                    # ============================================================
+                    # MELHORIA do sinais: Sincronizar com fechamento de candle
+                    # Ao invés de dormir 900s fixo, calcula tempo até próxima
+                    # hora cheia + 35s (30s pro dado gravar + 5s margem).
+                    # Isso garante que a análise usa candles RECÉM-FECHADOS.
+                    # Origem: sinais/core/timeframe_scheduler.py
+                    # ============================================================
+                    from datetime import datetime as _dt, timezone as _tz
+                    now_utc = _dt.now(_tz.utc)
+                    # Próxima hora cheia
+                    next_hour = now_utc.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+                    # Adicionar 35s de delay (como no sinais: 30s stream + 5s análise)
+                    next_analysis = next_hour + timedelta(seconds=35)
+                    wait_seconds = (next_analysis - now_utc).total_seconds()
+
+                    # Se falta pouco (< 60s), esperar a hora seguinte
+                    if wait_seconds < 60:
+                        next_analysis += timedelta(hours=1)
+                        wait_seconds = (next_analysis - now_utc).total_seconds()
+
+                    wait_minutes = int(wait_seconds // 60)
+                    print(f"\n[AGUARDANDO] Proxima analise em {wait_minutes}min (sync candle close: {next_analysis.strftime('%H:%M:%S')} UTC)")
+                    await asyncio.sleep(wait_seconds)
 
                 except KeyboardInterrupt:
                     raise
