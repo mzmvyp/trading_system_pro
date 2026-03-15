@@ -242,6 +242,9 @@ class PositionMonitor:
                 # Verificar tempo mínimo aberto
                 entry_time = await self._find_entry_time(symbol)
                 if entry_time:
+                    # Garantir timezone-aware para evitar erro de subtração
+                    if entry_time.tzinfo is None:
+                        entry_time = entry_time.replace(tzinfo=timezone.utc)
                     hours_open = (now - entry_time).total_seconds() / 3600
                     if hours_open < settings.reevaluation_min_time_open_hours:
                         logger.debug(f"[REAVALIACAO] {symbol}: pulando, aberta ha {hours_open:.1f}h (min: {settings.reevaluation_min_time_open_hours}h)")
