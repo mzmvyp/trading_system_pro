@@ -211,6 +211,137 @@ class AgnoTradingAgent:
             return reward / risk
         return 1.0
 
+    def _calculate_technical_confluence(self, analysis_data: Dict, signal_direction: str) -> Dict[str, Any]:
+        """
+        Calcula score de confluência técnica local a partir dos dados já coletados.
+        Cada condição alinhada com a direção do sinal conta como +1 voto.
+
+        Args:
+            analysis_data: Dados coletados por prepare_analysis_for_llm()
+            signal_direction: "BUY" ou "SELL"
+
+        Returns:
+            Dict com votes_for, votes_against, total_votes, score (0-1), details
+        """
+        votes_for = 0
+        votes_against = 0
+        details = []
+
+        is_buy = signal_direction == "BUY"
+
+        # Carregar thresholds otimizados (se disponíveis)
+        try:
+            from src.backtesting.continuous_optimizer import load_best_config
+            best = load_best_config(analysis_data.get("symbol", "BTCUSDT"), "1h")
+        except Exception:
+            best = None
+
+        # Thresholds padrão (sobrescritos por best_config se existir)
+        rsi_oversold = best.rsi_oversold if best else 30
+        rsi_overbought = best.rsi_overbought if best else 70
+        adx_threshold = best.adx_threshold if best else 25
+        volume_threshold = best.volume_spike_threshold if best else 1.5
+
+        indicators = analysis_data.get("key_indicators", {})
+        trend_data = analysis_data.get("trend_analysis", {})
+        volume_flow = analysis_data.get("volume_flow", {})
+        mtf = analysis_data.get("multi_timeframe", {})
+
+        # 1. RSI zone alignment
+        rsi = indicators.get("rsi", {}).get("value", 50)
+        if is_buy and rsi < rsi_oversold:
+            votes_for += 1
+            details.append(f"RSI oversold ({rsi:.1f} < {rsi_oversold})")
+        elif not is_buy and rsi > rsi_overbought:
+            votes_for += 1
+            details.append(f"RSI overbought ({rsi:.1f} > {rsi_overbought})")
+        elif is_buy and rsi > rsi_overbought:
+            votes_against += 1
+            details.append(f"RSI contra BUY ({rsi:.1f} > {rsi_overbought})")
+        elif not is_buy and rsi < rsi_oversold:
+            votes_against += 1
+            details.append(f"RSI contra SELL ({rsi:.1f} < {rsi_oversold})")
+
+        # 2. MACD histogram direction
+        macd_hist = indicators.get("macd", {}).get("histogram", 0)
+        if (is_buy and macd_hist > 0) or (not is_buy and macd_hist < 0):
+            votes_for += 1
+            details.append(f"MACD aligned ({macd_hist:.4f})")
+        elif (is_buy and macd_hist < 0) or (not is_buy and macd_hist > 0):
+            votes_against += 1
+            details.append(f"MACD contra ({macd_hist:.4f})")
+
+        # 3. EMA alignment (trend direction)
+        primary_trend = trend_data.get("primary_trend", "neutral")
+        if (is_buy and primary_trend in ("bullish", "strong_bullish")) or \
+           (not is_buy and primary_trend in ("bearish", "strong_bearish")):
+            votes_for += 1
+            details.append(f"Trend aligned ({primary_trend})")
+        elif (is_buy and primary_trend in ("bearish", "strong_bearish")) or \
+             (not is_buy and primary_trend in ("bullish", "strong_bullish")):
+            votes_against += 1
+            details.append(f"Trend contra ({primary_trend})")
+
+        # 4. ADX trend strength
+        adx = trend_data.get("adx", 0)
+        if adx >= adx_threshold:
+            votes_for += 1
+            details.append(f"ADX strong trend ({adx:.1f} >= {adx_threshold})")
+        else:
+            details.append(f"ADX weak trend ({adx:.1f} < {adx_threshold})")
+
+        # 5. Bollinger Band position
+        bb_pos = indicators.get("bollinger", {}).get("position", 0.5)
+        if is_buy and bb_pos < 0.2:
+            votes_for += 1
+            details.append(f"BB near lower band ({bb_pos:.2f})")
+        elif not is_buy and bb_pos > 0.8:
+            votes_for += 1
+            details.append(f"BB near upper band ({bb_pos:.2f})")
+
+        # 6. Volume surge
+        vol_ratio = volume_flow.get("volume_ratio", 1.0)
+        if vol_ratio >= volume_threshold:
+            votes_for += 1
+            details.append(f"Volume surge ({vol_ratio:.2f}x >= {volume_threshold}x)")
+
+        # 7. Multi-timeframe alignment
+        bullish_count = mtf.get("bullish_count", 0)
+        bearish_count = mtf.get("bearish_count", 0)
+        if is_buy and bullish_count >= 3:
+            votes_for += 1
+            details.append(f"MTF aligned ({bullish_count}/5 bullish)")
+        elif not is_buy and bearish_count >= 3:
+            votes_for += 1
+            details.append(f"MTF aligned ({bearish_count}/5 bearish)")
+        elif is_buy and bearish_count >= 3:
+            votes_against += 1
+            details.append(f"MTF contra BUY ({bearish_count}/5 bearish)")
+        elif not is_buy and bullish_count >= 3:
+            votes_against += 1
+            details.append(f"MTF contra SELL ({bullish_count}/5 bullish)")
+
+        # 8. CVD (Cumulative Volume Delta) alignment
+        cvd = volume_flow.get("cvd", 0)
+        if (is_buy and cvd > 0) or (not is_buy and cvd < 0):
+            votes_for += 1
+            details.append(f"CVD aligned ({cvd:.2f})")
+        elif (is_buy and cvd < 0) or (not is_buy and cvd > 0):
+            votes_against += 1
+            details.append(f"CVD contra ({cvd:.2f})")
+
+        total_votes = votes_for + votes_against
+        score = votes_for / max(total_votes, 1)
+
+        return {
+            "votes_for": votes_for,
+            "votes_against": votes_against,
+            "total_votes": total_votes,
+            "score": round(score, 3),
+            "details": details,
+            "thresholds_source": "optimizer" if best else "default",
+        }
+
     # REFATORADO: Constante de preços padrão para evitar duplicação
     DEFAULT_PRICES = {
         "BTCUSDT": 95000, "ETHUSDT": 2500, "SOLUSDT": 150,
@@ -532,7 +663,7 @@ Responda APENAS com JSON:
             # Salvar resposta bruta para auditoria
             self._save_deepseek_response(symbol, prompt if "error" not in analysis_data else "", response, analysis_data if "error" not in analysis_data else {})
 
-            # Processar resposta do AGNO
+            # Processar resposta do AGNO (voto da LLM)
             agno_signal = await self._process_agent_response(response, symbol)
             agno_signal["source"] = "AGNO"
 
@@ -581,6 +712,69 @@ Responda APENAS com JSON:
                         agno_signal["bearish_tf_count"] = mtf_data.get("bearish_tf_count", 0)
             except Exception as e:
                 logger.warning(f"[ML] Erro ao coletar indicadores para ML: {e}")
+
+            # ========================================
+            # CONFLUÊNCIA: LLM é um voto, não a decisão final
+            # Calcular score técnico local + voto LLM → decisão por confluência
+            # ========================================
+            llm_signal_dir = agno_signal.get("signal", "NO_SIGNAL")
+
+            if llm_signal_dir in ["BUY", "SELL"] and "error" not in analysis_data:
+                confluence = self._calculate_technical_confluence(
+                    {**analysis_data, "symbol": symbol}, llm_signal_dir
+                )
+                tech_score = confluence["score"]
+                votes_for = confluence["votes_for"]
+                votes_against = confluence["votes_against"]
+
+                # LLM conta como 1 voto a favor (peso ~20% do total, como no sinais)
+                # Confidence da LLM (1-10) modula o peso: alta confiança = voto forte
+                llm_confidence = agno_signal.get("confidence", 5)
+                llm_vote_weight = 1 if llm_confidence >= 5 else 0.5
+
+                total_for = votes_for + llm_vote_weight
+                total_against = votes_against
+                total_all = total_for + total_against
+                combined_score = total_for / max(total_all, 1)
+
+                # Mínimo: 4 votos a favor (técnicos + LLM) E score >= 0.55
+                MIN_VOTES_FOR = 4
+                MIN_COMBINED_SCORE = 0.55
+
+                agno_signal["confluence_score"] = round(combined_score, 3)
+                agno_signal["confluence_details"] = confluence["details"]
+                agno_signal["confluence_votes_for"] = total_for
+                agno_signal["confluence_votes_against"] = total_against
+                agno_signal["confluence_thresholds"] = confluence["thresholds_source"]
+
+                logger.info(
+                    f"[CONFLUENCE] {llm_signal_dir} {symbol}: "
+                    f"tech={votes_for}v/{votes_against}a, LLM={llm_vote_weight}v, "
+                    f"combined={combined_score:.3f} (min {MIN_COMBINED_SCORE}), "
+                    f"total_for={total_for} (min {MIN_VOTES_FOR})"
+                )
+                print(
+                    f"[CONFLUENCE] {llm_signal_dir} {symbol}: "
+                    f"score={combined_score:.1%} ({total_for:.0f} for / {total_against} against) "
+                    f"| thresholds: {confluence['thresholds_source']}"
+                )
+
+                if total_for < MIN_VOTES_FOR or combined_score < MIN_COMBINED_SCORE:
+                    logger.warning(
+                        f"[CONFLUENCE BLOCK] {llm_signal_dir} {symbol} BLOQUEADO: "
+                        f"score={combined_score:.3f} < {MIN_COMBINED_SCORE} ou "
+                        f"votes={total_for} < {MIN_VOTES_FOR}"
+                    )
+                    print(
+                        f"[CONFLUENCE] {llm_signal_dir} {symbol} BLOQUEADO - "
+                        f"confluência insuficiente ({total_for:.0f}/{MIN_VOTES_FOR} votos, "
+                        f"{combined_score:.1%}/{MIN_COMBINED_SCORE:.0%} score)"
+                    )
+                    agno_signal["signal"] = "NO_SIGNAL"
+                    agno_signal["block_reason"] = (
+                        f"Confluência insuficiente: score={combined_score:.3f}, "
+                        f"votes_for={total_for:.0f}, details={confluence['details']}"
+                    )
 
             # CORRIGIDO: Se não tem entry_price, obter do mercado (async)
             # Se não tem SL/TP, calcular baseado em ATR (não % arbitrário)
@@ -637,26 +831,6 @@ Responda APENAS com JSON:
             # FILTRO DE SINAIS: Verificar se sinais AGNO estão habilitados
             if not settings.accept_agno_signals:
                 logger.info("[AGNO] Sinais AGNO desabilitados (accept_agno_signals=False). Sinal ignorado.")
-            elif agno_signal.get("signal") in ["BUY", "SELL"]:
-                # ========================================
-                # HARD BLOCK 1: CONFLUÊNCIA MULTI-TIMEFRAME
-                # Requer pelo menos 3 timeframes na mesma direção do sinal
-                # Sem confluência = sem trade. Sem exceções.
-                # ========================================
-                sig_dir = agno_signal.get("signal")
-                bullish_count = agno_signal.get("bullish_tf_count", 0)
-                bearish_count = agno_signal.get("bearish_tf_count", 0)
-
-                if sig_dir == "BUY" and bullish_count < 3:
-                    logger.warning(f"[CONFLUENCE BLOCK] BUY {symbol} BLOQUEADO: apenas {bullish_count}/5 TFs bullish (minimo 3)")
-                    print(f"[CONFLUENCE] BUY {symbol} BLOQUEADO - apenas {bullish_count}/5 timeframes bullish")
-                    agno_signal["signal"] = "NO_SIGNAL"
-                    agno_signal["block_reason"] = f"Confluencia insuficiente: {bullish_count}/5 TFs bullish"
-                elif sig_dir == "SELL" and bearish_count < 3:
-                    logger.warning(f"[CONFLUENCE BLOCK] SELL {symbol} BLOQUEADO: apenas {bearish_count}/5 TFs bearish (minimo 3)")
-                    print(f"[CONFLUENCE] SELL {symbol} BLOQUEADO - apenas {bearish_count}/5 timeframes bearish")
-                    agno_signal["signal"] = "NO_SIGNAL"
-                    agno_signal["block_reason"] = f"Confluencia insuficiente: {bearish_count}/5 TFs bearish"
 
             if agno_signal.get("signal") in ["BUY", "SELL"]:
                 # VALIDAÇÃO ML: Usar modelo treinado para validar confluência
