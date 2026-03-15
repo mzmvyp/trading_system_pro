@@ -732,6 +732,15 @@ Responda APENAS com JSON:
             except Exception as e:
                 logger.warning(f"[ML] Erro ao coletar indicadores para ML: {e}")
 
+            # Log único: o que o DeepSeek devolveu (sempre visível no fluxo de trading)
+            _sig = agno_signal.get("signal", "N/A")
+            _conf = agno_signal.get("confidence", 0)
+            logger.info(f"[AGNO TRATATIVA] DeepSeek devolveu: Sinal={_sig}, Confiança={_conf}/10")
+            print(f"[AGNO TRATATIVA] DeepSeek devolveu: Sinal={_sig}, Confiança={_conf}/10")
+            if _sig == "NO_SIGNAL" and _conf > 5:
+                logger.warning(f"[AGNO TRATATIVA] Inconsistência: NO_SIGNAL com confiança {_conf}>5. Esperado: BUY/SELL quando confiança > 5 (verificar prompt/modelo).")
+                print(f"[AGNO TRATATIVA] AVISO: NO_SIGNAL com confiança {_conf}>5 — modelo deveria dar BUY/SELL para ir aos validadores.")
+
             # ========================================
             # CONFLUÊNCIA: LLM é um voto, não a decisão final
             # Calcular score técnico local + voto LLM → decisão por confluência
@@ -806,22 +815,24 @@ Responda APENAS com JSON:
                     f"| thresholds: {confluence['thresholds_source']}"
                 )
 
-                if total_for < MIN_VOTES_FOR or combined_score < MIN_COMBINED_SCORE:
-                    logger.warning(
-                        f"[CONFLUENCE BLOCK] {llm_signal_dir} {symbol} BLOQUEADO: "
-                        f"score={combined_score:.3f} < {MIN_COMBINED_SCORE} ou "
-                        f"votes={total_for} < {MIN_VOTES_FOR}"
+                # Regra: confiança > 5 = DeepSeek aceitou o sinal → vai sempre aos próximos validadores (ML, risco).
+                # Confluência só pode bloquear quando confiança <= 5.
+                if llm_confidence > 5:
+                    logger.info(f"[CONFLUENCE] {llm_signal_dir} {symbol} confiança LLM={llm_confidence}>5: aceite DeepSeek, segue para ML/risco (confluência informativa: score={combined_score:.2f})")
+                    print(f"[CONFLUENCE] Confiança {llm_confidence}>5: sinal aceite pelo DeepSeek, segue para ML/risco.")
+                elif total_for < MIN_VOTES_FOR or combined_score < MIN_COMBINED_SCORE:
+                    motivo_confl = (
+                        f"confiança LLM={llm_confidence} (<=5) e confluência insuficiente: "
+                        f"score={combined_score:.2f} (mín {MIN_COMBINED_SCORE}), "
+                        f"votos a favor={total_for:.0f} (mín {MIN_VOTES_FOR}). "
+                        f"Detalhes: {confluence['details']}"
                     )
-                    print(
-                        f"[CONFLUENCE] {llm_signal_dir} {symbol} BLOQUEADO - "
-                        f"confluência insuficiente ({total_for:.0f}/{MIN_VOTES_FOR} votos, "
-                        f"{combined_score:.1%}/{MIN_COMBINED_SCORE:.0%} score)"
-                    )
+                    logger.warning(f"[CONFLUENCE BLOCK] {llm_signal_dir} {symbol} BLOQUEADO: {motivo_confl}")
+                    logger.info(f"[AGNO VALIDADOR] BLOQUEADO por Confluência: {motivo_confl}")
+                    print(f"[CONFLUENCE] {llm_signal_dir} {symbol} BLOQUEADO - confluência insuficiente.")
+                    print(f"[AGNO VALIDADOR] BLOQUEADO por Confluência: {motivo_confl}")
                     agno_signal["signal"] = "NO_SIGNAL"
-                    agno_signal["block_reason"] = (
-                        f"Confluência insuficiente: score={combined_score:.3f}, "
-                        f"votes_for={total_for:.0f}, details={confluence['details']}"
-                    )
+                    agno_signal["block_reason"] = f"Confluência: {motivo_confl}"
 
             # CORRIGIDO: Se não tem entry_price, obter do mercado (async)
             # Se não tem SL/TP, calcular baseado em ATR (não % arbitrário)
@@ -876,10 +887,22 @@ Responda APENAS com JSON:
             self._save_signal(agno_signal)
 
             # FILTRO DE SINAIS: Verificar se sinais AGNO estão habilitados
-            if not settings.accept_agno_signals:
+            if not settings.accept_agno_signals and agno_signal.get("signal") in ["BUY", "SELL"]:
                 logger.info("[AGNO] Sinais AGNO desabilitados (accept_agno_signals=False). Sinal ignorado.")
+                logger.info("[AGNO VALIDADOR] BLOQUEADO por Config: accept_agno_signals=False. Sinal não aceite.")
+                print(f"[AGNO VALIDADOR] BLOQUEADO por Config: accept_agno_signals=False. Sinal não aceite.")
+
+            # Quando o sinal é NO_SIGNAL (do modelo ou bloqueado por confluência), não há validadores ML/risco
+            if agno_signal.get("signal") == "NO_SIGNAL":
+                _reason = agno_signal.get("block_reason") or "Modelo optou por não dar sinal (confiança/regras)."
+                logger.info(f"[AGNO TRATATIVA] Sem execução: {_reason}")
+                print(f"[AGNO TRATATIVA] Sem execução: {_reason}")
+                logger.info(f"[AGNO VALIDADOR] Não aceite: {_reason}")
+                print(f"[AGNO VALIDADOR] Não aceite: {_reason}")
 
             if agno_signal.get("signal") in ["BUY", "SELL"]:
+                logger.info(f"[AGNO TRATATIVA] Validando {agno_signal.get('signal')} {symbol} (ML -> risco -> execução)...")
+                print(f"[AGNO TRATATIVA] Validando {agno_signal.get('signal')} {symbol} (ML -> risco -> execução)...")
                 # VALIDAÇÃO ML: Usar modelo treinado para validar confluência
                 ml_validation = self._validate_with_ml_model(agno_signal)
                 ml_prob = ml_validation.get('probability', 0)
@@ -909,8 +932,12 @@ Responda APENAS com JSON:
 
                 if ml_validation.get("skip_signal"):
                     # Isso so acontece se ml_required=True (configuracao explicita)
+                    motivo_ml = f"probabilidade ML={ml_prob:.1%} abaixo do exigido (ml_required=True). Sinal não aceite."
                     logger.warning(f"[ML] Sinal BLOQUEADO (ml_required=True): prob={ml_prob:.1%}")
+                    logger.info(f"[AGNO VALIDADOR] BLOQUEADO por ML: {motivo_ml}")
                     print(f"[ML] Sinal {agno_signal.get('signal')} BLOQUEADO - ml_required=True")
+                    print(f"[AGNO VALIDADOR] BLOQUEADO por ML: {motivo_ml}")
+                    print(f"[AGNO TRATATIVA] Resultado: BLOQUEADO | ML (prob={ml_prob:.1%}, ml_required=True)")
                 else:
                     # Obter tendência dinâmica para filtro
                     try:
@@ -921,6 +948,7 @@ Responda APENAS com JSON:
                     validation = validate_risk_and_position(agno_signal, symbol, _trend_data=trend_data)
                     if validation.get("can_execute"):
                         logger.info(f"[AGNO] Validando e executando sinal {agno_signal.get('signal')} para {symbol}")
+                        print(f"[AGNO TRATATIVA] Risco/posição: OK. Executando...")
                         position_size = validation.get("recommended_position_size", validation.get("position_size"))
 
                         # VERIFICAR MODO DE TRADING: paper ou real
@@ -934,21 +962,28 @@ Responda APENAS com JSON:
                             if execution_result.get("success"):
                                 self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
                                 logger.info(f"[AGNO REAL] Trade REAL executado com sucesso: {execution_result.get('message', '')}")
+                                print(f"[AGNO TRATATIVA] Resultado: EXECUTADO (real)")
                             else:
                                 self._mark_signal_executed(agno_signal, "real", False, execution_result.get("error", ""))
                                 logger.warning(f"[AGNO REAL] Falha ao executar trade REAL: {execution_result.get('error', '')}")
+                                print(f"[AGNO TRATATIVA] Resultado: FALHA execução real | {execution_result.get('error', '')}")
                         else:
                             # MODO PAPER: Simulação
                             execution_result = execute_paper_trade(agno_signal, position_size)
                             if execution_result.get("success"):
                                 self._mark_signal_executed(agno_signal, "paper", True, execution_result.get("message", ""))
                                 logger.info(f"[AGNO PAPER] Trade PAPER executado com sucesso: {execution_result.get('message', '')}")
+                                print(f"[AGNO TRATATIVA] Resultado: EXECUTADO (paper)")
                             else:
                                 self._mark_signal_executed(agno_signal, "paper", False, execution_result.get("error", ""))
                                 logger.warning(f"[AGNO PAPER] Falha ao executar trade PAPER: {execution_result.get('error', '')}")
+                                print(f"[AGNO TRATATIVA] Resultado: FALHA execução paper | {execution_result.get('error', '')}")
                     else:
                         reason = validation.get("reason", "Desconhecido")
                         logger.info(f"[AGNO] Sinal nao executado: {reason}")
+                        logger.info(f"[AGNO VALIDADOR] BLOQUEADO por Risco/Posição: {reason}. Sinal não aceite.")
+                        print(f"[AGNO VALIDADOR] BLOQUEADO por Risco/Posição: {reason}. Sinal não aceite.")
+                        print(f"[AGNO TRATATIVA] Resultado: BLOQUEADO | motivo: {reason}")
                         # Guardar motivo no ficheiro do sinal para análise no dashboard
                         filepath = agno_signal.get("_signal_file")
                         if filepath and os.path.exists(filepath):

@@ -1,6 +1,9 @@
 """
 Centralized logging configuration for Agno Trading Bot
-Provides structured logging with file rotation and console output
+Provides structured logging with file rotation and console output.
+
+Backtest, optimizer, ML and LSTM loggers write only to logs/backtest_ml.log
+(no console) so trading/reevaluation logs stay readable in Docker/main output.
 """
 
 import logging
@@ -9,16 +12,20 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
+# Loggers com estes prefixos vão só para logs/backtest_ml.log (sem console)
+BACKTEST_ML_LOG_PREFIXES = ("src.backtesting", "src.ml")
+
 
 def setup_logger(
     name: str,
     log_file: Optional[str] = None,
     level: int = logging.INFO,
     max_bytes: int = 10_485_760,  # 10MB
-    backup_count: int = 5
+    backup_count: int = 5,
+    use_console: bool = True,
 ) -> logging.Logger:
     """
-    Setup a logger with both file and console handlers
+    Setup a logger with file and optionally console handlers.
 
     Args:
         name: Logger name (usually __name__)
@@ -26,6 +33,7 @@ def setup_logger(
         level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         max_bytes: Maximum log file size before rotation (default 10MB)
         backup_count: Number of backup files to keep
+        use_console: If False, do not add console handler (only file)
 
     Returns:
         Configured logger instance
@@ -65,30 +73,28 @@ def setup_logger(
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    # Console handler (shorter format for readability)
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
-    console_formatter = logging.Formatter(
-        fmt='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%H:%M:%S'
-    )
-    console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
+    if use_console:
+        # Console handler (shorter format for readability)
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(level)
+        console_formatter = logging.Formatter(
+            fmt='%(asctime)s - %(levelname)s - %(message)s',
+            datefmt='%H:%M:%S'
+        )
+        console_handler.setFormatter(console_formatter)
+        logger.addHandler(console_handler)
 
     return logger
 
 
 def get_logger(name: str) -> logging.Logger:
     """
-    Get or create a logger with the given name
-
-    Args:
-        name: Logger name (usually __name__)
-
-    Returns:
-        Logger instance
+    Get or create a logger with the given name.
+    Backtest/optimizer/ML/LSTM loggers go only to logs/backtest_ml.log (no console).
     """
-    return setup_logger(name)
+    use_console = not any(name.startswith(prefix) for prefix in BACKTEST_ML_LOG_PREFIXES)
+    log_file = "logs/backtest_ml.log" if not use_console else None
+    return setup_logger(name, log_file=log_file, use_console=use_console)
 
 
 # Create main application logger
