@@ -849,7 +849,7 @@ with tab1:
 
             # Preparar dados para gráfico
             trades_df = pd.DataFrame(trade_history)
-            trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'])
+            trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'], format='ISO8601', utc=True, errors='coerce')
             trades_df = trades_df.sort_values('timestamp')
 
             # Verificar se coluna 'pnl_percent' existe e preencher valores nulos
