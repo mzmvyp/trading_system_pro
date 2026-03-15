@@ -45,9 +45,7 @@ def get_active_positions():
 
 async def log_monitor_summary(settings, interval_sec: int):
     """No início de cada ciclo do monitor: posições abertas, saldo, próxima análise."""
-    print("\n" + "-"*60)
-    print("[CICLO] Resumo")
-    print("-"*60)
+    logger.info("--- [CICLO] Resumo ---")
     try:
         if settings.trading_mode == "real":
             from src.exchange.executor import BinanceFuturesExecutor
@@ -57,7 +55,7 @@ async def log_monitor_summary(settings, interval_sec: int):
             if isinstance(balance, dict) and "error" not in balance:
                 avail = balance.get("available_balance", 0)
                 total = balance.get("total_balance", avail)
-                print(f"  Saldo testnet: ${total:,.2f} USDT (disponível: ${avail:,.2f})")
+                logger.info(f"  Saldo: ${total:,.2f} USDT (disponível: ${avail:,.2f})")
             if isinstance(positions, list):
                 open_pos = [p for p in positions if isinstance(p, dict) and "error" not in p]
                 if open_pos:
@@ -66,18 +64,16 @@ async def log_monitor_summary(settings, interval_sec: int):
                         side = p.get("side", "?")
                         amt = p.get("position_amt", 0)
                         pnl = p.get("unrealized_pnl", 0)
-                        print(f"  Posição: {sym} {side} {abs(amt)} | PnL não realizado: ${pnl:,.2f}")
+                        logger.info(f"  Posição: {sym} {side} {abs(amt)} | PnL: ${pnl:,.2f}")
                 else:
-                    print("  Posições abertas: Nenhuma")
+                    logger.info("  Posições abertas: Nenhuma")
         else:
             active = get_active_positions()
-            print(f"  Posições ativas (paper): {active if active else 'Nenhuma'}")
+            logger.info(f"  Posições ativas (paper): {active if active else 'Nenhuma'}")
     except Exception as e:
         logger.warning(f"Erro ao obter resumo: {e}")
-        print(f"  (resumo indisponível: {e})")
     next_min = interval_sec // 60
-    print(f"  Próxima análise em {next_min} min")
-    print("-"*60)
+    logger.info(f"  Próxima análise em {next_min} min")
 
 
 def _register_trade_result(symbol: str, add_trade_result_fn):
@@ -119,7 +115,7 @@ def _register_trade_result(symbol: str, add_trade_result_fn):
                         break
 
         add_trade_result_fn(signal, result, return_pct)
-        print(f"[ML] Resultado registrado para online learning: {symbol} -> {result} ({return_pct:+.2f}%)")
+        logger.info(f"[ML] Resultado registrado para online learning: {symbol} -> {result} ({return_pct:+.2f}%)")
 
     except Exception as e:
         logger.warning(f"Erro ao registrar trade result para {symbol}: {e}")
@@ -161,13 +157,10 @@ async def main():
         args.paper = False
 
     # Banner
-    print("\n" + "="*60)
-    print("SISTEMA DE TRADING COM AGNO AGENT")
-    print("="*60)
-    print(f"Simbolo: {args.symbol}")
-    print(f"Modo: {args.mode}")
-    print(f"Paper Trading: {'Sim' if args.paper else 'Nao'}")
-    print("="*60)
+    logger.info("=" * 60)
+    logger.info("SISTEMA DE TRADING COM AGNO AGENT")
+    logger.info(f"Simbolo: {args.symbol} | Modo: {args.mode} | Paper: {'Sim' if args.paper else 'Nao'}")
+    logger.info("=" * 60)
 
     logger.info(f"Starting trading system - Mode: {args.mode}, Symbol: {args.symbol}, Paper: {args.paper}")
 
@@ -180,8 +173,7 @@ async def main():
             signal = await agent.analyze(args.symbol)
 
             if signal.get('signal') in ['BUY', 'SELL'] and signal.get('confidence', 0) >= 7:
-                print("\n[ALERTA] Sinal forte detectado!")
-                print("Considere executar o trade com cautela.")
+                logger.info("[ALERTA] Sinal forte detectado! Considere executar o trade com cautela.")
 
         elif args.mode == 'monitor':
             # Monitoramento contínuo do Top 10 - SEM dependência do real_paper_trading
@@ -189,11 +181,7 @@ async def main():
 
             symbols = settings.top_crypto_pairs  # Todos os pares configurados
 
-            print("\n[MONITOR] Monitoramento continuo dos pares configurados")
-            print(f"Pares: {symbols}")
-            print(f"Intervalo: {args.interval}s")
-            print(f"Modo: {settings.trading_mode.upper()}")
-            print("="*60)
+            logger.info(f"[MONITOR] Monitoramento continuo | Pares: {symbols} | Intervalo: {args.interval}s | Modo: {settings.trading_mode.upper()}")
 
             # ============================================================
             # Otimizador contínuo: roda a cada N h, testa M combinações
@@ -215,10 +203,9 @@ async def main():
                     n_iterations=_opt_iter,
                     min_score=_opt_min_score,
                 )
-                print(f"[OPTIMIZER] Otimizacao continua: {_opt_iter} iter/simbolo, {_opt_days}d dados, ciclo {_opt_cycle}h, min_score={_opt_min_score}")
+                logger.info(f"[OPTIMIZER] Otimizacao continua: {_opt_iter} iter/simbolo, {_opt_days}d dados, ciclo {_opt_cycle}h, min_score={_opt_min_score}")
             except Exception as e:
-                logger.warning(f"[OPTIMIZER] Falha ao iniciar otimizador: {e}")
-                print(f"[OPTIMIZER] Falha ao iniciar otimizador: {e} (continuando sem)")
+                logger.warning(f"[OPTIMIZER] Falha ao iniciar otimizador: {e} (continuando sem)")
 
             # Rastrear posições anteriores para detectar fechamentos
             previous_positions = set()
@@ -244,7 +231,7 @@ async def main():
                     # Detectar posições fechadas (estavam ativas antes, mas não estão mais)
                     closed_positions = previous_positions - active_positions_set
                     if closed_positions:
-                        print(f"\n[POSICAO FECHADA] Detectado fechamento: {closed_positions}")
+                        logger.info(f"[POSICAO FECHADA] Detectado fechamento: {closed_positions}")
 
                         # Registrar cooldown pós-stop para evitar whipsaw
                         try:
@@ -261,7 +248,7 @@ async def main():
                                 exec_cleanup = BinanceFuturesExecutor()
                                 for sym in closed_positions:
                                     await exec_cleanup.cancel_all_orders(sym)
-                                    print(f"[LIMPEZA] Ordens de {sym} canceladas (posicao fechada)")
+                                    logger.info(f"[LIMPEZA] Ordens de {sym} canceladas (posicao fechada)")
                             except Exception as e:
                                 logger.warning(f"Erro ao limpar ordens de posicoes fechadas: {e}")
 
@@ -305,16 +292,15 @@ async def main():
                         except Exception as e:
                             logger.warning(f"Erro no monitoramento de posicoes: {e}")
 
-                    print(f"\n[POSICOES] Posicoes ativas: {active_positions if active_positions else 'Nenhuma'}")
-                    print(f"[MODO] Trading Mode: {settings.trading_mode.upper()}")
+                    logger.info(f"[POSICOES] Ativas: {active_positions if active_positions else 'Nenhuma'} | Modo: {settings.trading_mode.upper()}")
 
                     # Filtrar apenas símbolos sem posição ativa
                     symbols_to_analyze = [s for s in symbols if s not in active_positions]
 
                     if not symbols_to_analyze:
-                        print("\n[OK] Todos os pares tem posicoes ativas. Aguardando...")
+                        logger.info("[OK] Todos os pares tem posicoes ativas. Aguardando...")
                     else:
-                        print(f"\n[ANALISE] Analisando {len(symbols_to_analyze)} pares sem posicoes ativas...")
+                        logger.info(f"[ANALISE] Analisando {len(symbols_to_analyze)} pares sem posicoes ativas...")
 
                         for symbol in symbols_to_analyze:
                             try:
@@ -324,10 +310,8 @@ async def main():
                                 )
                             except asyncio.TimeoutError:
                                 logger.warning(f"[TIMEOUT] {symbol} excedeu 300s - pulando para proximo par")
-                                print(f"[TIMEOUT] {symbol} excedeu 300s - pulando para proximo par")
                             except Exception as e:
-                                logger.error(f"Erro ao analisar {symbol}: {e}")
-                                print(f"[ERRO] Erro em {symbol}: {e}")
+                                logger.error(f"[ERRO] Erro em {symbol}: {e}")
 
                             await asyncio.sleep(3)  # Pausa entre análises
 
@@ -355,14 +339,13 @@ async def main():
                         wait_seconds = (next_analysis - now_utc).total_seconds()
 
                     wait_minutes = int(wait_seconds // 60)
-                    print(f"\n[AGUARDANDO] Proxima analise em {wait_minutes}min (sync candle close: {next_analysis.strftime('%H:%M:%S')} UTC)")
+                    logger.info(f"[AGUARDANDO] Proxima analise em {wait_minutes}min (sync candle close: {next_analysis.strftime('%H:%M:%S')} UTC)")
                     await asyncio.sleep(wait_seconds)
 
                 except KeyboardInterrupt:
                     raise
                 except Exception as e:
                     logger.exception(f"Erro no ciclo de monitoramento: {e}")
-                    print(f"[ERRO] Erro no ciclo de monitoramento: {e}")
                     await asyncio.sleep(30)
 
         elif args.mode == 'top5':
@@ -370,32 +353,29 @@ async def main():
             from src.core.config import settings
             symbols = settings.top_crypto_pairs  # Todos os pares configurados
 
-            print(f"\n[TOP] Analisando {len(symbols)} pares configurados...")
-            print("Pares configurados em config.py")
-            print("="*60)
+            logger.info(f"[TOP] Analisando {len(symbols)} pares configurados...")
 
             # Verificar posições ativas
             active_positions = get_active_positions()
-            print(f"\n[POSICOES] Posicoes ativas: {active_positions if active_positions else 'Nenhuma'}")
+            logger.info(f"[POSICOES] Ativas: {active_positions if active_positions else 'Nenhuma'}")
 
             # Filtrar apenas símbolos sem posição ativa
             symbols_to_analyze = [s for s in symbols if s not in active_positions]
 
             if not symbols_to_analyze:
-                print("\n[OK] Todos os pares tem posicoes ativas. Aguardando fechamento...")
+                logger.info("[OK] Todos os pares tem posicoes ativas. Aguardando fechamento...")
             else:
-                print(f"\n[ANALISE] Analisando {len(symbols_to_analyze)} pares sem posicoes ativas...")
+                logger.info(f"[ANALISE] Analisando {len(symbols_to_analyze)} pares sem posicoes ativas...")
 
                 for i, symbol in enumerate(symbols_to_analyze, 1):
-                    print(f"\n[{i}/{len(symbols_to_analyze)}] Analisando {symbol}...")
-                    print("-" * 40)
+                    logger.info(f"[{i}/{len(symbols_to_analyze)}] Analisando {symbol}...")
                     signal = await agent.analyze(symbol)
 
                     # Mostrar resumo rápido
                     if signal.get('signal') in ['BUY', 'SELL']:
-                        print(f"[ALERTA] {signal.get('signal')} com confianca {signal.get('confidence', 0)}/10")
+                        logger.info(f"[ALERTA] {signal.get('signal')} com confianca {signal.get('confidence', 0)}/10")
                     else:
-                        print(f"[SINAL] {signal.get('signal')} - Confianca: {signal.get('confidence', 0)}/10")
+                        logger.info(f"[SINAL] {signal.get('signal')} - Confianca: {signal.get('confidence', 0)}/10")
 
                     await asyncio.sleep(3)  # Pausa entre análises
 
@@ -404,38 +384,32 @@ async def main():
             from src.core.config import settings
             symbols = settings.top_crypto_pairs
 
-            print(f"\n[TOP] Analisando {len(symbols)} pares configurados...")
+            logger.info(f"[TOP] Analisando {len(symbols)} pares configurados...")
             for i, symbol in enumerate(symbols, 1):
-                print(f"\n[{i}/{len(symbols)}] Analisando {symbol}...")
+                logger.info(f"[{i}/{len(symbols)}] Analisando {symbol}...")
                 await agent.analyze(symbol)
                 await asyncio.sleep(5)  # Pausa entre análises
 
         elif args.mode == 'cleanup':
             # Limpeza imediata de ordens órfãs e excessivas
-            print("\n" + "=" * 60)
-            print("[CLEANUP] Limpeza imediata de ordens orfas e excessivas")
-            print("=" * 60)
+            logger.info("[CLEANUP] Limpeza imediata de ordens orfas e excessivas")
             from src.trading.orphan_cleaner import cleanup_orphan_orders
             result = await cleanup_orphan_orders()
-            print(f"\nResultado: {result}")
+            logger.info(f"[CLEANUP] Resultado: {result}")
 
         elif args.mode == 'train_ml':
             # Treinamento do modelo ML
-            print("\n" + "=" * 60)
-            print("[ML] Iniciando treinamento do modelo ML")
-            print("=" * 60)
+            logger.info("[ML] Iniciando treinamento do modelo ML")
             from src.ml.train_from_signals import run_training_pipeline
             success = run_training_pipeline()
             if not success:
-                print("\n[ERRO] Falha no treinamento ML")
+                logger.error("[ML] Falha no treinamento ML")
                 sys.exit(1)
 
     except KeyboardInterrupt:
-        logger.info("Sistema interrompido pelo usuário")
-        print("\n\n[PARADO] Sistema interrompido pelo usuario")
+        logger.info("[PARADO] Sistema interrompido pelo usuario")
     except Exception as e:
-        logger.exception(f"Erro fatal: {e}")
-        print(f"\n[ERRO FATAL] Erro fatal: {e}")
+        logger.exception(f"[ERRO FATAL] {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
