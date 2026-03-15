@@ -616,6 +616,31 @@ Responda APENAS com JSON:
                     )
                     self._save_signal(deepseek_signal)
 
+                    # VALIDAÇÃO: NO_SIGNAL com confiança alta → usar nosso bias técnico
+                    ds_conf = deepseek_signal.get("confidence", 0)
+                    if deepseek_signal.get("signal") == "NO_SIGNAL" and ds_conf >= 6:
+                        ds_analysis = deepseek_result.get("analysis_data", {})
+                        ds_bias = ds_analysis.get("aggregated_scores", {})
+                        ds_action = ds_bias.get("recommended_action", "WAIT")
+                        ds_bias_score = ds_bias.get("overall_bias", 0)
+
+                        if ds_action in ["BUY", "SELL"]:
+                            logger.warning(
+                                f"[VALIDAÇÃO DEEPSEEK] NO_SIGNAL com confiança {ds_conf}/10 — "
+                                f"Nosso bias={ds_bias_score}/10 ({ds_action}). Convertendo para {ds_action}."
+                            )
+                            deepseek_signal["signal"] = ds_action
+                            deepseek_signal["signal_override"] = True
+                            deepseek_signal["original_signal"] = "NO_SIGNAL"
+                            deepseek_signal["override_reason"] = (
+                                f"Confiança {ds_conf}/10 com NO_SIGNAL. Bias local={ds_bias_score} → {ds_action}."
+                            )
+                        else:
+                            logger.info(
+                                f"[VALIDAÇÃO DEEPSEEK] NO_SIGNAL com confiança {ds_conf}/10 — "
+                                f"Bias local também WAIT (bias={ds_bias_score}). Mantendo NO_SIGNAL."
+                            )
+
                     if deepseek_signal.get("signal") in ["BUY", "SELL"]:
                         # HARD BLOCK: Verificar tendência 4h ANTES de tudo
                         try:
@@ -727,9 +752,37 @@ Responda APENAS com JSON:
             # Log único: o que o DeepSeek devolveu (sempre visível no fluxo de trading)
             _sig = agno_signal.get("signal", "N/A")
             _conf = agno_signal.get("confidence", 0)
+            _reasoning = agno_signal.get("reasoning", "")
             logger.info(f"[AGNO] DeepSeek devolveu: Sinal={_sig}, Confiança={_conf}/10")
-            if _sig == "NO_SIGNAL" and _conf > 5:
-                logger.warning(f"[AGNO] Inconsistência: NO_SIGNAL com confiança {_conf}>5 — esperado BUY/SELL")
+            if _reasoning:
+                logger.info(f"[AGNO] Reasoning: {_reasoning[:200]}")
+            # VALIDAÇÃO DO NOSSO LADO: DeepSeek só devolve confiança, nós decidimos
+            # Se confiança >= 6 mas sinal é NO_SIGNAL, usar o nosso bias técnico para definir direção
+            if _sig == "NO_SIGNAL" and _conf >= 6 and "error" not in analysis_data:
+                our_bias = analysis_data.get("aggregated_scores", {})
+                our_action = our_bias.get("recommended_action", "WAIT")
+                our_bias_score = our_bias.get("overall_bias", 0)
+
+                if our_action in ["BUY", "SELL"]:
+                    logger.warning(
+                        f"[VALIDAÇÃO] NO_SIGNAL com confiança {_conf}/10 — "
+                        f"Nosso bias técnico diz {our_action} (bias={our_bias_score}/10). "
+                        f"Convertendo para {our_action}."
+                    )
+                    agno_signal["signal"] = our_action
+                    agno_signal["signal_override"] = True
+                    agno_signal["original_signal"] = "NO_SIGNAL"
+                    agno_signal["override_reason"] = (
+                        f"DeepSeek devolveu NO_SIGNAL com confiança {_conf}/10. "
+                        f"Bias técnico local={our_bias_score}/10 ({our_action}). "
+                        f"Direção corrigida pelo nosso sistema."
+                    )
+                    _sig = our_action  # Atualizar para log seguinte
+                else:
+                    logger.info(
+                        f"[VALIDAÇÃO] NO_SIGNAL com confiança {_conf}/10 — "
+                        f"Nosso bias técnico também diz WAIT (bias={our_bias_score}/10). Mantendo NO_SIGNAL."
+                    )
 
             # ========================================
             # CONFLUÊNCIA: LLM é um voto, não a decisão final
@@ -878,8 +931,18 @@ Responda APENAS com JSON:
 
             # Quando o sinal é NO_SIGNAL (do modelo ou bloqueado por confluência), não há validadores ML/risco
             if agno_signal.get("signal") == "NO_SIGNAL":
-                _reason = agno_signal.get("block_reason") or "Modelo optou por não dar sinal (confiança/regras)."
-                logger.info(f"[AGNO] Sem execução: {_reason}")
+                _reason = agno_signal.get("block_reason") or "Modelo optou por não dar sinal."
+                # Logar indicadores técnicos pra saber o contexto do mercado
+                _rsi = agno_signal.get("rsi", "?")
+                _adx = agno_signal.get("adx", "?")
+                _macd = agno_signal.get("macd_histogram", "?")
+                _trend = agno_signal.get("trend", "?")
+                _bb = agno_signal.get("bb_position", "?")
+                logger.info(
+                    f"[AGNO] Sem execução: {_reason} | "
+                    f"RSI={_rsi}, ADX={_adx}, MACD_hist={_macd}, "
+                    f"Trend={_trend}, BB_pos={_bb}"
+                )
 
             if agno_signal.get("signal") in ["BUY", "SELL"]:
                 logger.info(f"[AGNO] Validando {agno_signal.get('signal')} {symbol} (ML -> risco -> execução)...")
@@ -1118,7 +1181,9 @@ Responda APENAS com JSON:
                         "stop_loss": structured.get("stop_loss"),
                         "take_profit_1": structured.get("take_profit_1"),
                         "take_profit_2": structured.get("take_profit_2"),
-                        "confidence": raw_conf
+                        "confidence": raw_conf,
+                        "reasoning": structured.get("reasoning", ""),
+                        "operation_type": structured.get("operation_type", ""),
                     })
                     # Validar se tem entrada para BUY/SELL
                     if signal["signal"] in ["BUY", "SELL"] and not signal.get("entry_price"):
