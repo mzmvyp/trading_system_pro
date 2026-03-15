@@ -14,11 +14,13 @@ Fluxo:
 5. Walk-forward: treina em janela in-sample, valida em out-of-sample
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
+import logging
 import random
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -31,9 +33,15 @@ from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Pesos do score composto (soma = 1.0)
+WEIGHT_WIN_RATE = 0.30
+WEIGHT_RETURN = 0.30
+WEIGHT_SHARPE = 0.20
+WEIGHT_DRAWDOWN = 0.20
+
 
 # ==============================================================================
-# Espaço de parâmetros para otimização
+# Espaço de parâmetros para otimização (random search)
 # ==============================================================================
 
 PARAM_SPACE = {
@@ -59,6 +67,45 @@ PARAM_SPACE = {
 }
 
 
+# ==============================================================================
+# OptimizationParams - versão simplificada para grade de parâmetros básica
+# ==============================================================================
+
+@dataclass
+class OptimizationParams:
+    """Espaço de parâmetros simplificado para otimização básica."""
+    rsi_period: int = 14
+    rsi_overbought: int = 70
+    rsi_oversold: int = 30
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
+    bb_period: int = 20
+    bb_std: float = 2.0
+    volume_ma_period: int = 20
+    min_volume_ratio: float = 1.0
+    min_confidence: float = 7.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "rsi_period": self.rsi_period,
+            "rsi_overbought": self.rsi_overbought,
+            "rsi_oversold": self.rsi_oversold,
+            "macd_fast": self.macd_fast,
+            "macd_slow": self.macd_slow,
+            "macd_signal": self.macd_signal,
+            "bb_period": self.bb_period,
+            "bb_std": self.bb_std,
+            "volume_ma_period": self.volume_ma_period,
+            "min_volume_ratio": self.min_volume_ratio,
+            "min_confidence": self.min_confidence,
+        }
+
+
+# ==============================================================================
+# Dataclasses de resultado
+# ==============================================================================
+
 @dataclass
 class OptimizationResult:
     """Resultado de uma iteração de otimização."""
@@ -82,11 +129,14 @@ class WalkForwardWindow:
     out_of_sample_score: float = 0.0
 
 
+# ==============================================================================
+# Motor de otimização completo (random search + walk-forward)
+# ==============================================================================
+
 class OptimizationEngine:
     """
     Motor de otimização de parâmetros de trading.
 
-    Origem do score: sinais/backtesting/optimization_engine.py
     Score composto = 30% win_rate + 30% return + 20% Sharpe + 20% (1 - drawdown)
 
     Componentes normalizados para [0, 1]:
@@ -112,8 +162,6 @@ class OptimizationEngine:
     def calculate_score(metrics: BacktestMetrics) -> float:
         """
         Score composto: 30% win rate + 30% return + 20% Sharpe + 20% (1 - drawdown)
-
-        Origem: sinais/backtesting/optimization_engine.py
         """
         if metrics.total_trades < 5:
             return 0.0  # mínimo de trades para score válido
@@ -125,10 +173,10 @@ class OptimizationEngine:
         drawdown_norm = max(1 - metrics.max_drawdown_pct / 100, 0.0)
 
         score = (
-            0.30 * win_rate_norm +
-            0.30 * return_norm +
-            0.20 * sharpe_norm +
-            0.20 * drawdown_norm
+            WEIGHT_WIN_RATE * win_rate_norm +
+            WEIGHT_RETURN * return_norm +
+            WEIGHT_SHARPE * sharpe_norm +
+            WEIGHT_DRAWDOWN * drawdown_norm
         )
         return round(score, 6)
 
@@ -362,7 +410,6 @@ class OptimizationEngine:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "total_iterations": len(self.results),
             "score_formula": "30% win_rate + 30% return + 20% sharpe + 20% (1-drawdown)",
-            "score_origin": "sinais/backtesting/optimization_engine.py",
             "top_results": [],
         }
 
@@ -406,7 +453,6 @@ class OptimizationEngine:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "n_windows": len(windows),
             "score_formula": "30% win_rate + 30% return + 20% sharpe + 20% (1-drawdown)",
-            "score_origin": "sinais/backtesting/optimization_engine.py",
             "windows": [],
         }
 
@@ -455,7 +501,7 @@ class OptimizationEngine:
 
 
 # ==============================================================================
-# Funções de conveniência (exportadas via __init__.py)
+# Funções de conveniência
 # ==============================================================================
 
 async def run_optimization(
@@ -463,17 +509,47 @@ async def run_optimization(
     interval: str = "1h",
     days_back: int = 90,
     n_iterations: int = 50,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    data_df: Optional[pd.DataFrame] = None,
+    walk_forward_windows: Optional[int] = None,
+    param_grid: Optional[List[OptimizationParams]] = None,
 ) -> Dict[str, Any]:
     """
     Função de conveniência para rodar otimização rápida.
 
+    Suporta tanto random search (via OptimizationEngine) quanto
+    grid search com OptimizationParams.
+
     Returns:
         Dict com melhores parâmetros, score e métricas.
     """
-    end_time = datetime.now(timezone.utc)
-    start_time = end_time - timedelta(days=days_back)
+    end_time = end_date or datetime.now(timezone.utc)
+    start_time = start_date or (end_time - timedelta(days=days_back))
 
     engine = OptimizationEngine(symbol=symbol, interval=interval)
+
+    if walk_forward_windows and walk_forward_windows > 1:
+        windows = await engine.walk_forward(
+            start_time, end_time,
+            n_windows=walk_forward_windows,
+            n_iterations_per_window=n_iterations,
+        )
+        if windows:
+            best_window = max(windows, key=lambda w: w.out_of_sample_score)
+            filepath = engine.save_walk_forward_results(windows)
+            return {
+                "best_score": best_window.out_of_sample_score,
+                "best_params": asdict(best_window.best_params) if best_window.best_params else {},
+                "metrics": {
+                    "total_trades": best_window.out_of_sample_metrics.total_trades if best_window.out_of_sample_metrics else 0,
+                    "win_rate": best_window.out_of_sample_metrics.win_rate if best_window.out_of_sample_metrics else 0,
+                },
+                "results_file": filepath,
+                "mode": "walk_forward",
+                "n_windows": len(windows),
+            }
+
     results = await engine.run_optimization(start_time, end_time, n_iterations=n_iterations)
 
     if not results:
@@ -504,3 +580,15 @@ def apply_best_params(result: Dict[str, Any]) -> BacktestParams:
     if "best_params" not in result:
         return BacktestParams()
     return BacktestParams(**result["best_params"])
+
+
+# CLI opcional
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    best_result = asyncio.run(run_optimization(
+        symbol="BTCUSDT",
+        interval="1h",
+        days_back=60,
+        n_iterations=30,
+    ))
+    print("Result:", json.dumps(best_result, indent=2, default=str))

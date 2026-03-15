@@ -12,6 +12,7 @@ Exports:
 - BacktestMetrics: métricas calculadas (win rate, return, sharpe, drawdown)
 - BacktestEngine: motor de simulação de trades
 - OptimizationEngine: otimizador de parâmetros com score composto
+- OptimizationParams: alias simples para otimização básica
 - run_optimization: função de conveniência para otimização rápida
 - apply_best_params: converte resultado em BacktestParams
 """
@@ -24,6 +25,7 @@ from src.backtesting.backtest_engine import (
 )
 from src.backtesting.optimization_engine import (
     OptimizationEngine,
+    OptimizationParams,
     OptimizationResult,
     WalkForwardWindow,
     apply_best_params,
@@ -36,6 +38,7 @@ __all__ = [
     "BacktestParams",
     "Trade",
     "OptimizationEngine",
+    "OptimizationParams",
     "OptimizationResult",
     "WalkForwardWindow",
     "run_optimization",
