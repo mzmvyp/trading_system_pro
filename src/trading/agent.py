@@ -616,31 +616,6 @@ Responda APENAS com JSON:
                     )
                     self._save_signal(deepseek_signal)
 
-                    # VALIDAÇÃO: NO_SIGNAL com confiança alta → usar nosso bias técnico
-                    ds_conf = deepseek_signal.get("confidence", 0)
-                    if deepseek_signal.get("signal") == "NO_SIGNAL" and ds_conf >= 6:
-                        ds_analysis = deepseek_result.get("analysis_data", {})
-                        ds_bias = ds_analysis.get("aggregated_scores", {})
-                        ds_action = ds_bias.get("recommended_action", "WAIT")
-                        ds_bias_score = ds_bias.get("overall_bias", 0)
-
-                        if ds_action in ["BUY", "SELL"]:
-                            logger.warning(
-                                f"[VALIDAÇÃO DEEPSEEK] NO_SIGNAL com confiança {ds_conf}/10 — "
-                                f"Nosso bias={ds_bias_score}/10 ({ds_action}). Convertendo para {ds_action}."
-                            )
-                            deepseek_signal["signal"] = ds_action
-                            deepseek_signal["signal_override"] = True
-                            deepseek_signal["original_signal"] = "NO_SIGNAL"
-                            deepseek_signal["override_reason"] = (
-                                f"Confiança {ds_conf}/10 com NO_SIGNAL. Bias local={ds_bias_score} → {ds_action}."
-                            )
-                        else:
-                            logger.info(
-                                f"[VALIDAÇÃO DEEPSEEK] NO_SIGNAL com confiança {ds_conf}/10 — "
-                                f"Bias local também WAIT (bias={ds_bias_score}). Mantendo NO_SIGNAL."
-                            )
-
                     if deepseek_signal.get("signal") in ["BUY", "SELL"]:
                         # HARD BLOCK: Verificar tendência 4h ANTES de tudo
                         try:
@@ -756,33 +731,13 @@ Responda APENAS com JSON:
             logger.info(f"[AGNO] DeepSeek devolveu: Sinal={_sig}, Confiança={_conf}/10")
             if _reasoning:
                 logger.info(f"[AGNO] Reasoning: {_reasoning[:200]}")
-            # VALIDAÇÃO DO NOSSO LADO: DeepSeek só devolve confiança, nós decidimos
-            # Se confiança >= 6 mas sinal é NO_SIGNAL, usar o nosso bias técnico para definir direção
-            if _sig == "NO_SIGNAL" and _conf >= 6 and "error" not in analysis_data:
-                our_bias = analysis_data.get("aggregated_scores", {})
-                our_action = our_bias.get("recommended_action", "WAIT")
-                our_bias_score = our_bias.get("overall_bias", 0)
-
-                if our_action in ["BUY", "SELL"]:
-                    logger.warning(
-                        f"[VALIDAÇÃO] NO_SIGNAL com confiança {_conf}/10 — "
-                        f"Nosso bias técnico diz {our_action} (bias={our_bias_score}/10). "
-                        f"Convertendo para {our_action}."
-                    )
-                    agno_signal["signal"] = our_action
-                    agno_signal["signal_override"] = True
-                    agno_signal["original_signal"] = "NO_SIGNAL"
-                    agno_signal["override_reason"] = (
-                        f"DeepSeek devolveu NO_SIGNAL com confiança {_conf}/10. "
-                        f"Bias técnico local={our_bias_score}/10 ({our_action}). "
-                        f"Direção corrigida pelo nosso sistema."
-                    )
-                    _sig = our_action  # Atualizar para log seguinte
-                else:
-                    logger.info(
-                        f"[VALIDAÇÃO] NO_SIGNAL com confiança {_conf}/10 — "
-                        f"Nosso bias técnico também diz WAIT (bias={our_bias_score}/10). Mantendo NO_SIGNAL."
-                    )
+            # NO_SIGNAL com confiança alta = confiança na decisão de NÃO operar
+            # Respeitar a decisão do modelo — ML é a última palavra para BUY/SELL
+            if _sig == "NO_SIGNAL" and _conf >= 6:
+                logger.info(
+                    f"[AGNO] NO_SIGNAL com confiança {_conf}/10 — "
+                    f"modelo confiante em não operar. Respeitando decisão."
+                )
 
             # ========================================
             # CONFLUÊNCIA: LLM é um voto, não a decisão final
