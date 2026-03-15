@@ -101,7 +101,7 @@ class PositionMonitor:
                         logger.warning(
                             f"[CIRCUIT BREAKER] {symbol}: ROI={roi_percent:.1f}% < {self.MAX_LOSS_ROI_PERCENT}% - FECHANDO!"
                         )
-                        print(f"[CIRCUIT BREAKER] {symbol}: ROI {roi_percent:.1f}% - FECHANDO POSICAO!")
+                        logger.info(f"[CIRCUIT BREAKER] {symbol}: ROI {roi_percent:.1f}% - FECHANDO POSICAO!")
                         try:
                             close_result = await executor.close_position(symbol)
                             if isinstance(close_result, dict) and "error" not in close_result:
@@ -128,7 +128,7 @@ class PositionMonitor:
                     if not has_sl:
                         results["sl_missing"] += 1
                         logger.warning(f"[SL AUSENTE] {symbol} ({side}) sem Stop Loss ativo!")
-                        print(f"[SL AUSENTE] {symbol} ({side}) - Recolocando Stop Loss...")
+                        logger.info(f"[SL AUSENTE] {symbol} ({side}) - Recolocando Stop Loss...")
 
                         # Cancelar qualquer ordem algo STOP_MARKET existente (evita duplicação)
                         algo_list = await executor.get_open_algo_orders(symbol)
@@ -151,7 +151,7 @@ class PositionMonitor:
                                 if isinstance(sl_result, dict) and "error" not in sl_result:
                                     results["sl_replaced"] += 1
                                     logger.info(f"[SL RECOLOCADO] {symbol}: SL em ${sl_price:.4f}")
-                                    print(f"[SL RECOLOCADO] {symbol}: SL em ${sl_price:.4f}")
+                                    logger.info(f"[SL RECOLOCADO] {symbol}: SL em ${sl_price:.4f}")
                                 else:
                                     logger.error(f"[SL ERRO] {symbol}: {sl_result}")
                                     results["errors"].append(f"SL replace {symbol}: {sl_result}")
@@ -165,7 +165,7 @@ class PositionMonitor:
                             else:
                                 emergency_sl = entry_price * 1.03
                             logger.warning(f"[SL EMERGENCIA] {symbol}: SL original não encontrado, usando 3% = ${emergency_sl:.4f}")
-                            print(f"[SL EMERGENCIA] {symbol}: SL de emergência em ${emergency_sl:.4f}")
+                            logger.info(f"[SL EMERGENCIA] {symbol}: SL de emergência em ${emergency_sl:.4f}")
                             try:
                                 close_side = "SELL" if side == "LONG" else "BUY"
                                 sl_result = await executor.place_stop_loss(
@@ -188,7 +188,7 @@ class PositionMonitor:
 
         # Log resumo
         if results["checked"] > 0:
-            print(f"[MONITOR] Verificadas {results['checked']} posicoes: "
+            logger.info(f"[MONITOR] Verificadas {results['checked']} posicoes: "
                   f"{results['sl_missing']} sem SL, "
                   f"{results['sl_replaced']} SL recolocados, "
                   f"{results['circuit_breaker_closed']} fechadas por circuit breaker")
@@ -319,7 +319,7 @@ class PositionMonitor:
 
                     if should_close:
                         logger.warning(f"[REAVALIACAO] {symbol} ({side}): {reason} - FECHANDO!")
-                        print(f"[REAVALIACAO] {symbol}: {reason} - FECHANDO!")
+                        logger.info(f"[REAVALIACAO] {symbol}: {reason} - FECHANDO!")
                         try:
                             close_result = await executor.close_position(symbol)
                             if isinstance(close_result, dict) and "error" not in close_result:
@@ -340,7 +340,7 @@ class PositionMonitor:
             logger.exception(f"[REAVALIACAO] Erro geral: {e}")
 
         if results["reevaluated"] > 0:
-            print(f"[REAVALIACAO] {results['reevaluated']} posicoes reavaliadas: "
+            logger.info(f"[REAVALIACAO] {results['reevaluated']} posicoes reavaliadas: "
                   f"{results['closed_by_reversal']} fechadas, {results['kept']} mantidas")
 
         return results
@@ -476,7 +476,7 @@ class PositionMonitor:
 
                     if should_close:
                         logger.warning(f"[REAVALIACAO PAPER] {symbol} ({normalized_side}): {reason} - FECHANDO!")
-                        print(f"[REAVALIACAO PAPER] {symbol}: {reason} - FECHANDO!")
+                        logger.info(f"[REAVALIACAO PAPER] {symbol}: {reason} - FECHANDO!")
                         try:
                             # Fechar via paper trading system
                             if hasattr(agent, 'paper_system') and agent.paper_system:
@@ -502,7 +502,7 @@ class PositionMonitor:
             logger.exception(f"[REAVALIACAO PAPER] Erro geral: {e}")
 
         if results["reevaluated"] > 0:
-            print(f"[REAVALIACAO PAPER] {results['reevaluated']} posicoes reavaliadas: "
+            logger.info(f"[REAVALIACAO PAPER] {results['reevaluated']} posicoes reavaliadas: "
                   f"{results['closed_by_reversal']} fechadas, {results['kept']} mantidas")
 
         return results

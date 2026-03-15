@@ -40,9 +40,7 @@ class OrphanOrderCleaner:
         Returns:
             Dict com resultado da limpeza
         """
-        print("\n" + "="*60)
-        print("[LIMPEZA] Verificando ordens orfas...")
-        print("="*60)
+        logger.info("[LIMPEZA] Verificando ordens orfas...")
 
         try:
             # Criar executor se não fornecido
@@ -63,10 +61,10 @@ class OrphanOrderCleaner:
                 if isinstance(pos, dict) and pos.get("symbol"):
                     symbols_with_position.add(pos["symbol"])
 
-            print(f"[LIMPEZA] Posicoes abertas: {len(symbols_with_position)}")
+            logger.info(f"[LIMPEZA] Posicoes abertas: {len(symbols_with_position)}")
             for sym in symbols_with_position:
                 pos = next((p for p in positions if p.get("symbol") == sym), {})
-                print(f"   - {sym}: {pos.get('side', 'N/A')} {abs(pos.get('position_amt', 0)):.4f}")
+                logger.info(f"   - {sym}: {pos.get('side', 'N/A')} {abs(pos.get('position_amt', 0)):.4f}")
 
             # 2. Obter todas as ordens abertas (regulares + algo SL/TP)
             all_orders = await executor.get_open_orders()
@@ -78,7 +76,7 @@ class OrphanOrderCleaner:
                 algo_orders = await executor.get_open_algo_orders(sym)
                 all_orders.extend(algo_orders)
 
-            print(f"[LIMPEZA] Ordens abertas: {len(all_orders)}")
+            logger.info(f"[LIMPEZA] Ordens abertas: {len(all_orders)}")
 
             # 3. Identificar ordens órfãs (ordens de símbolos sem posição)
             #    E ordens EXCESSIVAS (mais de 3 ordens para o mesmo símbolo com posição)
@@ -96,7 +94,7 @@ class OrphanOrderCleaner:
                     # Órfã: ordem para símbolo sem posição
                     orphan_orders.append(order)
                     ident = order.get("algoId") or order_id
-                    print(f"   [ORFA] {order_symbol} {order_type} {order_side} (ID: {ident})")
+                    logger.info(f"   [ORFA] {order_symbol} {order_type} {order_side} (ID: {ident})")
                 else:
                     valid_orders.append(order)
                     # Agrupar por símbolo para verificar excessos
@@ -112,12 +110,11 @@ class OrphanOrderCleaner:
                 if len(orders) > MAX_ORDERS_PER_SYMBOL:
                     excess_count = len(orders) - MAX_ORDERS_PER_SYMBOL
                     excess_symbols.append(sym)
-                    print(f"   [EXCESSO] {sym}: {len(orders)} ordens (max {MAX_ORDERS_PER_SYMBOL}), {excess_count} extras")
+                    logger.info(f"   [EXCESSO] {sym}: {len(orders)} ordens (max {MAX_ORDERS_PER_SYMBOL}), {excess_count} extras")
 
-            print(f"\n[LIMPEZA] Ordens orfas encontradas: {len(orphan_orders)}")
-            print(f"[LIMPEZA] Ordens validas: {len(valid_orders)}")
+            logger.info(f"[LIMPEZA] Orfas: {len(orphan_orders)} | Validas: {len(valid_orders)}")
             if excess_symbols:
-                print(f"[LIMPEZA] Simbolos com ordens excessivas: {excess_symbols}")
+                logger.info(f"[LIMPEZA] Simbolos com ordens excessivas: {excess_symbols}")
 
             # 4. Cancelar ordens órfãs
             cancelled_orders = []
@@ -136,11 +133,11 @@ class OrphanOrderCleaner:
                                 "symbol": symbol,
                                 "error": result.get("error")
                             })
-                            print(f"   [ERRO] Falha ao cancelar ordens de {symbol}: {result.get('error')}")
+                            logger.warning(f"   [ERRO] Falha ao cancelar ordens de {symbol}: {result.get('error')}")
                         else:
                             symbol_orders = [o for o in orphan_orders if o.get("symbol") == symbol]
                             cancelled_orders.extend(symbol_orders)
-                            print(f"   [OK] {len(symbol_orders)} ordem(s) orfa(s) cancelada(s) para {symbol}")
+                            logger.info(f"   [OK] {len(symbol_orders)} ordem(s) orfa(s) cancelada(s) para {symbol}")
 
                     except Exception as e:
                         failed_cancellations.append({
@@ -180,14 +177,14 @@ class OrphanOrderCleaner:
                         except Exception as e:
                             logger.warning(f"[LIMPEZA] Erro ao cancelar ordem {order.get('algoId') or order.get('orderId')} de {sym}: {e}")
 
-                    print(f"   [OK] {sym}: canceladas {total - MAX_ORDERS_PER_SYMBOL} ordens excessivas (mantidas {MAX_ORDERS_PER_SYMBOL} mais recentes)")
+                    logger.info(f"   [OK] {sym}: canceladas {total - MAX_ORDERS_PER_SYMBOL} ordens excessivas (mantidas {MAX_ORDERS_PER_SYMBOL} mais recentes)")
 
                 except Exception as e:
                     logger.error(f"[LIMPEZA] Erro ao limpar excesso de {sym}: {e}")
                     # Fallback: cancelar TODAS e alertar
                     try:
                         await executor.cancel_all_orders(sym)
-                        print(f"   [FALLBACK] {sym}: canceladas TODAS as ordens (erro ao filtrar)")
+                        logger.warning(f"   [FALLBACK] {sym}: canceladas TODAS as ordens (erro ao filtrar)")
                     except Exception as e2:
                         logger.error(f"[LIMPEZA] Fallback falhou para {sym}: {e2}")
 
@@ -212,14 +209,10 @@ class OrphanOrderCleaner:
                 "total_orders_cancelled_all_time": self.orders_cancelled
             }
 
-            print("\n" + "-"*60)
             if total_cancelled > 0:
-                print(f"[LIMPEZA] CONCLUIDO: {len(cancelled_orders)} orfas + {excess_cancelled} excessivas = {total_cancelled} ordens canceladas!")
+                logger.info(f"[LIMPEZA] CONCLUIDO: {len(cancelled_orders)} orfas + {excess_cancelled} excessivas = {total_cancelled} canceladas!")
             else:
-                print("[LIMPEZA] CONCLUIDO: Nenhuma ordem para cancelar.")
-            print("-"*60 + "\n")
-
-            logger.info(f"[LIMPEZA] Resultado: {len(cancelled_orders)} canceladas, {len(failed_cancellations)} falhas")
+                logger.info("[LIMPEZA] CONCLUIDO: Nenhuma ordem para cancelar.")
 
             return result
 
@@ -288,13 +281,10 @@ async def cleanup_symbol_orders(symbol: str) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     # Teste direto
-    print("\n" + "="*60)
-    print("ORPHAN ORDER CLEANER - TESTE")
-    print("="*60)
+    logger.info("ORPHAN ORDER CLEANER - TESTE")
 
     async def test():
         result = await cleanup_orphan_orders()
-        print(f"\nResultado: {result}")
+        logger.info(f"Resultado: {result}")
 
     asyncio.run(test())
-
