@@ -257,14 +257,7 @@ def validate_risk_and_position(
 
         logger.info(f"[P&L MODE] Exposição atual: {total_exposure:.0%}")
 
-        daily_trades = _get_daily_trades_count()
-        max_daily_trades = 2
-        if daily_trades >= max_daily_trades:
-            return {
-                "can_execute": False,
-                "reason": f"Limite diario de trades atingido: {daily_trades} (maximo {max_daily_trades})",
-                "risk_level": "medium"
-            }
+        # Sem limite diario de trades - filtros de qualidade ja controlam
 
         if stop_loss:
             risk_per_unit = abs(entry_price - stop_loss)

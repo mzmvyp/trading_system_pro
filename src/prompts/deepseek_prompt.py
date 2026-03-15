@@ -347,19 +347,62 @@ def _create_analysis_prompt(analysis: Dict[str, Any], market_classification: Dic
             classification_text = ""
             recommended_type = "SWING_TRADE"
 
-        return f"""{classification_text}
-{analysis['symbol']} ${analysis['price_context']['current']:,.2f} ({analysis['price_context']['change_24h_pct']:+.2f}% 24h) Range:{analysis['price_context']['position_in_range_pct']:.0f}%
-Trend:{analysis['trend_analysis']['primary_trend']} ADX:{analysis['trend_analysis']['trend_strength_interpretation']} Mom:{analysis['trend_analysis']['momentum']} TF:{analysis['trend_analysis']['confluence_score']}/5
-RSI:{analysis['key_indicators']['rsi']['value']:.1f}({analysis['key_indicators']['rsi']['zone']}) MACD:{analysis['key_indicators']['macd']['crossover']}/{analysis['key_indicators']['macd']['momentum_direction']} BB:{analysis['key_indicators']['bollinger']['zone']} EMA:{analysis['key_indicators']['ema_structure']['ema_alignment']}
-Sup:${analysis['key_levels']['immediate_support']:,.2f}({analysis['key_levels']['distance_to_support_pct']:+.2f}%) Res:${analysis['key_levels']['immediate_resistance']:,.2f}({analysis['key_levels']['distance_to_resistance_pct']:+.2f}%) POC:${analysis['key_levels']['volume_poc']:,.2f}
-OB:{analysis['volume_flow']['orderbook_bias']} OBV:{analysis['volume_flow']['obv_trend']} Sent:{analysis['sentiment']['overall']} Fund:{analysis['sentiment']['funding_interpretation']}
-Vol:{analysis['volatility']['level']} SL:{analysis['volatility']['suggested_stop_pct']:.2f}% TP1:{analysis['volatility']['suggested_tp1_pct']:.2f}% TP2:{analysis['volatility']['suggested_tp2_pct']:.2f}%
-Conflicts:{conflicting_text}
-Bull:{analysis['aggregated_scores']['bullish_factors_count']} Bear:{analysis['aggregated_scores']['bearish_factors_count']} Bias:{analysis['aggregated_scores']['overall_bias']}/10({analysis['aggregated_scores']['overall_bias_interpretation']}) Rec:{analysis['aggregated_scores']['recommended_action']}
+        # Timeframe alignment details
+        tf_alignment = analysis.get("trend_analysis", {}).get("timeframe_alignment", {})
+        tf_details = " | ".join([f"{tf}:{direction}" for tf, direction in tf_alignment.items()])
 
-Type:{recommended_type}. Confidence 1-10 (>=7 to execute). Reply ONLY JSON:
+        bias = analysis['aggregated_scores']
+        rec_action = bias.get('recommended_action', 'WAIT')
+        overall_bias = bias.get('overall_bias', 0)
+
+        return f"""{classification_text}
+## {analysis['symbol']} - Preco: ${analysis['price_context']['current']:,.2f} ({analysis['price_context']['change_24h_pct']:+.2f}% 24h)
+Posicao no range 24h: {analysis['price_context']['position_in_range_pct']:.0f}% (0%=minima, 100%=maxima)
+
+## TENDENCIA E MOMENTUM
+- Tendencia principal: {analysis['trend_analysis']['primary_trend']}
+- Forca da tendencia (ADX): {analysis['trend_analysis']['trend_strength_adx']:.0f} ({analysis['trend_analysis']['trend_strength_interpretation']})
+- Momentum: {analysis['trend_analysis']['momentum']}
+- Confluencia timeframes: {analysis['trend_analysis']['confluence_score']}/5 (positivo=bullish, negativo=bearish)
+- Alinhamento por timeframe: {tf_details}
+
+## INDICADORES CHAVE
+- RSI: {analysis['key_indicators']['rsi']['value']:.1f} (zona: {analysis['key_indicators']['rsi']['zone']}, acao: {analysis['key_indicators']['rsi']['action_hint']})
+- MACD: crossover={analysis['key_indicators']['macd']['crossover']}, momentum={analysis['key_indicators']['macd']['momentum_direction']}, histogram={analysis['key_indicators']['macd']['histogram']:.6f}
+- Bollinger Bands: {analysis['key_indicators']['bollinger']['zone']} (posicao: {analysis['key_indicators']['bollinger']['position']:.2f})
+- EMA: {analysis['key_indicators']['ema_structure']['ema_alignment']} (vs EMA20: {analysis['key_indicators']['ema_structure']['price_vs_ema20']}, vs EMA50: {analysis['key_indicators']['ema_structure']['price_vs_ema50']}, vs EMA200: {analysis['key_indicators']['ema_structure']['price_vs_ema200']})
+- OBV (Volume): {analysis['key_indicators']['obv_trend']}
+
+## NIVEIS CHAVE
+- Suporte: ${analysis['key_levels']['immediate_support']:,.2f} (distancia: {analysis['key_levels']['distance_to_support_pct']:.2f}%)
+- Resistencia: ${analysis['key_levels']['immediate_resistance']:,.2f} (distancia: {analysis['key_levels']['distance_to_resistance_pct']:.2f}%)
+- POC (Volume Profile): ${analysis['key_levels']['volume_poc']:,.2f}
+
+## FLUXO DE ORDENS
+- Orderbook: {analysis['volume_flow']['orderbook_bias']} (imbalance: {analysis['volume_flow']['orderbook_imbalance']:.2f})
+- CVD: {analysis['volume_flow']['cvd_direction']}
+- Sentimento: {analysis['sentiment']['overall']}
+- Funding Rate: {analysis['sentiment']['funding_interpretation']}
+
+## VOLATILIDADE
+- Nivel: {analysis['volatility']['level']} (ATR: {analysis['volatility']['atr_pct']:.2f}%)
+- Stop sugerido: {analysis['volatility']['suggested_stop_pct']:.2f}%
+- TP1 sugerido: {analysis['volatility']['suggested_tp1_pct']:.2f}%
+- TP2 sugerido: {analysis['volatility']['suggested_tp2_pct']:.2f}%
+
+## SINAIS CONFLITANTES
+{conflicting_text}
+
+## SCORE AGREGADO
+- Fatores bullish: {bias['bullish_factors_count']} | Fatores bearish: {bias['bearish_factors_count']}
+- Bias geral: {overall_bias}/10 ({bias['overall_bias_interpretation']})
+- Recomendacao do sistema: {rec_action}
+
+## TIPO DE OPERACAO RECOMENDADO: {recommended_type}
+
+Analise os dados acima seguindo ESTRITAMENTE as regras de trading nas instrucoes. Reply ONLY JSON:
 ```json
-{{{{"signal":"BUY/SELL/NO_SIGNAL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE/POSITION_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":0,"reasoning":""}}}}
+{{{{"signal":"BUY/SELL/NO_SIGNAL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":0,"reasoning":"Regras confirmadas: X. Conflitos: Y"}}}}
 ```"""
     except Exception as e:
         logger.exception(f"Erro ao criar prompt: {e}")
