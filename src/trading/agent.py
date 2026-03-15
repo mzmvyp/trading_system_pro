@@ -5,7 +5,7 @@ import asyncio
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -55,6 +55,10 @@ class AgnoTradingAgent:
         self.ml_validator = None
         self._load_ml_validator()
 
+        # Carregar Bi-LSTM sequence validator (se treinado)
+        self.lstm_sequence_validator = None
+        self._load_lstm_sequence_validator()
+
         # Obter API key - OBRIGATÓRIA
         api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
@@ -94,6 +98,20 @@ class AgnoTradingAgent:
             logger.warning(f"[ML] Validador ML nao disponivel: {e}")
             print("[ML] Validador ML nao disponivel (execute simple_signal_validator.py para treinar)")
             self.ml_validator = None
+
+    def _load_lstm_sequence_validator(self):
+        """Carrega o Bi-LSTM sequence validator se treinado."""
+        try:
+            from src.ml.lstm_sequence_validator import LSTMSequenceValidator
+            validator = LSTMSequenceValidator()
+            if validator.load_model():
+                self.lstm_sequence_validator = validator
+                logger.info("[Bi-LSTM] Sequence validator carregado")
+                print("[Bi-LSTM] Validador de sequências temporais carregado!")
+            else:
+                logger.info("[Bi-LSTM] Modelo não encontrado (execute backtest_dataset_generator + lstm_sequence_validator para treinar)")
+        except Exception as e:
+            logger.warning(f"[Bi-LSTM] Não disponível: {e}")
 
     def _validate_with_ml_model(self, signal: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -732,7 +750,35 @@ Responda APENAS com JSON:
                 llm_confidence = agno_signal.get("confidence", 5)
                 llm_vote_weight = 1 if llm_confidence >= 5 else 0.5
 
-                total_for = votes_for + llm_vote_weight
+                # Bi-LSTM sequence vote (se modelo treinado)
+                lstm_vote = 0
+                lstm_prob = 0.5
+                if self.lstm_sequence_validator is not None:
+                    try:
+                        from src.backtesting.backtest_engine import BacktestEngine
+                        # Buscar candles recentes com indicadores para o LSTM
+                        _engine = BacktestEngine()
+                        _df = await _engine.fetch_data(
+                            symbol, "1h",
+                            datetime.now(timezone.utc) - timedelta(hours=self.lstm_sequence_validator.sequence_length + 10),
+                            datetime.now(timezone.utc),
+                        )
+                        if not _df.empty:
+                            _df = _engine.calculate_indicators(_df)
+                            lstm_result = self.lstm_sequence_validator.predict_from_candles(_df)
+                            lstm_prob = lstm_result.get("probability", 0.5)
+                            if lstm_prob > 0.6:
+                                lstm_vote = 1
+                                confluence["details"].append(f"Bi-LSTM win prob={lstm_prob:.1%}")
+                            elif lstm_prob < 0.4:
+                                votes_against += 1
+                                confluence["details"].append(f"Bi-LSTM contra (prob={lstm_prob:.1%})")
+                            agno_signal["lstm_probability"] = lstm_prob
+                            logger.info(f"[Bi-LSTM] {symbol}: prob={lstm_prob:.1%}, vote={'FOR' if lstm_vote else 'NEUTRAL/AGAINST'}")
+                    except Exception as e:
+                        logger.warning(f"[Bi-LSTM] Erro na predição: {e}")
+
+                total_for = votes_for + llm_vote_weight + lstm_vote
                 total_against = votes_against
                 total_all = total_for + total_against
                 combined_score = total_for / max(total_all, 1)
