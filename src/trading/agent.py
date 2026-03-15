@@ -281,13 +281,51 @@ class AgnoTradingAgent:
             return entry_price * (1 + distance_pct)
 
     def _get_instructions(self) -> str:
-        """Retorna as instruções para o agent - OTIMIZADO para economizar tokens"""
-        return """Trader profissional. Dados de mercado já coletados no prompt.
-Analise e responda APENAS com JSON:
+        """Retorna as instruções para o agent com regras claras de trading"""
+        return """Voce e um trader quantitativo. Dados de mercado ja coletados no prompt.
+Analise os dados e decida com base nestas REGRAS OBJETIVAS:
+
+## REGRAS PARA BUY:
+1. Tendencia 4h/1d deve ser bullish ou neutral (NUNCA compre contra tendencia bearish)
+2. RSI entre 30-55 (zona de compra - NAO compre com RSI > 65 = sobrecomprado)
+3. MACD histogram positivo OU crossover bullish recente
+4. Preco proximo ao suporte (distance_to_support < 2%)
+5. Confluencia: minimo 3/5 timeframes bullish (TF >= 3)
+6. EMA alignment bullish (preco > EMA20 > EMA50)
+7. Volume confirmando (OBV bullish ou orderbook buy pressure)
+
+## REGRAS PARA SELL (SHORT):
+1. Tendencia 4h/1d deve ser bearish ou neutral (NUNCA venda contra tendencia bullish)
+2. RSI entre 45-70 (zona de venda - NAO venda com RSI < 35 = sobrevendido)
+3. MACD histogram negativo OU crossover bearish recente
+4. Preco proximo a resistencia (distance_to_resistance < 2%)
+5. Confluencia: minimo 3/5 timeframes bearish (TF <= -3)
+6. EMA alignment bearish (preco < EMA20 < EMA50)
+7. Volume confirmando (OBV bearish ou orderbook sell pressure)
+
+## QUANDO DAR NO_SIGNAL (OBRIGATORIO):
+- Bias entre -2 e +2 (mercado indeciso/lateral)
+- Conflitos entre indicadores (sinais contraditórios)
+- RSI entre 40-60 SEM tendencia clara
+- ADX < 20 (sem tendencia)
+- Confluencia fraca (TF entre -2 e +2)
+- SEMPRE prefira NO_SIGNAL na duvida. So de sinal com 5+ regras confirmando.
+
+## STOPS E TARGETS:
+- Stop loss DEVE estar atras de suporte/resistencia real (nao arbitrario)
+- Para BUY: SL abaixo do suporte. Para SELL: SL acima da resistencia
+- TP1 no proximo nivel de resistencia/suporte. TP2 no nivel seguinte
+- Minimo 2:1 reward/risk (TP1 deve ser 2x a distancia do SL)
+
+## CONFIDENCE:
+- 8-10: 6+ regras confirmando, sem conflitos, tendencia forte
+- 6-7: 4-5 regras confirmando, conflitos menores
+- 1-5: poucos sinais alinhados = USE NO_SIGNAL
+
+Responda APENAS com JSON:
 ```json
-{"signal":"BUY/SELL/NO_SIGNAL","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":1-10,"reasoning":""}
-```
-Regras: confidence>=7 para executar. Se <7, use NO_SIGNAL. Seja decisivo."""
+{"signal":"BUY/SELL/NO_SIGNAL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":1-10,"reasoning":"Regras X,Y,Z confirmadas. Conflitos: nenhum/ABC"}
+```"""
 
     async def analyze(self, symbol: str = "BTCUSDT") -> Dict[str, Any]:
         """

@@ -219,7 +219,14 @@ async def main():
                     closed_positions = previous_positions - active_positions_set
                     if closed_positions:
                         print(f"\n[POSICAO FECHADA] Detectado fechamento: {closed_positions}")
-                        print("[GERANDO NOVO SINAL] Analisando para gerar novo sinal...")
+
+                        # Registrar cooldown pós-stop para evitar whipsaw
+                        try:
+                            from src.trading.risk_manager import register_sl_hit
+                            for sym in closed_positions:
+                                register_sl_hit(sym)
+                        except Exception as e:
+                            logger.warning(f"Erro ao registrar cooldown: {e}")
 
                         # CORRIGIDO: Cancelar ordens órfãs das posições fechadas
                         if settings.trading_mode == "real":
@@ -251,19 +258,24 @@ async def main():
                             logger.warning(f"Erro na limpeza periodica de ordens orfas: {e}")
 
                     # MONITORAMENTO DE POSIÇÕES: verificar SL, circuit breaker, reavaliação
-                    if settings.trading_mode == "real" and active_positions:
+                    # Roda em TODOS os modos (real e paper) e TODOS os ciclos
+                    if active_positions:
                         try:
-                            from src.exchange.executor import BinanceFuturesExecutor
                             from src.trading.position_monitor import get_monitor
                             monitor = get_monitor()
-                            exec_monitor = BinanceFuturesExecutor()
 
-                            # Verificar saúde (SL ativo, circuit breaker)
-                            await monitor.check_all_positions(exec_monitor)
+                            if settings.trading_mode == "real":
+                                from src.exchange.executor import BinanceFuturesExecutor
+                                exec_monitor = BinanceFuturesExecutor()
 
-                            # Reavaliar posições (análise técnica) - a cada 2 ciclos para não sobrecarregar
-                            if _cleanup_cycle % 2 == 0:
+                                # Verificar saúde (SL ativo, circuit breaker)
+                                await monitor.check_all_positions(exec_monitor)
+
+                                # Reavaliar posições (análise técnica) - CADA ciclo
                                 await monitor.reevaluate_positions(exec_monitor, agent)
+                            else:
+                                # Paper mode: reavaliar posições paper
+                                await monitor.reevaluate_paper_positions(agent)
                         except Exception as e:
                             logger.warning(f"Erro no monitoramento de posicoes: {e}")
 

@@ -256,26 +256,50 @@ class PositionMonitor:
 
                     should_close = False
                     reason = ""
+                    # Contar sinais contra a posicao
+                    against_signals = 0
+                    against_details = []
 
                     if side == "LONG":
-                        # Fechar long se tendencia claramente contra a posicao
-                        if trend == "bearish" and macd_hist < 0 and rsi < 40:
+                        if "bearish" in trend:
+                            against_signals += 2
+                            against_details.append(f"trend={trend}")
+                        if macd_hist < 0:
+                            against_signals += 1
+                            against_details.append(f"MACD={macd_hist:.4f}")
+                        if rsi > 70:
+                            against_signals += 1
+                            against_details.append(f"RSI sobrecomprado={rsi:.0f}")
+                        if rsi < 35:
+                            against_signals += 1
+                            against_details.append(f"RSI caindo={rsi:.0f}")
+
+                        # Fechar se 2+ sinais contra (antes exigia 3 AND)
+                        if against_signals >= 2:
                             should_close = True
-                            reason = f"Tendencia contra LONG: RSI={rsi:.0f}, trend={trend}, MACD={macd_hist:.4f}"
-                        elif trend == "strong_bearish":
-                            should_close = True
-                            reason = f"Tendencia forte bearish contra LONG: trend={trend}"
+                            reason = f"Sinais contra LONG ({against_signals}): {', '.join(against_details)}"
                         elif rsi > 80:
                             should_close = True
                             reason = f"RSI extremo sobrecomprado: {rsi:.0f}"
+
                     else:  # SHORT
-                        # Fechar short se tendencia claramente contra a posicao
-                        if trend == "bullish" and macd_hist > 0 and rsi > 60:
+                        if "bullish" in trend:
+                            against_signals += 2
+                            against_details.append(f"trend={trend}")
+                        if macd_hist > 0:
+                            against_signals += 1
+                            against_details.append(f"MACD={macd_hist:.4f}")
+                        if rsi < 30:
+                            against_signals += 1
+                            against_details.append(f"RSI sobrevendido={rsi:.0f}")
+                        if rsi > 65:
+                            against_signals += 1
+                            against_details.append(f"RSI subindo={rsi:.0f}")
+
+                        # Fechar se 2+ sinais contra
+                        if against_signals >= 2:
                             should_close = True
-                            reason = f"Tendencia contra SHORT: RSI={rsi:.0f}, trend={trend}, MACD={macd_hist:.4f}"
-                        elif trend == "strong_bullish":
-                            should_close = True
-                            reason = f"Tendencia forte bullish contra SHORT: trend={trend}"
+                            reason = f"Sinais contra SHORT ({against_signals}): {', '.join(against_details)}"
                         elif rsi < 20:
                             should_close = True
                             reason = f"RSI extremo sobrevendido: {rsi:.0f}"
@@ -304,6 +328,168 @@ class PositionMonitor:
 
         if results["reevaluated"] > 0:
             print(f"[REAVALIACAO] {results['reevaluated']} posicoes reavaliadas: "
+                  f"{results['closed_by_reversal']} fechadas, {results['kept']} mantidas")
+
+        return results
+
+    async def reevaluate_paper_positions(self, agent) -> Dict[str, Any]:
+        """
+        Reavalia posições abertas em paper trading usando análise técnica.
+        Fecha posições onde o sinal inverteu.
+
+        Args:
+            agent: AgnoTradingAgent (para acesso ao paper trading system)
+
+        Returns:
+            Dict com resultado da reavaliação
+        """
+        from src.core.config import settings
+
+        if not settings.reevaluation_enabled:
+            return {"skipped": True, "reason": "Reevaluation disabled"}
+
+        results = {
+            "reevaluated": 0,
+            "closed_by_reversal": 0,
+            "kept": 0,
+            "errors": []
+        }
+
+        try:
+            # Carregar posições paper do state.json
+            if not os.path.exists("portfolio/state.json"):
+                return results
+
+            with open("portfolio/state.json", "r", encoding="utf-8") as f:
+                state = json.load(f)
+
+            positions = state.get("positions", {})
+            if not positions:
+                return results
+
+            for pos_key, pos in positions.items():
+                if pos.get("status") != "OPEN":
+                    continue
+
+                symbol = pos.get("symbol", "")
+                side = pos.get("side", "BUY")
+                if not symbol:
+                    continue
+
+                # Normalizar side para LONG/SHORT
+                normalized_side = "LONG" if side in ("BUY", "LONG") else "SHORT"
+
+                # Verificar intervalo mínimo de reavaliação
+                now = datetime.now()
+                last_reeval = self._last_reeval.get(symbol)
+                if last_reeval:
+                    hours_since = (now - last_reeval).total_seconds() / 3600
+                    if hours_since < settings.reevaluation_interval_hours:
+                        continue
+
+                # Verificar tempo mínimo aberto
+                entry_time_str = pos.get("entry_time") or pos.get("timestamp")
+                if entry_time_str:
+                    try:
+                        entry_time = datetime.fromisoformat(entry_time_str)
+                        hours_open = (now - entry_time).total_seconds() / 3600
+                        if hours_open < settings.reevaluation_min_time_open_hours:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+
+                results["reevaluated"] += 1
+                self._last_reeval[symbol] = now
+
+                try:
+                    from src.analysis.agno_tools import analyze_technical_indicators
+                    logger.info(f"[REAVALIACAO PAPER] Analisando {symbol} ({normalized_side})...")
+                    tech = await analyze_technical_indicators(symbol)
+
+                    if not tech or "indicators" not in tech:
+                        continue
+
+                    indicators = tech["indicators"]
+                    rsi = indicators.get("rsi", 50)
+                    trend = indicators.get("trend", "neutral")
+                    macd_hist = indicators.get("macd_histogram", 0)
+
+                    should_close = False
+                    reason = ""
+                    against_signals = 0
+                    against_details = []
+
+                    if normalized_side == "LONG":
+                        if "bearish" in trend:
+                            against_signals += 2
+                            against_details.append(f"trend={trend}")
+                        if macd_hist < 0:
+                            against_signals += 1
+                            against_details.append(f"MACD={macd_hist:.4f}")
+                        if rsi > 70:
+                            against_signals += 1
+                            against_details.append(f"RSI sobrecomprado={rsi:.0f}")
+                        if rsi < 35:
+                            against_signals += 1
+                            against_details.append(f"RSI caindo={rsi:.0f}")
+
+                        if against_signals >= 2:
+                            should_close = True
+                            reason = f"Sinais contra LONG ({against_signals}): {', '.join(against_details)}"
+                        elif rsi > 80:
+                            should_close = True
+                            reason = f"RSI extremo sobrecomprado: {rsi:.0f}"
+
+                    else:  # SHORT
+                        if "bullish" in trend:
+                            against_signals += 2
+                            against_details.append(f"trend={trend}")
+                        if macd_hist > 0:
+                            against_signals += 1
+                            against_details.append(f"MACD={macd_hist:.4f}")
+                        if rsi < 30:
+                            against_signals += 1
+                            against_details.append(f"RSI sobrevendido={rsi:.0f}")
+                        if rsi > 65:
+                            against_signals += 1
+                            against_details.append(f"RSI subindo={rsi:.0f}")
+
+                        if against_signals >= 2:
+                            should_close = True
+                            reason = f"Sinais contra SHORT ({against_signals}): {', '.join(against_details)}"
+                        elif rsi < 20:
+                            should_close = True
+                            reason = f"RSI extremo sobrevendido: {rsi:.0f}"
+
+                    if should_close:
+                        logger.warning(f"[REAVALIACAO PAPER] {symbol} ({normalized_side}): {reason} - FECHANDO!")
+                        print(f"[REAVALIACAO PAPER] {symbol}: {reason} - FECHANDO!")
+                        try:
+                            # Fechar via paper trading system
+                            if hasattr(agent, 'paper_system') and agent.paper_system:
+                                current_price = await agent.paper_system.get_current_price(symbol)
+                                if current_price:
+                                    await agent.paper_system.close_position_manual(pos_key, current_price)
+                                    results["closed_by_reversal"] += 1
+                                else:
+                                    results["errors"].append(f"Preço não disponível para {symbol}")
+                            else:
+                                results["errors"].append(f"Paper system não disponível para fechar {symbol}")
+                        except Exception as e:
+                            results["errors"].append(f"Close paper {symbol}: {e}")
+                    else:
+                        results["kept"] += 1
+                        logger.debug(f"[REAVALIACAO PAPER] {symbol}: RSI={rsi:.0f}, trend={trend} - Mantendo")
+
+                except Exception as e:
+                    logger.error(f"[REAVALIACAO PAPER] Erro ao reavaliar {symbol}: {e}")
+                    results["errors"].append(f"Reeval paper {symbol}: {e}")
+
+        except Exception as e:
+            logger.exception(f"[REAVALIACAO PAPER] Erro geral: {e}")
+
+        if results["reevaluated"] > 0:
+            print(f"[REAVALIACAO PAPER] {results['reevaluated']} posicoes reavaliadas: "
                   f"{results['closed_by_reversal']} fechadas, {results['kept']} mantidas")
 
         return results

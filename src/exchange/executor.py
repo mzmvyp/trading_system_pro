@@ -685,8 +685,8 @@ class BinanceFuturesExecutor:
 
             if desired_margin > 0:
                 calculated_leverage = int(position_value / desired_margin)
-                # Limitar entre 1x e 20x (conservador - alguns ativos como PAXG tem limites baixos)
-                calculated_leverage = max(1, min(calculated_leverage, 20))
+                # Limitar entre 1x e 10x (conservador para preservar capital)
+                calculated_leverage = max(1, min(calculated_leverage, 10))
             else:
                 calculated_leverage = self.default_leverage
 

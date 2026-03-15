@@ -69,7 +69,7 @@ class Settings(BaseSettings):
 
     # Configurações de Confiança
     # UNIFICADO: Sempre usar escala 0-10
-    min_confidence_0_10: int = 7  # Mínimo 7/10 para executar sinais
+    min_confidence_0_10: int = 8  # Mínimo 8/10 para executar sinais (aumentado de 7)
     # DEPRECATED: min_confidence_0_5 removido - sempre usar escala 0-10
 
     # Configurações de Intervalo de Análise
@@ -104,8 +104,8 @@ class Settings(BaseSettings):
     # REAVALIAÇÃO DE SINAIS ATIVOS
     # ========================================
     reevaluation_enabled: bool = True
-    reevaluation_interval_hours: float = 2.0  # Reavaliar a cada 2 horas
-    reevaluation_min_time_open_hours: float = 1.0  # Só reavaliar após 1h aberta
+    reevaluation_interval_hours: float = 0.5  # Reavaliar a cada 30 min
+    reevaluation_min_time_open_hours: float = 0.25  # Reavaliar apos 15 min aberta
     reevaluation_min_confidence: int = 7  # Confiança mínima para agir na reavaliação
 
     # ========================================
