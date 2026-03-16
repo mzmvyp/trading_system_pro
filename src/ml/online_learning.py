@@ -553,7 +553,7 @@ def manual_retrain():
     return online_learning_manager.retrain()
 
 
-def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
+def seed_from_evaluated_signals(force_retrain: bool = True, max_signals: int = 150) -> Dict:
     """
     Popula o buffer com sinais avaliados, ENRIQUECIDOS com indicadores reais.
     Usa enrich_signal_with_klines() para buscar klines historicos e calcular
@@ -564,6 +564,7 @@ def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
 
     Args:
         force_retrain: Se True, dispara retreino apos popular o buffer
+        max_signals: Limite de sinais a processar (evita timeout no dashboard; 0 = sem limite)
 
     Returns:
         Dict com resultado da operacao
@@ -592,7 +593,8 @@ def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
     except ImportError as e:
         return {"success": False, "error": f"Import error: {e}"}
 
-    evaluations = evaluate_all_signals()
+    # Limitar avaliações para não travar o dashboard (usa cache quando existe)
+    evaluations = evaluate_all_signals(max_to_evaluate=200)
     if not evaluations:
         return {"success": False, "error": "Nenhum sinal avaliado encontrado"}
 
@@ -602,6 +604,10 @@ def seed_from_evaluated_signals(force_retrain: bool = True) -> Dict:
 
     if not finalized:
         return {"success": False, "error": "Nenhum sinal finalizado (SL/TP hit)"}
+
+    if max_signals > 0 and len(finalized) > max_signals:
+        finalized = finalized[:max_signals]
+        print(f"[OL-SEED] Limitando a {max_signals} sinais para evitar timeout.")
 
     # Tentar enriquecer sinais com indicadores reais via klines
     try:

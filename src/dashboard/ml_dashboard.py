@@ -225,15 +225,16 @@ def main():
 
             st.caption(f"Retreino automatico ao atingir {threshold} amostras no buffer. "
                        f"Usa TODOS os dados do buffer + dataset original.")
+            st.caption("⚠️ **Alimentar** processa até 150 sinais (evita travar). Auto-retreino só para o modelo sklearn, não para Bi-LSTM.")
 
             # Aviso: buffer cheio mas modelo ainda nao treinado (ex.: primeiro uso ou retreino falhou)
             if len(buffer) >= 50 and (not model_info or not model_info.get("best_model")):
                 st.warning("Buffer cheio e nenhum modelo ativo. Clique em **Forcar Retreino** para treinar o modelo com os sinais do buffer.")
 
             if st.button("📡 Alimentar com Sinais", type="primary", use_container_width=True):
-                with st.spinner("Avaliando sinais e populando buffer..."):
+                with st.spinner("Avaliando sinais e populando buffer (máx. 150, aguarde)..."):
                     from src.ml.online_learning import seed_from_evaluated_signals
-                    result = seed_from_evaluated_signals(force_retrain=True)
+                    result = seed_from_evaluated_signals(force_retrain=True, max_signals=150)
                 if result.get("success"):
                     st.success(f"✅ {result.get('signals_added', 0)} sinais adicionados! Buffer: {result.get('buffer_total', 0)}")
                     if result.get("retrain_result", {}).get("success"):

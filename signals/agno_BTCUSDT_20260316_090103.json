@@ -1,0 +1,69 @@
+{
+  "symbol": "BTCUSDT",
+  "timestamp": "2026-03-16T09:01:01.187571+00:00",
+  "agent_response": "```json\n{\n  \"signal\": \"NO_SIGNAL\",\n  \"operation_type\": \"DAY_TRADE\",\n  \"entry_price\": 0,\n  \"stop_loss\": 0,\n  \"take_profit_1\": 0,\n  \"take_profit_2\": 0,\n  \"confidence\": 7,\n  \"reasoning\": \"Regras confirmadas: Tendência 4h/1d bullish, MACD bullish, EMA alignment bullish, Orderbook buy pressure. Conflitos: RSI 58.6 > 55 (fora da zona de compra), preço a 1.59% da resistência (não próximo ao suporte), confluência 1/5 timeframes bullish (muito baixa), OBV bearish (volume não confirmando). Apenas 4/7 regr",
+  "signal": "BUY",
+  "entry_price": 73085.3,
+  "stop_loss": 71989.0205,
+  "take_profit_1": 74546.01,
+  "take_profit_2": 76739.57,
+  "confidence": 7,
+  "reasoning": "Regras confirmadas: Tendência 4h/1d bullish, MACD bullish, EMA alignment bullish, Orderbook buy pressure. Conflitos: RSI 58.6 > 55 (fora da zona de compra), preço a 1.59% da resistência (não próximo ao suporte), confluência 1/5 timeframes bullish (muito baixa), OBV bearish (volume não confirmando). Apenas 4/7 regras para BUY confirmadas, com conflitos significativos em RSI, suporte e confluência.",
+  "operation_type": "DAY_TRADE",
+  "source": "AGNO",
+  "rsi": 58.58793834410984,
+  "macd_histogram": 74.78802632863346,
+  "adx": 25,
+  "atr": 0,
+  "bb_position": 0.6764154787467989,
+  "trend": "strong_bullish",
+  "cvd": 0,
+  "orderbook_imbalance": 0.7947877259352671,
+  "bullish_tf_count": 0,
+  "bearish_tf_count": 0,
+  "indicators": {
+    "rsi": {
+      "value": 58.58793834410984,
+      "zone": "neutral",
+      "action_hint": "wait"
+    },
+    "macd": {
+      "histogram": 74.78802632863346,
+      "crossover": "bullish",
+      "momentum_direction": "accelerating_up"
+    },
+    "bollinger": {
+      "position": 0.6764154787467989,
+      "zone": "above_middle",
+      "squeeze_detected": false
+    },
+    "ema_structure": {
+      "price_vs_ema20": "above",
+      "price_vs_ema50": "above",
+      "price_vs_ema200": "above",
+      "ema_alignment": "bullish_stack"
+    },
+    "obv_trend": "bearish"
+  },
+  "signal_override": true,
+  "original_signal": "NO_SIGNAL",
+  "override_reason": "DeepSeek devolveu NO_SIGNAL com confiança 7/10. Bias técnico local=7/10 (BUY). Direção corrigida pelo nosso sistema.",
+  "lstm_probability": 0.7441649436950684,
+  "confluence_score": 1.0,
+  "confluence_details": [
+    "MACD aligned (74.7880)",
+    "Trend aligned (strong_bullish)",
+    "ADX weak trend (0.0 < 21.97)",
+    "Bi-LSTM win prob=74.4%"
+  ],
+  "confluence_votes_for": 4,
+  "confluence_votes_against": 0,
+  "confluence_thresholds": "optimizer",
+  "executed": true,
+  "execution_mode": "real",
+  "execution_result": "SUCCESS",
+  "ml_probability": 0.7166153292445531,
+  "_signal_file": "signals/agno_BTCUSDT_20260316_090103.json",
+  "ml_prediction": 1,
+  "execution_time": "2026-03-16T09:01:09.580235+00:00"
+}
