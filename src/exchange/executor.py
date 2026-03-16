@@ -573,6 +573,14 @@ class BinanceFuturesExecutor:
         logger.warning(f"[EXECUTANDO SINAL REAL] {signal_type} {symbol}")
         logger.warning(f"Fonte: {source}")
         logger.warning(f"Entry: ${entry_price:.2f}")
+        # HARD BLOCK: SL, TP1 e TP2 são OBRIGATÓRIOS para execução real
+        if not stop_loss or stop_loss <= 0:
+            return {"success": False, "error": f"Stop Loss obrigatório. Valor recebido: {stop_loss}"}
+        if not take_profit_1 or take_profit_1 <= 0:
+            return {"success": False, "error": f"Take Profit 1 obrigatório. Valor recebido: {take_profit_1}"}
+        if not take_profit_2 or take_profit_2 <= 0:
+            return {"success": False, "error": f"Take Profit 2 obrigatório. Valor recebido: {take_profit_2}"}
+
         logger.warning(f"Stop Loss: ${stop_loss:.2f}")
         logger.warning(f"Take Profit 1: ${take_profit_1:.2f}")
         logger.warning(f"Take Profit 2: ${take_profit_2:.2f}")

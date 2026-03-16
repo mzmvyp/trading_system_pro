@@ -449,29 +449,30 @@ Analise os dados e decida com base nestas REGRAS OBJETIVAS:
 6. EMA alignment bearish (preco < EMA20 < EMA50)
 7. Volume confirmando (OBV bearish ou orderbook sell pressure)
 
-## QUANDO DAR NO_SIGNAL (OBRIGATORIO):
-- Bias entre -2 e +2 (mercado indeciso/lateral)
-- Conflitos entre indicadores (sinais contraditórios)
-- RSI entre 40-60 SEM tendencia clara
-- ADX < 20 (sem tendencia)
-- Confluencia fraca (TF entre -2 e +2)
-- SEMPRE prefira NO_SIGNAL na duvida. So de sinal com 5+ regras confirmando.
+## IMPORTANTE - VOCE DEVE SEMPRE RESPONDER BUY OU SELL:
+- Voce NAO decide se o sinal sera executado. O sistema decide com base na confianca.
+- Analise os dados e diga qual direcao (BUY ou SELL) e MAIS PROVAVEL.
+- Use a confianca (1-10) para indicar a forca do sinal.
+- Confianca baixa (1-5) = sinal fraco, o sistema provavelmente NAO executara.
+- Confianca alta (6-10) = sinal forte, o sistema provavelmente executara.
+- NUNCA responda NO_SIGNAL. Sempre escolha BUY ou SELL com a confianca adequada.
 
-## STOPS E TARGETS:
+## STOPS E TARGETS (OBRIGATORIO - NUNCA DEIXE EM 0):
 - Stop loss DEVE estar atras de suporte/resistencia real (nao arbitrario)
 - Para BUY: SL abaixo do suporte. Para SELL: SL acima da resistencia
 - TP1 no proximo nivel de resistencia/suporte. TP2 no nivel seguinte
 - Minimo 2:1 reward/risk (TP1 deve ser 2x a distancia do SL)
+- TODOS os campos (entry_price, stop_loss, take_profit_1, take_profit_2) DEVEM ter valores reais > 0
 
 ## CONFIDENCE (escala 1-10):
-- Para BUY ou SELL: use SEMPRE confidence entre 6 e 10. Nunca devolva BUY/SELL com confidence 1-5.
+- 1-3: Mercado indeciso/lateral, sem confluencia clara
+- 4-5: Poucos indicadores alinhados, conflitos significativos
+- 6-7: 4-5 regras confirmando, conflitos menores
 - 8-10: 6+ regras confirmando, sem conflitos, tendencia forte
-- 6-7: 4-5 regras confirmando, conflitos menores (minimo para dar sinal)
-- Se so tiver 1-5 regras alinhadas = devolva NO_SIGNAL (nao de sinal com confianca baixa)
 
 Responda APENAS com JSON:
 ```json
-{"signal":"BUY/SELL/NO_SIGNAL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":7,"reasoning":"Regras X,Y,Z confirmadas. Conflitos: nenhum/ABC"}
+{"signal":"BUY/SELL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":7,"reasoning":"Regras X,Y,Z confirmadas. Conflitos: nenhum/ABC"}
 ```"""
 
     async def analyze(self, symbol: str = "BTCUSDT") -> Dict[str, Any]:
@@ -616,31 +617,6 @@ Responda APENAS com JSON:
                     )
                     self._save_signal(deepseek_signal)
 
-                    # VALIDAÇÃO: NO_SIGNAL com confiança alta → usar nosso bias técnico
-                    ds_conf = deepseek_signal.get("confidence", 0)
-                    if deepseek_signal.get("signal") == "NO_SIGNAL" and ds_conf >= 6:
-                        ds_analysis = deepseek_result.get("analysis_data", {})
-                        ds_bias = ds_analysis.get("aggregated_scores", {})
-                        ds_action = ds_bias.get("recommended_action", "WAIT")
-                        ds_bias_score = ds_bias.get("overall_bias", 0)
-
-                        if ds_action in ["BUY", "SELL"]:
-                            logger.warning(
-                                f"[VALIDAÇÃO DEEPSEEK] NO_SIGNAL com confiança {ds_conf}/10 — "
-                                f"Nosso bias={ds_bias_score}/10 ({ds_action}). Convertendo para {ds_action}."
-                            )
-                            deepseek_signal["signal"] = ds_action
-                            deepseek_signal["signal_override"] = True
-                            deepseek_signal["original_signal"] = "NO_SIGNAL"
-                            deepseek_signal["override_reason"] = (
-                                f"Confiança {ds_conf}/10 com NO_SIGNAL. Bias local={ds_bias_score} → {ds_action}."
-                            )
-                        else:
-                            logger.info(
-                                f"[VALIDAÇÃO DEEPSEEK] NO_SIGNAL com confiança {ds_conf}/10 — "
-                                f"Bias local também WAIT (bias={ds_bias_score}). Mantendo NO_SIGNAL."
-                            )
-
                     if deepseek_signal.get("signal") in ["BUY", "SELL"]:
                         # HARD BLOCK: Verificar tendência 4h ANTES de tudo
                         try:
@@ -658,6 +634,16 @@ Responda APENAS com JSON:
                             elif ds_dir == "SELL" and not trend_data.get("allow_short", True):
                                 logger.warning(f"[TREND BLOCK] DEEPSEEK SELL {symbol} BLOQUEADO: tendência de alta no 4h")
                                 deepseek_signal["signal"] = "NO_SIGNAL"
+
+                    # Validar SL/TP1/TP2 obrigatórios antes de executar
+                    if deepseek_signal.get("signal") in ["BUY", "SELL"]:
+                        ds_sl = deepseek_signal.get("stop_loss", 0) or 0
+                        ds_tp1 = deepseek_signal.get("take_profit_1", 0) or 0
+                        ds_tp2 = deepseek_signal.get("take_profit_2", 0) or 0
+                        if ds_sl <= 0 or ds_tp1 <= 0 or ds_tp2 <= 0:
+                            logger.error(f"[DEEPSEEK BLOCK] SL=${ds_sl}, TP1=${ds_tp1}, TP2=${ds_tp2} — valores obrigatórios faltando")
+                            deepseek_signal["signal"] = "NO_SIGNAL"
+                            deepseek_signal["block_reason"] = f"SL/TP inválidos: SL=${ds_sl}, TP1=${ds_tp1}, TP2=${ds_tp2}"
 
                     if deepseek_signal.get("signal") in ["BUY", "SELL"]:
                         validation = validate_risk_and_position(deepseek_signal, symbol, _trend_data=trend_data)
@@ -756,33 +742,12 @@ Responda APENAS com JSON:
             logger.info(f"[AGNO] DeepSeek devolveu: Sinal={_sig}, Confiança={_conf}/10")
             if _reasoning:
                 logger.info(f"[AGNO] Reasoning: {_reasoning[:200]}")
-            # VALIDAÇÃO DO NOSSO LADO: DeepSeek só devolve confiança, nós decidimos
-            # Se confiança >= 6 mas sinal é NO_SIGNAL, usar o nosso bias técnico para definir direção
-            if _sig == "NO_SIGNAL" and _conf >= 6 and "error" not in analysis_data:
-                our_bias = analysis_data.get("aggregated_scores", {})
-                our_action = our_bias.get("recommended_action", "WAIT")
-                our_bias_score = our_bias.get("overall_bias", 0)
 
-                if our_action in ["BUY", "SELL"]:
-                    logger.warning(
-                        f"[VALIDAÇÃO] NO_SIGNAL com confiança {_conf}/10 — "
-                        f"Nosso bias técnico diz {our_action} (bias={our_bias_score}/10). "
-                        f"Convertendo para {our_action}."
-                    )
-                    agno_signal["signal"] = our_action
-                    agno_signal["signal_override"] = True
-                    agno_signal["original_signal"] = "NO_SIGNAL"
-                    agno_signal["override_reason"] = (
-                        f"DeepSeek devolveu NO_SIGNAL com confiança {_conf}/10. "
-                        f"Bias técnico local={our_bias_score}/10 ({our_action}). "
-                        f"Direção corrigida pelo nosso sistema."
-                    )
-                    _sig = our_action  # Atualizar para log seguinte
-                else:
-                    logger.info(
-                        f"[VALIDAÇÃO] NO_SIGNAL com confiança {_conf}/10 — "
-                        f"Nosso bias técnico também diz WAIT (bias={our_bias_score}/10). Mantendo NO_SIGNAL."
-                    )
+            # DeepSeek SEMPRE deve devolver BUY ou SELL. Se devolveu NO_SIGNAL (modelo antigo),
+            # tratar como confiança 0 e o sistema não executará.
+            if _sig == "NO_SIGNAL":
+                logger.info(f"[AGNO] DeepSeek devolveu NO_SIGNAL - sistema não executará (confiança insuficiente)")
+                agno_signal["confidence"] = 0
 
             # ========================================
             # CONFLUÊNCIA: LLM é um voto, não a decisão final
@@ -873,54 +838,80 @@ Responda APENAS com JSON:
                     agno_signal["signal"] = "NO_SIGNAL"
                     agno_signal["block_reason"] = f"Confluência: {motivo_confl}"
 
-            # CORRIGIDO: Se não tem entry_price, obter do mercado (async)
-            # Se não tem SL/TP, calcular baseado em ATR (não % arbitrário)
-            if agno_signal.get("signal") in ["BUY", "SELL"] and not agno_signal.get("entry_price"):
-                try:
-                    market_data = await get_market_data(symbol)
-                    if market_data and "current_price" in market_data:
-                        agno_signal["entry_price"] = market_data["current_price"]
-                except Exception as e:
-                    logger.error(f"[AGNO] Erro ao obter preço atual: {e}")
+            # ========================================
+            # GARANTIR SL/TP1/TP2 OBRIGATÓRIOS
+            # Nenhuma ordem pode ser aberta sem os 3 níveis
+            # ========================================
+            if agno_signal.get("signal") in ["BUY", "SELL"]:
+                # 1. Garantir entry_price
+                if not agno_signal.get("entry_price") or agno_signal.get("entry_price", 0) <= 0:
+                    try:
+                        market_data = await get_market_data(symbol)
+                        if market_data and "current_price" in market_data:
+                            agno_signal["entry_price"] = market_data["current_price"]
+                    except Exception as e:
+                        logger.error(f"[AGNO] Erro ao obter preço atual: {e}")
 
-            if agno_signal.get("signal") in ["BUY", "SELL"] and agno_signal.get("entry_price"):
-                entry = agno_signal["entry_price"]
-                # Usar ATR do analysis_data para SL/TP se disponível
-                atr_value = agno_signal.get("atr", 0)
-                if atr_value and atr_value > 0:
-                    # SL = 1.5x ATR, TP1 = 3x ATR, TP2 = 5x ATR (mínimo 2:1 R:R)
-                    sl_dist = atr_value * 1.5
-                    tp1_dist = atr_value * 3.0
-                    tp2_dist = atr_value * 5.0
-
-                    if not agno_signal.get("stop_loss"):
-                        if agno_signal["signal"] == "BUY":
-                            agno_signal["stop_loss"] = entry - sl_dist
-                        else:
-                            agno_signal["stop_loss"] = entry + sl_dist
-
-                    if not agno_signal.get("take_profit_1"):
-                        if agno_signal["signal"] == "BUY":
-                            agno_signal["take_profit_1"] = entry + tp1_dist
-                        else:
-                            agno_signal["take_profit_1"] = entry - tp1_dist
-
-                    if not agno_signal.get("take_profit_2"):
-                        if agno_signal["signal"] == "BUY":
-                            agno_signal["take_profit_2"] = entry + tp2_dist
-                        else:
-                            agno_signal["take_profit_2"] = entry - tp2_dist
-
-                    logger.info(f"[ATR SL/TP] ATR={atr_value:.4f}, SL_dist={sl_dist:.4f}, TP1_dist={tp1_dist:.4f}")
+                entry = agno_signal.get("entry_price", 0)
+                if entry <= 0:
+                    logger.error(f"[AGNO] Sem entry_price para {symbol}. Não é possível executar.")
+                    agno_signal["signal"] = "NO_SIGNAL"
+                    agno_signal["block_reason"] = "Sem entry_price válido"
                 else:
-                    # Fallback: 1.5% SL, 3% TP1 (mantém 2:1 R:R mínimo)
-                    if not agno_signal.get("stop_loss"):
-                        if agno_signal["signal"] == "BUY":
-                            agno_signal["stop_loss"] = entry * 0.985
-                        else:
-                            agno_signal["stop_loss"] = entry * 1.015
+                    direction = agno_signal["signal"]
+                    sl = agno_signal.get("stop_loss", 0) or 0
+                    tp1 = agno_signal.get("take_profit_1", 0) or 0
+                    tp2 = agno_signal.get("take_profit_2", 0) or 0
 
-                logger.info(f"[AGNO] Entry=${entry}, SL=${agno_signal.get('stop_loss')}")
+                    # 2. Auto-calcular valores faltantes usando ATR
+                    atr_value = agno_signal.get("atr", 0)
+                    needs_calc = sl <= 0 or tp1 <= 0 or tp2 <= 0
+
+                    if needs_calc:
+                        if atr_value and atr_value > 0:
+                            sl_dist = atr_value * 1.5
+                            tp1_dist = atr_value * 3.0
+                            tp2_dist = atr_value * 5.0
+                            logger.info(f"[ATR SL/TP] ATR={atr_value:.4f}, SL_dist={sl_dist:.4f}, TP1_dist={tp1_dist:.4f}, TP2_dist={tp2_dist:.4f}")
+                        else:
+                            # Fallback: 1.5% SL, 3% TP1, 5% TP2
+                            sl_dist = entry * 0.015
+                            tp1_dist = entry * 0.03
+                            tp2_dist = entry * 0.05
+                            logger.info(f"[FALLBACK SL/TP] Sem ATR, usando percentuais: SL=1.5%, TP1=3%, TP2=5%")
+
+                        if sl <= 0:
+                            sl = (entry - sl_dist) if direction == "BUY" else (entry + sl_dist)
+                            agno_signal["stop_loss"] = sl
+                            agno_signal["stop_loss_auto_calculated"] = True
+                            logger.warning(f"[SL AUTO] Stop Loss calculado automaticamente: ${sl:.2f}")
+
+                        if tp1 <= 0:
+                            tp1 = (entry + tp1_dist) if direction == "BUY" else (entry - tp1_dist)
+                            agno_signal["take_profit_1"] = tp1
+                            agno_signal["tp1_auto_calculated"] = True
+                            logger.warning(f"[TP1 AUTO] Take Profit 1 calculado automaticamente: ${tp1:.2f}")
+
+                        if tp2 <= 0:
+                            tp2 = (entry + tp2_dist) if direction == "BUY" else (entry - tp2_dist)
+                            agno_signal["take_profit_2"] = tp2
+                            agno_signal["tp2_auto_calculated"] = True
+                            logger.warning(f"[TP2 AUTO] Take Profit 2 calculado automaticamente: ${tp2:.2f}")
+
+                    # 3. HARD BLOCK: Se mesmo após cálculo, algum valor é inválido, NÃO executar
+                    sl = agno_signal.get("stop_loss", 0) or 0
+                    tp1 = agno_signal.get("take_profit_1", 0) or 0
+                    tp2 = agno_signal.get("take_profit_2", 0) or 0
+
+                    if sl <= 0 or tp1 <= 0 or tp2 <= 0:
+                        logger.error(
+                            f"[HARD BLOCK] {symbol}: SL=${sl}, TP1=${tp1}, TP2=${tp2} — "
+                            f"Todos devem ser > 0. NÃO será executado."
+                        )
+                        agno_signal["signal"] = "NO_SIGNAL"
+                        agno_signal["block_reason"] = f"SL/TP inválidos: SL=${sl}, TP1=${tp1}, TP2=${tp2}"
+                    else:
+                        logger.info(f"[AGNO] Entry=${entry:.2f}, SL=${sl:.2f}, TP1=${tp1:.2f}, TP2=${tp2:.2f}")
 
             # Salvar sinal AGNO
             self._save_signal(agno_signal)

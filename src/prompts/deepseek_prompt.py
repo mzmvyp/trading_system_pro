@@ -401,9 +401,12 @@ Posicao no range 24h: {analysis['price_context']['position_in_range_pct']:.0f}% 
 ## TIPO DE OPERACAO RECOMENDADO: {recommended_type}
 
 Analise os dados acima seguindo ESTRITAMENTE as regras de trading nas instrucoes.
-Confianca: 1-10. Para BUY ou SELL use 6-10; se for 1-5 responda NO_SIGNAL. Reply ONLY JSON:
+IMPORTANTE: Sempre responda BUY ou SELL (NUNCA NO_SIGNAL). Use confianca 1-10 para indicar a forca.
+O SISTEMA decide se executa com base na confianca. Voce so analisa a direcao mais provavel.
+TODOS os campos (entry_price, stop_loss, take_profit_1, take_profit_2) DEVEM ter valores reais > 0. NUNCA deixe em 0.
+Reply ONLY JSON:
 ```json
-{{{{"signal":"BUY/SELL/NO_SIGNAL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":7,"reasoning":"Regras confirmadas: X. Conflitos: Y"}}}}
+{{{{"signal":"BUY/SELL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":7,"reasoning":"Regras confirmadas: X. Conflitos: Y"}}}}
 ```"""
     except Exception as e:
         logger.exception(f"Erro ao criar prompt: {e}")

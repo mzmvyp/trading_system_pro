@@ -2058,8 +2058,17 @@ def execute_paper_trade(
 ) -> Dict[str, Any]:
     """
     Executa um paper trade REAL usando o sistema completo de simulação.
+    VALIDAÇÃO: SL, TP1 e TP2 são obrigatórios.
     """
     try:
+        # HARD BLOCK: Validar SL/TP1/TP2 antes de executar
+        sl = signal.get("stop_loss", 0) or 0
+        tp1 = signal.get("take_profit_1", 0) or 0
+        tp2 = signal.get("take_profit_2", 0) or 0
+        if sl <= 0 or tp1 <= 0 or tp2 <= 0:
+            logger.error(f"[PAPER TRADE BLOCK] SL=${sl}, TP1=${tp1}, TP2=${tp2} — Todos devem ser > 0")
+            return {"success": False, "error": f"SL/TP obrigatórios: SL=${sl}, TP1=${tp1}, TP2=${tp2}"}
+
         from real_paper_trading import real_paper_trading
 
         # Executar trade usando o sistema REAL
