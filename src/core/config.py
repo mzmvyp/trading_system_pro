@@ -131,6 +131,17 @@ class Settings(BaseSettings):
     ml_min_improvement: float = 0.0
 
 
+    # ========================================
+    # NOTIFICAÇÕES POR EMAIL (Yahoo Mail / SMTP)
+    # ========================================
+    # Configure no .env:
+    #   EMAIL_SMTP_USER=seu_email@yahoo.com
+    #   EMAIL_SMTP_PASSWORD=sua_senha_de_app
+    #   EMAIL_SMTP_HOST=smtp.mail.yahoo.com  (padrão Yahoo)
+    #   EMAIL_SMTP_PORT=587  (padrão TLS)
+    #   EMAIL_TO=destinatario@email.com  (padrão: mesmo que EMAIL_SMTP_USER)
+    email_notifications_enabled: bool = True
+
     class Config:
         env_file = ".env"
         case_sensitive = False

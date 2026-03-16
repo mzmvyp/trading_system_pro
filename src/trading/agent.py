@@ -1026,6 +1026,10 @@ Responda APENAS com JSON:
                             except Exception:
                                 pass
 
+            # === NOTIFICAÇÃO POR EMAIL: Sinal gerado ===
+            if agno_signal.get("signal") in ["BUY", "SELL"]:
+                await self._send_signal_notification(agno_signal)
+
             # Retornar o sinal AGNO como principal (para compatibilidade)
             signal = agno_signal
 
@@ -1585,6 +1589,51 @@ Responda APENAS com JSON:
         signal["confidence"] = max(1, min(10, signal.get("confidence", 5)))
 
         return signal
+
+    async def _send_signal_notification(self, signal: Dict[str, Any]):
+        """Envia notificação por email/todos os canais quando um sinal é gerado."""
+        try:
+            from src.core.config import settings
+            if not settings.email_notifications_enabled:
+                return
+
+            from src.services.notification_service import NotificationService
+
+            notify = NotificationService()
+            if not notify.channels:
+                return
+
+            symbol = signal.get("symbol", "UNKNOWN")
+            direction = signal.get("signal", "UNKNOWN")
+            confidence = signal.get("confidence", 0)
+            entry = signal.get("entry_price", 0)
+            sl = signal.get("stop_loss", 0)
+            tp1 = signal.get("take_profit_1", signal.get("tp1", 0))
+            tp2 = signal.get("take_profit_2", signal.get("tp2", 0))
+            source = signal.get("source", "AGNO")
+            reasoning = signal.get("reasoning", "N/A")
+
+            title = f"Novo Sinal: {direction} {symbol}"
+            message = (
+                f"Simbolo: {symbol}\n"
+                f"Direcao: {direction}\n"
+                f"Fonte: {source}\n"
+                f"Confianca: {confidence}/10\n"
+                f"Entrada: ${entry:.2f}\n"
+                f"Stop Loss: ${sl:.2f}\n"
+                f"Alvo 1 (TP1): ${tp1:.2f}\n"
+                f"Alvo 2 (TP2): ${tp2:.2f}\n"
+                f"Motivo: {reasoning[:200]}\n"
+                f"Horario: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+            )
+
+            from src.services.notification_service import NotificationPriority
+            priority = NotificationPriority.HIGH if confidence >= 8 else NotificationPriority.MEDIUM
+            await notify.send(message, title, priority)
+            logger.info(f"[NOTIFY] Notificacao enviada: {direction} {symbol}")
+
+        except Exception as e:
+            logger.debug(f"[NOTIFY] Erro ao enviar notificacao: {e}")
 
     def _save_signal(self, signal: Dict[str, Any]):
         """Salva sinal em arquivo JSON com deduplicação."""

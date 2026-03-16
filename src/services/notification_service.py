@@ -77,6 +77,19 @@ class NotificationService:
         if slack_webhook:
             self.channels["slack"] = {"webhook_url": slack_webhook}
 
+        # Email (SMTP - Yahoo Mail ou outro provedor)
+        email_user = os.getenv("EMAIL_SMTP_USER")
+        email_password = os.getenv("EMAIL_SMTP_PASSWORD")
+        email_to = os.getenv("EMAIL_TO", email_user)  # Padrão: enviar para si mesmo
+        if email_user and email_password:
+            self.channels["email"] = {
+                "smtp_host": os.getenv("EMAIL_SMTP_HOST", "smtp.mail.yahoo.com"),
+                "smtp_port": int(os.getenv("EMAIL_SMTP_PORT", "587")),
+                "user": email_user,
+                "password": email_password,
+                "to": email_to,
+            }
+
         # Custom webhook
         webhook_url = os.getenv("NOTIFICATION_WEBHOOK_URL")
         if webhook_url:
@@ -140,6 +153,8 @@ class NotificationService:
                     success = await self._send_discord(message, title, priority)
                 elif channel == "slack":
                     success = await self._send_slack(message, title, priority)
+                elif channel == "email":
+                    success = await self._send_email(message, title, priority)
                 elif channel == "webhook":
                     success = await self._send_webhook(message, title, priority, metadata)
                 else:
@@ -238,6 +253,59 @@ class NotificationService:
             logger.error(f"Slack send error: {e}")
             return False
 
+    async def _send_email(self, message: str, title: Optional[str], priority: NotificationPriority) -> bool:
+        """Send via Email SMTP (Yahoo Mail, Gmail, etc.)."""
+        try:
+            import asyncio
+            import smtplib
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+
+            config = self.channels["email"]
+
+            priority_label = {"low": "[INFO]", "medium": "[ALERTA]", "high": "[URGENTE]", "critical": "[CRITICO]"}
+            subject = f"{priority_label.get(priority.value, '')} {title or 'Trading System Pro'}"
+
+            msg = MIMEMultipart("alternative")
+            msg["From"] = config["user"]
+            msg["To"] = config["to"]
+            msg["Subject"] = subject
+
+            # Versão texto
+            msg.attach(MIMEText(message, "plain", "utf-8"))
+
+            # Versão HTML
+            html_message = message.replace("\n", "<br>")
+            color_map = {"low": "#3498DB", "medium": "#F39C12", "high": "#E74C3C", "critical": "#8E44AD"}
+            border_color = color_map.get(priority.value, "#3498DB")
+            html = f"""
+            <html><body style="font-family: Arial, sans-serif; padding: 20px;">
+            <div style="border-left: 4px solid {border_color}; padding: 15px; background: #f9f9f9; border-radius: 4px;">
+                <h2 style="color: {border_color}; margin-top: 0;">{title or 'Trading System Pro'}</h2>
+                <p style="font-size: 14px; line-height: 1.6;">{html_message}</p>
+                <hr style="border: none; border-top: 1px solid #ddd;">
+                <small style="color: #888;">Trading System Pro - Notificação Automática</small>
+            </div>
+            </body></html>
+            """
+            msg.attach(MIMEText(html, "html", "utf-8"))
+
+            # Enviar em thread separada para não bloquear o event loop
+            def _smtp_send():
+                with smtplib.SMTP(config["smtp_host"], config["smtp_port"], timeout=15) as server:
+                    server.starttls()
+                    server.login(config["user"], config["password"])
+                    server.send_message(msg)
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _smtp_send)
+            logger.info(f"Email enviado para {config['to']}: {subject}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Email send error: {e}")
+            return False
+
     async def _send_webhook(self, message: str, title: Optional[str], priority: NotificationPriority, metadata: Optional[Dict]) -> bool:
         """Send via custom webhook."""
         try:
@@ -279,6 +347,39 @@ class NotificationService:
 
         priority = NotificationPriority.HIGH if confidence >= 8 else NotificationPriority.MEDIUM
         await self.send(message, title, priority, metadata=signal)
+
+    async def send_target_hit(self, symbol: str, target_type: str, price: float, entry_price: float, pnl_percent: float, signal_type: str = "BUY"):
+        """Envia notificação quando TP1, TP2 ou Stop Loss é atingido."""
+        title_map = {
+            "TAKE_PROFIT_1": f"ALVO 1 Atingido: {symbol}",
+            "TAKE_PROFIT_2": f"ALVO 2 Atingido: {symbol}",
+            "STOP_LOSS": f"STOP LOSS Atingido: {symbol}",
+            "TIMEOUT": f"TIMEOUT: {symbol}",
+            "MANUAL": f"Fechamento Manual: {symbol}",
+        }
+        priority_map = {
+            "TAKE_PROFIT_1": NotificationPriority.HIGH,
+            "TAKE_PROFIT_2": NotificationPriority.HIGH,
+            "STOP_LOSS": NotificationPriority.CRITICAL,
+            "TIMEOUT": NotificationPriority.MEDIUM,
+            "MANUAL": NotificationPriority.MEDIUM,
+        }
+
+        title = title_map.get(target_type, f"{target_type}: {symbol}")
+        priority = priority_map.get(target_type, NotificationPriority.MEDIUM)
+
+        pnl_emoji = "+" if pnl_percent >= 0 else ""
+        message = (
+            f"Simbolo: {symbol}\n"
+            f"Direcao: {signal_type}\n"
+            f"Evento: {target_type}\n"
+            f"Preco de Entrada: ${entry_price:.2f}\n"
+            f"Preco Atual: ${price:.2f}\n"
+            f"P&L: {pnl_emoji}{pnl_percent:.2f}%\n"
+            f"Horario: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        )
+
+        await self.send(message, title, priority)
 
     def get_status(self) -> Dict:
         """Get notification service status."""
