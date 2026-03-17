@@ -268,11 +268,15 @@ class OnlineLearningManager:
             print("[OL] Threshold atingido! Iniciando retreino...")
             self.retrain()
 
-    def retrain(self) -> Dict:
+    def retrain(self, force_save: bool = False) -> Dict:
         """
         Retreina o modelo com novos dados.
         Se nao existe modelo anterior, cria do zero (primeiro treinamento).
         Usa TODOS os dados do buffer + dataset original (se existir).
+
+        Args:
+            force_save: Se True (ex.: botao "Forcar Retreino" no dashboard), salva o novo
+                        modelo mesmo quando o F1 na validacao nao melhora (substitui o atual).
 
         Returns:
             Dict com resultados do retreino
@@ -457,7 +461,9 @@ class OnlineLearningManager:
                         improvement = new_f1 - current_f1
                         print(f"[OL] Modelo atual F1: {current_f1:.3f} | Novo F1: {new_f1:.3f} | Melhoria: {improvement:+.3f}")
 
-                        should_save = improvement >= CONFIG["min_improvement"]
+                        should_save = improvement >= CONFIG["min_improvement"] or force_save
+                        if force_save and improvement < 0:
+                            print("[OL] Forcar Retreino: salvando novo modelo mesmo sem melhoria (force_save=True)")
                     except Exception as e:
                         print(f"[OL] Erro ao comparar com modelo atual: {e}. Salvando novo modelo.")
                         should_save = True
@@ -686,9 +692,9 @@ def add_trade_result(signal: Dict, result: str, return_pct: float = 0.0):
     online_learning_manager.add_signal_result(signal, result, return_pct)
 
 
-def manual_retrain():
-    """Forca retreino manual"""
-    return online_learning_manager.retrain()
+def manual_retrain(force_save: bool = True):
+    """Forca retreino manual. Com force_save=True, substitui o modelo mesmo se F1 na validacao nao melhorar."""
+    return online_learning_manager.retrain(force_save=force_save)
 
 
 def seed_from_evaluated_signals(force_retrain: bool = True, max_signals: int = 0) -> Dict:
