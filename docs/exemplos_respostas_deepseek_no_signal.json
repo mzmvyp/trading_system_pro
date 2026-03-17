@@ -1,0 +1,30 @@
+{
+  "validacao": "Extraído dos ficheiros no Docker (DOGEUSDT_220443, AVAXUSDT_220501). O JSON em response_received.content é o que o DeepSeek devolveu. O sistema faz parse desse JSON e mostra no log — Conf=7 vem daqui.",
+  "exemplo_1_dogeusdt_220443": {
+    "source_file": "deepseek_logs/2026/03/15/DOGEUSDT_20260315_220443.json",
+    "json_resposta_deepseek": {
+      "signal": "NO_SIGNAL",
+      "operation_type": "DAY_TRADE",
+      "entry_price": 0,
+      "stop_loss": 0,
+      "take_profit_1": 0,
+      "take_profit_2": 0,
+      "confidence": 7,
+      "reasoning": "Regras confirmadas: Tendência 4h/1d neutral (bullish+neutral), RSI 52.9 (zona neutra), Confluência 3/5 timeframes bullish, EMA alignment mixed (preço acima EMAs mas não alinhadas), Volume bullish (OBV). Conflitos: MACD bearish crossover vs momentum bullish, Bias geral 2/10 (neutral), ADX 19 <20 (sem tendência), Distância ao suporte 3.89% >2%, Confluência fraca (TF=3 no limite mínimo). Regras insuficientes para BUY/SELL: apenas 2-3 regras claramente alinhadas."
+    }
+  },
+  "exemplo_2_avaxusdt_220501": {
+    "source_file": "deepseek_logs/2026/03/15/AVAXUSDT_20260315_220501.json",
+    "json_resposta_deepseek": {
+      "signal": "NO_SIGNAL",
+      "operation_type": "DAY_TRADE",
+      "entry_price": 0,
+      "stop_loss": 0,
+      "take_profit_1": 0,
+      "take_profit_2": 0,
+      "confidence": 7,
+      "reasoning": "Regras confirmadas: 1, 4, 5, 6, 7. Conflitos: REGRA 2 VIOLADA - RSI 60.6 está na zona 'approaching_overbought' e acima do limite de 55 para compra. REGRA 3 AMBÍGUA - MACD bullish mas preço está na resistência ($9.84, distância -0.42%). Não atende critério mínimo de 5 regras para sinal claro. Confluência bullish forte mas risco alto por RSI elevado e preço na resistência."
+    }
+  },
+  "conclusao": "O DeepSeek está a devolver literalmente signal=NO_SIGNAL e confidence=7 no mesmo JSON. O nosso código só faz parse (structured.get('signal'), structured.get('confidence')) e mostra no log. Quem escolhe executar ou não somos nós (min_confidence, validadores); mas se o modelo manda NO_SIGNAL não há BUY/SELL para executar. O prompt foi reforçado: NUNCA devolver NO_SIGNAL com confidence >= 6; nesse caso devolver BUY ou SELL."
+}

@@ -225,7 +225,7 @@ def main():
 
             st.caption(f"Retreino automatico ao atingir {threshold} amostras no buffer. "
                        f"Usa TODOS os sinais disponiveis (sem limite). "
-                       f"Auto-retreino tambem roda a cada 12h no monitor mode.")
+                       f"Auto-retreino tambem roda a cada 12h no monitor mode (sklearn + Bi-LSTM).")
 
             # Aviso: buffer cheio mas modelo ainda nao treinado (ex.: primeiro uso ou retreino falhou)
             if len(buffer) >= 50 and (not model_info or not model_info.get("best_model")):

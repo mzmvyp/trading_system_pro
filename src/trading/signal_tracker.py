@@ -353,10 +353,15 @@ def _append_model_votes_log(signal: Dict, evaluation: Dict) -> None:
         logger.warning(f"Erro ao registrar voto no log: {e}")
 
 
-def evaluate_all_signals(signals_dir: str = "signals", cache_file: str = "signals/evaluations_cache.json") -> List[Dict]:
+def evaluate_all_signals(
+    signals_dir: str = "signals",
+    cache_file: str = "signals/evaluations_cache.json",
+    max_to_evaluate: int = 0,
+) -> List[Dict]:
     """
     Avalia todos os sinais e cacheia resultados.
     Sinais já finalizados (SL_HIT, TP1_HIT, TP2_HIT, EXPIRED) não são re-avaliados.
+    max_to_evaluate: se > 0, limita quantos sinais re-avaliar (resto usa só cache); evita timeout no dashboard.
     """
     signals = load_all_signals(signals_dir)
 
@@ -374,6 +379,7 @@ def evaluate_all_signals(signals_dir: str = "signals", cache_file: str = "signal
 
     results = []
     updated = False
+    evaluated_count = 0
 
     for sig in signals:
         sig_type = sig.get("signal", "")
@@ -390,11 +396,16 @@ def evaluate_all_signals(signals_dir: str = "signals", cache_file: str = "signal
                 results.append(cached_result)
                 continue
 
+        # Limite para não travar (ex.: "Alimentar com Sinais" no dashboard)
+        if max_to_evaluate > 0 and evaluated_count >= max_to_evaluate:
+            continue
+
         # Avaliar contra dados reais
         evaluation = evaluate_signal(sig)
         results.append(evaluation)
         cache[key] = evaluation
         updated = True
+        evaluated_count += 1
         if evaluation.get("outcome") in ("SL_HIT", "TP1_HIT", "TP2_HIT", "EXPIRED"):
             _append_model_votes_log(sig, evaluation)
 

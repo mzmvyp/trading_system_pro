@@ -615,6 +615,9 @@ Responda APENAS com JSON:
                         deepseek_result.get("raw_response", ""),
                         deepseek_result.get("analysis_data", {})
                     )
+                    # DeepSeek direto é apenas mais uma fonte de sinal.
+                    # A decisão final de abrir/fechar posição é sempre feita
+                    # pelo nosso sistema de confluência + ML/LSTM/risk.
                     self._save_signal(deepseek_signal)
 
                     if deepseek_signal.get("signal") in ["BUY", "SELL"]:
@@ -743,8 +746,9 @@ Responda APENAS com JSON:
             if _reasoning:
                 logger.info(f"[AGNO] Reasoning: {_reasoning[:200]}")
 
-            # DeepSeek SEMPRE deve devolver BUY ou SELL. Se devolveu NO_SIGNAL (modelo antigo),
-            # tratar como confiança 0 e o sistema não executará.
+            # DeepSeek SEMPRE deve devolver BUY ou SELL com confiança 1-10.
+            # Quem decide abrir ou não é o nosso sistema (confluência + ML/LSTM/risk).
+            # Se devolveu NO_SIGNAL (modelo antigo/fallback), tratar como confiança 0.
             if _sig == "NO_SIGNAL":
                 logger.info(f"[AGNO] DeepSeek devolveu NO_SIGNAL - sistema não executará (confiança insuficiente)")
                 agno_signal["confidence"] = 0
@@ -819,17 +823,12 @@ Responda APENAS com JSON:
                     f"| thresholds: {confluence['thresholds_source']}"
                 )
 
-                # Regra: confiança > 5 = DeepSeek aceitou o sinal → vai sempre aos próximos validadores (ML, risco).
-                # Confluência só pode bloquear quando confiança <= 5.
-                if llm_confidence > 5:
-                    logger.info(
-                        f"[CONFLUENCE] {llm_signal_dir} {symbol} confiança LLM={llm_confidence}>5: "
-                        f"aceite DeepSeek, segue para ML/risco (confluência informativa: score={combined_score:.1%})"
-                    )
-                elif total_for < MIN_VOTES_FOR or combined_score < MIN_COMBINED_SCORE:
+                # A confluência técnica + LSTM pode bloquear o sinal
+                # independentemente da confiança que o DeepSeek atribuiu.
+                if total_for < MIN_VOTES_FOR or combined_score < MIN_COMBINED_SCORE:
                     details_str = " | ".join(confluence["details"])
                     motivo_confl = (
-                        f"confiança LLM={llm_confidence} (<=5) e confluência insuficiente: "
+                        f"confluência insuficiente: "
                         f"score={combined_score:.1%} (mín {MIN_COMBINED_SCORE:.0%}), "
                         f"votos={total_for:.0f} (mín {MIN_VOTES_FOR}). "
                         f"Votos: [{details_str}]"
@@ -1180,12 +1179,21 @@ Responda APENAS com JSON:
                         "reasoning": structured.get("reasoning", ""),
                         "operation_type": structured.get("operation_type", ""),
                     })
-                    # Validar se tem entrada para BUY/SELL
-                    if signal["signal"] in ["BUY", "SELL"] and not signal.get("entry_price"):
-                        logger.warning("[JSON] Sinal BUY/SELL sem entry_price, usando fallback regex")
-                        # Continuar para extração regex
-                    else:
+                    # Normalizar campos numéricos: tratar 0 ou negativos como ausentes
+                    if signal["signal"] in ["BUY", "SELL"]:
+                        if not signal.get("entry_price") or signal.get("entry_price", 0) <= 0:
+                            logger.warning("[JSON] Sinal BUY/SELL sem entry_price válido, usando fallbacks")
+                            signal["entry_price"] = None
+                        if not signal.get("stop_loss") or signal.get("stop_loss", 0) <= 0:
+                            signal["stop_loss"] = None
+                        if not signal.get("take_profit_1") or signal.get("take_profit_1", 0) <= 0:
+                            signal["take_profit_1"] = None
+                        if not signal.get("take_profit_2") or signal.get("take_profit_2", 0) <= 0:
+                            signal["take_profit_2"] = None
+                    # Para NO_SIGNAL, retornamos direto (não deve ter preços)
+                    if signal["signal"] == "NO_SIGNAL":
                         return signal
+                    # Para BUY/SELL, continuamos no fluxo abaixo para aplicar regex/fallbacks se necessário
             except json.JSONDecodeError as e:
                 logger.warning(f"[JSON] Erro ao decodificar JSON: {e}, usando fallback regex")
 
