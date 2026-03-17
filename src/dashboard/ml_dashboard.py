@@ -224,7 +224,8 @@ def main():
                 st.warning(f"Buffer cheio! {buffer_size} amostras prontas para retreino.")
 
             st.caption(f"Retreino automatico ao atingir {threshold} amostras no buffer. "
-                       f"Usa TODOS os dados do buffer + dataset original.")
+                       f"Usa TODOS os sinais disponiveis (sem limite). "
+                       f"Auto-retreino tambem roda a cada 12h no monitor mode.")
 
             # Aviso: buffer cheio mas modelo ainda nao treinado (ex.: primeiro uso ou retreino falhou)
             if len(buffer) >= 50 and (not model_info or not model_info.get("best_model")):
@@ -256,10 +257,12 @@ def main():
             # Info sobre retreino
             st.markdown("---")
             st.caption("**Como funciona o retreino:**")
-            st.caption("• Combina dataset original + buffer")
+            st.caption("• Usa TODOS os sinais avaliados (sem limite)")
+            st.caption("• Prioriza dados reais sobre dados sinteticos")
             st.caption("• Treina ensemble (LogReg, RF, GB)")
             st.caption("• Salva apenas se F1 melhorar")
             st.caption("• Buffer limpo apos retreino")
+            st.caption("• Treino automatico a cada 12h (ML_AUTO_TRAIN_HOURS)")
 
         # ================= MAIN CONTENT =================
         if not has_model:

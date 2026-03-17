@@ -553,24 +553,36 @@ def enrich_signal_with_klines(signal: Dict) -> Optional[Dict]:
 def build_dataset_from_bootstrap() -> Optional[pd.DataFrame]:
     """Gera dataset de treinamento a partir de dados historicos da Binance."""
     print("\n[BOOTSTRAP] Gerando dataset a partir de dados historicos...")
-    print("[BOOTSTRAP] Buscando klines de 15m dos ultimos ~15 dias para cada simbolo...")
+    print("[BOOTSTRAP] Buscando klines de 15m (max dados disponiveis) para cada simbolo...")
 
     all_signals = []
 
+    # Buscar multiplos intervalos para mais dados e diversidade
+    intervals_and_limits = [
+        ("15m", 1500),  # ~15 dias de 15m
+        ("1h", 1500),   # ~62 dias de 1h
+        ("4h", 1000),   # ~166 dias de 4h
+    ]
+
     for symbol in BOOTSTRAP_SYMBOLS:
-        print(f"  [{symbol}] Buscando klines...", end='', flush=True)
-        df = fetch_klines(symbol, interval="15m", limit=1500)
+        for interval, limit in intervals_and_limits:
+            print(f"  [{symbol} {interval}] Buscando klines...", end='', flush=True)
+            df = fetch_klines(symbol, interval=interval, limit=limit)
 
-        if df is None or len(df) < 200:
-            print(" ERRO (dados insuficientes)")
-            continue
+            if df is None or len(df) < 200:
+                print(" ERRO (dados insuficientes)")
+                continue
 
-        signals = generate_bootstrap_signals(symbol, df, lookforward=48)
-        all_signals.extend(signals)
-        wins = sum(1 for s in signals if s['target'] == 1)
-        print(f" {len(signals)} sinais ({wins} win, {len(signals)-wins} loss)")
+            # Ajustar lookforward baseado no intervalo
+            lookforward_map = {"15m": 48, "1h": 24, "4h": 12}
+            lf = lookforward_map.get(interval, 48)
 
-        time.sleep(0.3)
+            signals = generate_bootstrap_signals(symbol, df, lookforward=lf)
+            all_signals.extend(signals)
+            wins = sum(1 for s in signals if s['target'] == 1)
+            print(f" {len(signals)} sinais ({wins} win, {len(signals)-wins} loss)")
+
+            time.sleep(0.3)
 
     if not all_signals:
         print("[ERRO] Nenhum sinal gerado no bootstrap")
