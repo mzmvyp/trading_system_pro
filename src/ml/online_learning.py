@@ -24,7 +24,7 @@ import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score, train_test_split
 from sklearn.utils.class_weight import compute_sample_weight
 
 # Sklearn
@@ -35,7 +35,7 @@ CONFIG = {
     "model_dir": "ml_models",
     "buffer_file": "ml_models/online_learning_buffer.json",
     "performance_file": "ml_models/model_performance.json",
-    "retrain_threshold": 50,  # Retreinar quando tiver N novos exemplos
+    "retrain_threshold": 20,  # Retreinar quando tiver N novos exemplos (reduzido de 50)
     "min_improvement": 0.0,   # Melhoria minima necessaria para salvar novo modelo
     "validation_split": 0.2,  # Split para validacao do retreino
 }
@@ -172,8 +172,16 @@ class OnlineLearningManager:
             return_pct: Retorno percentual
             _batch_mode: Se True, nao salva/retreina a cada item (para seed em lote)
         """
-        # CORRIGIDO: Extrair TODAS as features necessárias para o modelo
-        # Sincronizado com simple_signal_validator.py
+        # Filtrar: só aceitar resultados definidos (TP1, TP2, SL)
+        # Excluir NO_SIGNAL, TIMEOUT e resultados ambíguos
+        if result not in ('TP1', 'TP2', 'SL'):
+            return
+
+        # Excluir sinais NO_SIGNAL (não tem base para aprender)
+        if signal.get('signal') == 'NO_SIGNAL':
+            return
+
+        # Extrair TODAS as features necessárias para o modelo
         indicators = signal.get('indicators', {})
 
         # Calcular campos derivados
@@ -354,17 +362,17 @@ class OnlineLearningManager:
                 X_combined = np.vstack([X_combined, synthetic])
                 y_combined = np.hstack([y_combined, [minority_class]])
 
-            # Split estratificado para manter proporção de classes na validação
+            # Split TEMPORAL: treino = dados mais antigos, validação = dados mais recentes
+            # Evita data leakage temporal (modelo não vê o futuro no treino)
             unique, counts = np.unique(y_combined, return_counts=True)
             class_dist = dict(zip(unique.astype(int), counts))
             print(f"[OL] Dados combinados: {len(y_combined)} amostras | Classe 0 (SKIP): {class_dist.get(0, 0)} | Classe 1 (EXECUTE): {class_dist.get(1, 0)}")
 
-            X_train, X_val, y_train, y_val = train_test_split(
-                X_combined, y_combined,
-                test_size=CONFIG["validation_split"],
-                stratify=y_combined,
-                random_state=42
-            )
+            split_idx = int(len(X_combined) * (1 - CONFIG["validation_split"]))
+            split_idx = max(split_idx, 1)
+            X_train, X_val = X_combined[:split_idx], X_combined[split_idx:]
+            y_train, y_val = y_combined[:split_idx], y_combined[split_idx:]
+            print(f"[OL] Split temporal: {len(X_train)} treino, {len(X_val)} validação")
 
             # Treinar ensemble de modelos
             scaler = StandardScaler()
@@ -392,6 +400,10 @@ class OnlineLearningManager:
             # Compute sample weights for GradientBoosting (doesn't support class_weight)
             sample_weights = compute_sample_weight('balanced', y_train)
 
+            # Walk-forward CV para avaliar estabilidade
+            n_cv_splits = min(3, max(2, len(X_train) // 20))
+            tscv = TimeSeriesSplit(n_splits=n_cv_splits)
+
             for name, model in models_to_train.items():
                 try:
                     if name == "GradientBoosting":
@@ -403,7 +415,16 @@ class OnlineLearningManager:
                     y_pred = model.predict(X_val_scaled)
                     acc = accuracy_score(y_val, y_pred)
                     f1 = f1_score(y_val, y_pred, zero_division=0)
-                    print(f"[OL]   {name}: Accuracy={acc:.1%}, F1={f1:.3f}")
+
+                    # Walk-forward CV score
+                    try:
+                        cv_scores = cross_val_score(model, X_train_scaled, y_train,
+                                                    cv=tscv, scoring="f1")
+                        cv_mean = float(np.mean(cv_scores))
+                        print(f"[OL]   {name}: Accuracy={acc:.1%}, F1={f1:.3f}, CV_F1={cv_mean:.3f}")
+                    except Exception:
+                        cv_mean = f1
+                        print(f"[OL]   {name}: Accuracy={acc:.1%}, F1={f1:.3f}")
 
                     if f1 > best_f1:
                         best_f1 = f1
@@ -526,13 +547,18 @@ class OnlineLearningManager:
             json.dump(info, f, indent=2, default=str)
 
     def _save_combined_dataset(self, X, y, feature_columns):
-        """Salva dataset combinado para retreinos futuros"""
+        """Salva dataset combinado para retreinos futuros e drift detection"""
         try:
             os.makedirs("ml_dataset", exist_ok=True)
             df = pd.DataFrame(X, columns=feature_columns)
             df['target'] = y
             df.to_csv("ml_dataset/dataset_train_latest.csv", index=False)
-            print(f"[OL] Dataset atualizado: {len(df)} amostras salvas em ml_dataset/dataset_train_latest.csv")
+
+            # Salvar em npz para drift detection (referência rápida)
+            npz_path = os.path.join(CONFIG["model_dir"], "combined_dataset.npz")
+            np.savez(npz_path, X=X, y=y)
+
+            print(f"[OL] Dataset atualizado: {len(df)} amostras salvas")
         except Exception as e:
             print(f"[OL] Erro ao salvar dataset: {e}")
 
@@ -561,6 +587,91 @@ class OnlineLearningManager:
             "buffer_size": len(self.buffer),
             "next_retrain_at": CONFIG["retrain_threshold"] - len(self.buffer)
         }
+
+    def detect_drift(self, reference_data: np.ndarray = None) -> Dict:
+        """
+        Detecta drift nas features usando PSI (Population Stability Index).
+        Compara distribuição dos dados do buffer com os dados de treino.
+        PSI > 0.2 = drift significativo, PSI > 0.1 = drift moderado.
+        """
+        if len(self.buffer) < 10:
+            return {"drift_detected": False, "reason": "Buffer muito pequeno"}
+
+        feature_cols = [
+            'rsi', 'macd_histogram', 'adx', 'atr', 'bb_position',
+            'cvd', 'orderbook_imbalance', 'bullish_tf_count', 'bearish_tf_count',
+            'confidence', 'trend_encoded', 'sentiment_encoded', 'signal_encoded',
+            'risk_distance_pct', 'reward_distance_pct', 'risk_reward_ratio'
+        ]
+
+        # Dados do buffer recente
+        buffer_data = []
+        for item in self.buffer:
+            row = [item.get(col, 0) for col in feature_cols]
+            buffer_data.append(row)
+        buffer_array = np.array(buffer_data, dtype=float)
+        buffer_array = np.nan_to_num(buffer_array, nan=0.0)
+
+        # Se não tem referência, carregar do dataset salvo
+        if reference_data is None:
+            dataset_path = os.path.join(CONFIG["model_dir"], "combined_dataset.npz")
+            if not os.path.exists(dataset_path):
+                return {"drift_detected": False, "reason": "Sem dataset de referência"}
+            try:
+                loaded = np.load(dataset_path)
+                reference_data = loaded['X']
+            except Exception:
+                return {"drift_detected": False, "reason": "Erro ao carregar referência"}
+
+        # Calcular PSI por feature
+        drift_results = {}
+        total_psi = 0
+        drifted_features = []
+
+        for i, col in enumerate(feature_cols):
+            if i >= reference_data.shape[1] or i >= buffer_array.shape[1]:
+                continue
+            psi = self._calculate_psi(reference_data[:, i], buffer_array[:, i])
+            drift_results[col] = round(psi, 4)
+            total_psi += psi
+            if psi > 0.2:
+                drifted_features.append(f"{col} (PSI={psi:.3f})")
+
+        avg_psi = total_psi / max(len(drift_results), 1)
+        drift_detected = avg_psi > 0.1 or len(drifted_features) >= 3
+
+        if drift_detected:
+            print(f"[DRIFT] Drift detectado! PSI médio={avg_psi:.3f}, features com drift: {drifted_features}")
+        else:
+            print(f"[DRIFT] Sem drift significativo. PSI médio={avg_psi:.3f}")
+
+        return {
+            "drift_detected": drift_detected,
+            "avg_psi": round(avg_psi, 4),
+            "feature_psi": drift_results,
+            "drifted_features": drifted_features,
+            "recommendation": "Retreinar modelo" if drift_detected else "Modelo OK"
+        }
+
+    @staticmethod
+    def _calculate_psi(reference: np.ndarray, current: np.ndarray, n_bins: int = 10) -> float:
+        """Calcula PSI (Population Stability Index) entre duas distribuições."""
+        eps = 1e-6
+
+        # Usar mesmos bins para ambos
+        combined = np.concatenate([reference, current])
+        bins = np.histogram_bin_edges(combined, bins=n_bins)
+
+        ref_hist, _ = np.histogram(reference, bins=bins)
+        cur_hist, _ = np.histogram(current, bins=bins)
+
+        # Normalizar para proporções
+        ref_pct = ref_hist / max(len(reference), 1) + eps
+        cur_pct = cur_hist / max(len(current), 1) + eps
+
+        # PSI = sum((cur - ref) * ln(cur/ref))
+        psi = np.sum((cur_pct - ref_pct) * np.log(cur_pct / ref_pct))
+        return max(0, psi)
 
 
 # Instancia global para uso no bot

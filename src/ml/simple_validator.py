@@ -330,19 +330,19 @@ class SimpleSignalValidator:
         # Preparar features
         X = np.array([[features.get(col, 0) for col in self.feature_columns]])
 
-        # Tratar NaN/Inf nos inputs
+        # Tratar NaN/Inf nos inputs (substituir por 0 = valor neutro após scaling)
         X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Aplicar scaler (pode retornar NaN se scaler mal treinado)
+        # Aplicar scaler e clipar ao range de treino (±5 desvios padrão)
+        # NUNCA usar features brutas — modelo foi treinado com dados escalados
         try:
             X_scaled = self.scaler.transform(X)
-            # Tratar NaN/Inf no output do scaler (scaler quebrado ou dados extremos)
-            if np.any(np.isnan(X_scaled)) or np.any(np.isinf(X_scaled)):
-                logger.warning("[ML] Scaler retornou NaN/Inf - usando features sem escala")
-                X_scaled = X  # Fallback: usar features brutas
+            # Clipar a ±5 std em vez de usar fallback com dados brutos
+            X_scaled = np.clip(X_scaled, -5.0, 5.0)
+            X_scaled = np.nan_to_num(X_scaled, nan=0.0, posinf=0.0, neginf=0.0)
         except Exception as e:
-            logger.warning(f"[ML] Erro no scaler.transform: {e} - usando features sem escala")
-            X_scaled = X
+            logger.warning(f"[ML] Erro no scaler.transform: {e} - usando zeros")
+            X_scaled = np.zeros_like(X)
 
         # Predicao
         pred = model.predict(X_scaled)[0]

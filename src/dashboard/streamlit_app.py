@@ -1104,7 +1104,7 @@ with tab4:
             # Métricas por modelo (ML / LSTM acertaram ou erraram?)
             model_metrics = get_model_validator_metrics(evals)
             st.subheader("🎯 Validador de Modelos (quem acertou/errou)")
-            st.caption("Para cada sinal finalizado, registramos se o ML e o LSTM previram certo. Use para decidir se vale manter ou tirar um modelo.")
+            st.caption("Passa TODOS os sinais finalizados pelo modelo ML atual e compara com o resultado real. LSTM usa a probabilidade armazenada no sinal.")
             mc1, mc2, mc3, mc4 = st.columns(4)
             with mc1:
                 ml_acc = model_metrics.get("ml_accuracy")
@@ -1150,11 +1150,7 @@ with tab4:
                         {"Direção": "Short (SELL)", "Total": by_dir.get("SELL", {}).get("total", 0), "Acertos": by_dir.get("SELL", {}).get("wins", 0), "Acertividade %": f"{by_dir.get('SELL', {}).get('accuracy_pct', 0):.1f}"},
                     ]
                     st.dataframe(pd.DataFrame(dir_rows), use_container_width=True, hide_index=True)
-                # ML e LSTM (resumo)
-                ml_d = sys_report.get("ml", {})
-                lstm_d = sys_report.get("lstm", {})
-                st.markdown("**ML e LSTM (acertaram a previsão de sucesso/falha?)**")
-                st.write(f"ML: {ml_d.get('correct', 0)} / {ml_d.get('total', 0)} acertos ({(ml_d.get('accuracy_pct') or 0):.1f}%)  |  LSTM: {lstm_d.get('correct', 0)} / {lstm_d.get('total', 0)} acertos ({(lstm_d.get('accuracy_pct') or 0):.1f}%)")
+                # ML e LSTM accuracy já exibida na seção "Validador de Modelos" acima
             st.markdown("---")
 
             # KPIs
