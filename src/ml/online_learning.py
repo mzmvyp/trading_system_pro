@@ -24,6 +24,8 @@ import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score
+from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_sample_weight
 
 # Sklearn
 from sklearn.preprocessing import StandardScaler
@@ -352,13 +354,17 @@ class OnlineLearningManager:
                 X_combined = np.vstack([X_combined, synthetic])
                 y_combined = np.hstack([y_combined, [minority_class]])
 
-            # Split para validacao
-            n = len(X_combined)
-            split_idx = int(n * (1 - CONFIG["validation_split"]))
-            split_idx = max(split_idx, 1)  # Garantir pelo menos 1 amostra no treino
+            # Split estratificado para manter proporção de classes na validação
+            unique, counts = np.unique(y_combined, return_counts=True)
+            class_dist = dict(zip(unique.astype(int), counts))
+            print(f"[OL] Dados combinados: {len(y_combined)} amostras | Classe 0 (SKIP): {class_dist.get(0, 0)} | Classe 1 (EXECUTE): {class_dist.get(1, 0)}")
 
-            X_train, X_val = X_combined[:split_idx], X_combined[split_idx:]
-            y_train, y_val = y_combined[:split_idx], y_combined[split_idx:]
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_combined, y_combined,
+                test_size=CONFIG["validation_split"],
+                stratify=y_combined,
+                random_state=42
+            )
 
             # Treinar ensemble de modelos
             scaler = StandardScaler()
@@ -383,9 +389,15 @@ class OnlineLearningManager:
             best_accuracy = 0
             trained_models = {}
 
+            # Compute sample weights for GradientBoosting (doesn't support class_weight)
+            sample_weights = compute_sample_weight('balanced', y_train)
+
             for name, model in models_to_train.items():
                 try:
-                    model.fit(X_train_scaled, y_train)
+                    if name == "GradientBoosting":
+                        model.fit(X_train_scaled, y_train, sample_weight=sample_weights)
+                    else:
+                        model.fit(X_train_scaled, y_train)
                     trained_models[name] = model
 
                     y_pred = model.predict(X_val_scaled)

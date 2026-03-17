@@ -163,13 +163,13 @@ async def process_agent_response(response: Any, symbol: str) -> Dict[str, Any]:
                     "confidence": structured.get("confidence", 5)
                 })
                 if signal["signal"] in ["BUY", "SELL"] and not signal.get("entry_price"):
-                    logger.warning("[JSON] Sinal BUY/SELL sem entry_price, usando fallback regex")
-                else:
-                    return signal
+                    logger.info("[JSON] Sinal BUY/SELL sem entry_price, extraindo preços via regex")
+                    _extract_trade_prices(signal, response_text, symbol)
+                return signal
         except json.JSONDecodeError as e:
             logger.warning(f"[JSON] Erro ao decodificar JSON: {e}, usando fallback regex")
 
-    # Regex fallback for signal type
+    # Regex fallback for signal type (only when JSON extraction failed)
     signal["signal"] = "NO_SIGNAL"
 
     final_signal_patterns = [
@@ -199,12 +199,16 @@ async def process_agent_response(response: Any, symbol: str) -> Dict[str, Any]:
         last_sell_pos = sell_matches[-1].start() if sell_matches else -1
         if last_buy_pos > last_sell_pos and last_buy_pos >= 0:
             signal["signal"] = "BUY"
+            logger.warning(f"[SINAL FALLBACK] Usando BUY (última ocorrência na posição {last_buy_pos})")
         elif last_sell_pos > last_buy_pos and last_sell_pos >= 0:
             signal["signal"] = "SELL"
+            logger.warning(f"[SINAL FALLBACK] Usando SELL (última ocorrência na posição {last_sell_pos})")
         elif last_buy_pos >= 0:
             signal["signal"] = "BUY"
+            logger.warning(f"[SINAL FALLBACK] Usando BUY (última ocorrência na posição {last_buy_pos})")
         elif last_sell_pos >= 0:
             signal["signal"] = "SELL"
+            logger.warning(f"[SINAL FALLBACK] Usando SELL (última ocorrência na posição {last_sell_pos})")
 
     if signal["signal"] == "NO_SIGNAL":
         signal["entry_price"] = None

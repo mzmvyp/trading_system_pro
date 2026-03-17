@@ -46,6 +46,9 @@ class BinanceFuturesExecutor:
     PRODUCTION_URL = "https://fapi.binance.com"
     TESTNET_URL = "https://testnet.binancefuture.com"
 
+    # Class-level timestamp offset (persists across instances)
+    _server_time_offset = None  # offset = server_time - local_time
+
     def __init__(self):
         """
         Inicializa o executor de Binance Futures.
@@ -130,9 +133,12 @@ class BinanceFuturesExecutor:
         }
 
         if signed:
-            # Ajustar timestamp para evitar erro -1021 (timestamp ahead of server)
-            # Subtrair 1000ms para garantir que não fique à frente do servidor
-            request_params["timestamp"] = int(time.time() * 1000) - 1000
+            # Usar offset persistido se disponível, senão subtrair 1000ms como fallback
+            local_ms = int(time.time() * 1000)
+            if BinanceFuturesExecutor._server_time_offset is not None:
+                request_params["timestamp"] = local_ms + BinanceFuturesExecutor._server_time_offset
+            else:
+                request_params["timestamp"] = local_ms - 1000
             request_params["recvWindow"] = 10000  # 10s window para evitar erro -1021
             request_params["signature"] = self._generate_signature(request_params)
 
@@ -158,12 +164,15 @@ class BinanceFuturesExecutor:
                     # Erro -1021: Timestamp ahead of server - fazer retry com server time sync
                     if error_code == -1021 and signed and retry_timestamp:
                         logger.warning("[BINANCE API] Erro -1021 detectado. Sincronizando com server time...")
-                        # Buscar server time da Binance para calcular offset correto
+                        # Buscar server time da Binance para calcular offset e persistir
                         try:
                             async with aiohttp.ClientSession() as time_session:
                                 async with time_session.get(f"{self.BASE_URL}/fapi/v1/time", timeout=aiohttp.ClientTimeout(total=5)) as time_resp:
                                     time_data = await time_resp.json()
                                     server_time = time_data.get("serverTime", int(time.time() * 1000) - 3000)
+                                    # Persist offset for future requests
+                                    BinanceFuturesExecutor._server_time_offset = server_time - int(time.time() * 1000)
+                                    logger.info(f"[BINANCE API] Offset persistido: {BinanceFuturesExecutor._server_time_offset}ms")
                                     request_params["timestamp"] = server_time
                         except Exception:
                             # Fallback: subtrair 3000ms se nao conseguir buscar server time

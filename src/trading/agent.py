@@ -1193,60 +1193,59 @@ Responda APENAS com JSON:
                     # Para NO_SIGNAL, retornamos direto (não deve ter preços)
                     if signal["signal"] == "NO_SIGNAL":
                         return signal
-                    # Para BUY/SELL, continuamos no fluxo abaixo para aplicar regex/fallbacks se necessário
+                    # Para BUY/SELL com JSON válido, pular para validação de preços
+                    # (não resetar sinal nem rodar regex fallback desnecessário)
+                    json_extracted = True
             except json.JSONDecodeError as e:
                 logger.warning(f"[JSON] Erro ao decodificar JSON: {e}, usando fallback regex")
+                json_extracted = False
+        else:
+            json_extracted = False
 
-        # CORRIGIDO: Procurar pelo sinal FINAL (não o primeiro encontrado)
-        # Priorizar "SINAL FINAL:" ou "SINAL:" que aparecem no final da análise
-        signal["signal"] = "NO_SIGNAL"
+        # Regex fallback: só roda quando JSON NÃO extraiu o sinal
+        if not json_extracted:
+            signal["signal"] = "NO_SIGNAL"
 
-        # CRÍTICO: Procurar primeiro por "SINAL FINAL" que é o mais importante
-        # O DeepSeek sempre envia "SINAL FINAL: BUY" ou "SINAL FINAL: SELL"
-        final_signal_patterns = [
-            r"SINAL\s+FINAL[:\s]+\*?\*?(BUY|SELL)\*?\*?",  # Prioridade máxima: "SINAL FINAL: **SELL**"
-            r"SINAL\s+FINAL[:\s]+(BUY|SELL)",              # "SINAL FINAL: SELL"
-            r"###\s*\*\*SINAL\s+FINAL[:\s]+\*\*(BUY|SELL)", # "### **SINAL FINAL:** SELL"
-            r"##\s+SINAL\s+FINAL[:\s]+(BUY|SELL)",          # "## SINAL FINAL: SELL"
-            r"RESUMO[^:]*Sinal\s+(BUY|SELL)",               # "RESUMO: Sinal SELL"
-            r"Conclusão[^:]*:\s*(BUY|SELL)",                 # "Conclusão: SELL"
-            r"Recomendação[^:]*:\s*(BUY|SELL)"              # "Recomendação: SELL"
-        ]
+            # CRÍTICO: Procurar primeiro por "SINAL FINAL" que é o mais importante
+            final_signal_patterns = [
+                r"SINAL\s+FINAL[:\s]+\*?\*?(BUY|SELL)\*?\*?",
+                r"SINAL\s+FINAL[:\s]+(BUY|SELL)",
+                r"###\s*\*\*SINAL\s+FINAL[:\s]+\*\*(BUY|SELL)",
+                r"##\s+SINAL\s+FINAL[:\s]+(BUY|SELL)",
+                r"RESUMO[^:]*Sinal\s+(BUY|SELL)",
+                r"Conclusão[^:]*:\s*(BUY|SELL)",
+                r"Recomendação[^:]*:\s*(BUY|SELL)"
+            ]
 
-        # Procurar do final para o início (sinal mais recente)
-        for pattern in final_signal_patterns:
-            matches = list(re.finditer(pattern, response_text, re.IGNORECASE | re.MULTILINE))
-            if matches:
-                # Pegar o ÚLTIMO match (mais recente)
-                last_match = matches[-1]
-                signal_type = last_match.group(1).upper()
-                if signal_type in ["BUY", "SELL"]:
-                    signal["signal"] = signal_type
-                    logger.info(f"[SINAL EXTRAIDO] Encontrado '{signal_type}' via padrão: {pattern[:50]}")
-                    break
+            for pattern in final_signal_patterns:
+                matches = list(re.finditer(pattern, response_text, re.IGNORECASE | re.MULTILINE))
+                if matches:
+                    last_match = matches[-1]
+                    signal_type = last_match.group(1).upper()
+                    if signal_type in ["BUY", "SELL"]:
+                        signal["signal"] = signal_type
+                        logger.info(f"[SINAL EXTRAIDO] Encontrado '{signal_type}' via padrão: {pattern[:50]}")
+                        break
 
-        # Se não encontrou padrão específico, procurar por qualquer BUY/SELL
-        # mas APENAS se não encontrou "SINAL FINAL" antes
-        if signal["signal"] == "NO_SIGNAL":
-            # Procurar todas as ocorrências de BUY e SELL
-            buy_matches = list(re.finditer(r'\bBUY\b', response_text, re.IGNORECASE))
-            sell_matches = list(re.finditer(r'\bSELL\b', response_text, re.IGNORECASE))
+            # Se não encontrou padrão específico, procurar por qualquer BUY/SELL
+            if signal["signal"] == "NO_SIGNAL":
+                buy_matches = list(re.finditer(r'\bBUY\b', response_text, re.IGNORECASE))
+                sell_matches = list(re.finditer(r'\bSELL\b', response_text, re.IGNORECASE))
+                last_buy_pos = buy_matches[-1].start() if buy_matches else -1
+                last_sell_pos = sell_matches[-1].start() if sell_matches else -1
 
-            # Pegar a última ocorrência de cada
-            last_buy_pos = buy_matches[-1].start() if buy_matches else -1
-            last_sell_pos = sell_matches[-1].start() if sell_matches else -1
-
-            # Escolher o que aparece mais próximo do final
-            if last_buy_pos > last_sell_pos and last_buy_pos >= 0:
-                signal["signal"] = "BUY"
-                logger.warning(f"[SINAL FALLBACK] Usando BUY (última ocorrência na posição {last_buy_pos})")
-            elif last_sell_pos > last_buy_pos and last_sell_pos >= 0:
-                signal["signal"] = "SELL"
-                logger.warning(f"[SINAL FALLBACK] Usando SELL (última ocorrência na posição {last_sell_pos})")
-            elif last_buy_pos >= 0:
-                signal["signal"] = "BUY"
-            elif last_sell_pos >= 0:
-                signal["signal"] = "SELL"
+                if last_buy_pos > last_sell_pos and last_buy_pos >= 0:
+                    signal["signal"] = "BUY"
+                    logger.warning(f"[SINAL FALLBACK] Usando BUY (última ocorrência na posição {last_buy_pos})")
+                elif last_sell_pos > last_buy_pos and last_sell_pos >= 0:
+                    signal["signal"] = "SELL"
+                    logger.warning(f"[SINAL FALLBACK] Usando SELL (última ocorrência na posição {last_sell_pos})")
+                elif last_buy_pos >= 0:
+                    signal["signal"] = "BUY"
+                    logger.warning(f"[SINAL FALLBACK] Usando BUY (última ocorrência na posição {last_buy_pos})")
+                elif last_sell_pos >= 0:
+                    signal["signal"] = "SELL"
+                    logger.warning(f"[SINAL FALLBACK] Usando SELL (última ocorrência na posição {last_sell_pos})")
 
         # Para NO_SIGNAL, não deve ter entrada, stop ou targets
         if signal["signal"] == "NO_SIGNAL":
