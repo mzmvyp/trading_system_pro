@@ -17,6 +17,35 @@ from src.core.logger import get_logger
 # Setup logger
 logger = get_logger(__name__)
 
+# Notification service para alertas por email
+_notification_service = None
+
+def _get_notification_service():
+    """Retorna instância singleton do NotificationService."""
+    global _notification_service
+    if _notification_service is None:
+        try:
+            from src.core.config import settings
+            if not settings.email_notifications_enabled:
+                return None
+            from src.services.notification_service import NotificationService
+            _notification_service = NotificationService()
+            if not _notification_service.channels:
+                _notification_service = None
+        except Exception:
+            _notification_service = None
+    return _notification_service
+
+
+async def _notify_target_hit(symbol: str, target_type: str, price: float, entry_price: float, pnl_percent: float, signal_type: str = "BUY"):
+    """Envia notificação quando TP1/TP2/SL é atingido."""
+    try:
+        notify = _get_notification_service()
+        if notify:
+            await notify.send_target_hit(symbol, target_type, price, entry_price, pnl_percent, signal_type)
+    except Exception as e:
+        logger.debug(f"[NOTIFY] Erro ao enviar notificacao: {e}")
+
 # Online Learning - registra resultados para retreino do modelo
 try:
     from src.ml.online_learning import add_trade_result
@@ -531,10 +560,14 @@ class RealPaperTradingSystem:
                         sl = position["stop_loss"]
                         if signal_type == "BUY" and current_price <= sl:
                             logger.warning(f"[STOP LOSS] Stop Loss atingido para {clean_symbol} {source}: ${current_price:.2f} (SL: ${sl:.2f})")
+                            sl_pnl = ((current_price - entry_price) / entry_price) * 100
+                            await _notify_target_hit(clean_symbol, "STOP_LOSS", current_price, entry_price, sl_pnl, signal_type)
                             await self._close_position_auto(position_key, current_price, "STOP_LOSS")
                             continue
                         elif signal_type == "SELL" and current_price >= sl:
                             logger.warning(f"[STOP LOSS] Stop Loss atingido para {clean_symbol} {source}: ${current_price:.2f} (SL: ${sl:.2f})")
+                            sl_pnl = ((entry_price - current_price) / entry_price) * 100
+                            await _notify_target_hit(clean_symbol, "STOP_LOSS", current_price, entry_price, sl_pnl, signal_type)
                             await self._close_position_auto(position_key, current_price, "STOP_LOSS")
                             continue
 
@@ -544,10 +577,14 @@ class RealPaperTradingSystem:
                         if signal_type == "BUY" and current_price >= tp1:
                             # Verificar se o preço REAL atingiu o take profit
                             logger.warning(f"[TAKE PROFIT 1] Take Profit 1 atingido para {clean_symbol} {source}: ${current_price:.2f} (TP: ${tp1:.2f})")
+                            tp1_pnl = ((current_price - entry_price) / entry_price) * 100
+                            await _notify_target_hit(clean_symbol, "TAKE_PROFIT_1", current_price, entry_price, tp1_pnl, signal_type)
                             await self._close_position_partial(position_key, current_price, "TAKE_PROFIT_1", partial_percent=0.5)
                             continue
                         elif signal_type == "SELL" and current_price <= tp1:
                             logger.warning(f"[TAKE PROFIT 1] Take Profit 1 atingido para {clean_symbol} {source}: ${current_price:.2f} (TP: ${tp1:.2f})")
+                            tp1_pnl = ((entry_price - current_price) / entry_price) * 100
+                            await _notify_target_hit(clean_symbol, "TAKE_PROFIT_1", current_price, entry_price, tp1_pnl, signal_type)
                             await self._close_position_partial(position_key, current_price, "TAKE_PROFIT_1", partial_percent=0.5)
                             continue
 
@@ -556,10 +593,14 @@ class RealPaperTradingSystem:
                         tp2 = position["take_profit_2"]
                         if signal_type == "BUY" and current_price >= tp2:
                             logger.warning(f"[TAKE PROFIT 2] Take Profit 2 atingido para {clean_symbol} {source}: ${current_price:.2f} (TP: ${tp2:.2f}) - Fechando 50% restante")
+                            tp2_pnl = ((current_price - entry_price) / entry_price) * 100
+                            await _notify_target_hit(clean_symbol, "TAKE_PROFIT_2", current_price, entry_price, tp2_pnl, signal_type)
                             await self._close_position_auto(position_key, current_price, "TAKE_PROFIT_2")
                             continue
                         elif signal_type == "SELL" and current_price <= tp2:
                             logger.warning(f"[TAKE PROFIT 2] Take Profit 2 atingido para {clean_symbol} {source}: ${current_price:.2f} (TP: ${tp2:.2f}) - Fechando 50% restante")
+                            tp2_pnl = ((entry_price - current_price) / entry_price) * 100
+                            await _notify_target_hit(clean_symbol, "TAKE_PROFIT_2", current_price, entry_price, tp2_pnl, signal_type)
                             await self._close_position_auto(position_key, current_price, "TAKE_PROFIT_2")
                             continue
 

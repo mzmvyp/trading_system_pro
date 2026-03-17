@@ -207,6 +207,64 @@ async def main():
             except Exception as e:
                 logger.warning(f"[OPTIMIZER] Falha ao iniciar otimizador: {e} (continuando sem)")
 
+            # ============================================================
+            # Treino automático periódico: ML e LSTM
+            # Roda a cada N horas em thread daemon separada
+            # ============================================================
+            try:
+                _ml_train_hours = int(os.getenv("ML_AUTO_TRAIN_HOURS", "12"))
+                if _ml_train_hours > 0:
+                    import threading
+
+                    def _auto_train_ml_loop(interval_hours: int):
+                        """Thread daemon que treina ML/LSTM periodicamente."""
+                        import time as _time
+                        logger.info(f"[ML-AUTO] Treino automático iniciado. Ciclo: {interval_hours}h")
+                        while True:
+                            _time.sleep(interval_hours * 3600)
+                            try:
+                                logger.info("[ML-AUTO] Iniciando treino automático do ML...")
+
+                                # 1. Alimentar buffer com sinais avaliados
+                                from src.ml.online_learning import seed_from_evaluated_signals
+                                seed_result = seed_from_evaluated_signals(force_retrain=True)
+                                if seed_result.get("success"):
+                                    rt = seed_result.get("retrain_result", {})
+                                    if rt and rt.get("success"):
+                                        logger.info(
+                                            f"[ML-AUTO] ML retreinado! Accuracy={rt.get('new_accuracy', 0):.1%}, "
+                                            f"F1={rt.get('new_f1', 0):.3f}, Amostras={rt.get('samples_used', 0)}"
+                                        )
+                                    else:
+                                        logger.info(f"[ML-AUTO] Sinais alimentados: {seed_result.get('signals_added', 0)}")
+                                else:
+                                    logger.warning(f"[ML-AUTO] Seed falhou: {seed_result.get('error', 'unknown')}")
+
+                                # 2. Treinar LSTM se disponível
+                                try:
+                                    from src.ml.lstm_sequence_validator import BiLSTMSequenceValidator
+                                    lstm = BiLSTMSequenceValidator()
+                                    if hasattr(lstm, 'train_from_backtest'):
+                                        lstm_result = lstm.train_from_backtest()
+                                        if lstm_result:
+                                            logger.info(f"[ML-AUTO] Bi-LSTM retreinado: {lstm_result}")
+                                except Exception as lstm_err:
+                                    logger.debug(f"[ML-AUTO] LSTM treino falhou (nao critico): {lstm_err}")
+
+                            except Exception as e:
+                                logger.error(f"[ML-AUTO] Erro no treino automático: {e}")
+
+                    ml_thread = threading.Thread(
+                        target=_auto_train_ml_loop,
+                        args=(_ml_train_hours,),
+                        daemon=True,
+                        name="ml-auto-train"
+                    )
+                    ml_thread.start()
+                    logger.info(f"[ML-AUTO] Thread de treino automático iniciada (ciclo: {_ml_train_hours}h)")
+            except Exception as e:
+                logger.warning(f"[ML-AUTO] Falha ao iniciar treino automático: {e}")
+
             # Rastrear posições anteriores para detectar fechamentos
             previous_positions = set()
             _cleanup_cycle = 0  # Contador para limpeza periódica de ordens órfãs

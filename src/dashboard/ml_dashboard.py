@@ -224,17 +224,17 @@ def main():
                 st.warning(f"Buffer cheio! {buffer_size} amostras prontas para retreino.")
 
             st.caption(f"Retreino automatico ao atingir {threshold} amostras no buffer. "
-                       f"Usa TODOS os dados do buffer + dataset original.")
-            st.caption("⚠️ **Alimentar** processa até 150 sinais (evita travar). Auto-retreino só para o modelo sklearn, não para Bi-LSTM.")
+                       f"Usa TODOS os sinais disponiveis (sem limite). "
+                       f"Auto-retreino tambem roda a cada 12h no monitor mode (sklearn + Bi-LSTM).")
 
             # Aviso: buffer cheio mas modelo ainda nao treinado (ex.: primeiro uso ou retreino falhou)
             if len(buffer) >= 50 and (not model_info or not model_info.get("best_model")):
                 st.warning("Buffer cheio e nenhum modelo ativo. Clique em **Forcar Retreino** para treinar o modelo com os sinais do buffer.")
 
             if st.button("📡 Alimentar com Sinais", type="primary", use_container_width=True):
-                with st.spinner("Avaliando sinais e populando buffer (máx. 150, aguarde)..."):
+                with st.spinner("Avaliando sinais e populando buffer..."):
                     from src.ml.online_learning import seed_from_evaluated_signals
-                    result = seed_from_evaluated_signals(force_retrain=True, max_signals=150)
+                    result = seed_from_evaluated_signals(force_retrain=True)
                 if result.get("success"):
                     st.success(f"✅ {result.get('signals_added', 0)} sinais adicionados! Buffer: {result.get('buffer_total', 0)}")
                     if result.get("retrain_result", {}).get("success"):
@@ -257,10 +257,12 @@ def main():
             # Info sobre retreino
             st.markdown("---")
             st.caption("**Como funciona o retreino:**")
-            st.caption("• Combina dataset original + buffer")
+            st.caption("• Usa TODOS os sinais avaliados (sem limite)")
+            st.caption("• Prioriza dados reais sobre dados sinteticos")
             st.caption("• Treina ensemble (LogReg, RF, GB)")
             st.caption("• Salva apenas se F1 melhorar")
             st.caption("• Buffer limpo apos retreino")
+            st.caption("• Treino automatico a cada 12h (ML_AUTO_TRAIN_HOURS)")
 
         # ================= MAIN CONTENT =================
         if not has_model:

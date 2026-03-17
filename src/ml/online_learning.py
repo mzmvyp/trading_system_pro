@@ -309,13 +309,25 @@ class OnlineLearningManager:
             print(f"[OL] Distribuicao: {sum(y_new)} TP, {len(y_new)-sum(y_new)} SL")
 
             # Carregar dados originais de treino (se existir)
+            # CORRIGIDO: Quando o buffer tem dados reais suficientes (>= 50),
+            # priorizar dados reais e limitar peso dos dados sintéticos/antigos
             train_path = "ml_dataset/dataset_train_latest.csv"
-            if os.path.exists(train_path):
+            if os.path.exists(train_path) and len(X_new) < 100:
                 original_df = pd.read_csv(train_path)
                 orig_available = [col for col in available_cols if col in original_df.columns]
                 if orig_available and 'target' in original_df.columns:
                     X_orig = original_df[orig_available].fillna(0).values
                     y_orig = original_df['target'].values
+
+                    # Se temos muitos dados originais vs buffer, limitar para não dominar
+                    # Dados reais do buffer devem ter peso >= 50% do total
+                    max_orig = max(len(X_new) * 2, 200)
+                    if len(X_orig) > max_orig:
+                        # Pegar os mais recentes (final do dataset)
+                        X_orig = X_orig[-max_orig:]
+                        y_orig = y_orig[-max_orig:]
+                        print(f"[OL] Dataset original limitado a {max_orig} amostras (priorizar dados reais)")
+
                     X_combined = np.vstack([X_orig, X_new])
                     y_combined = np.hstack([y_orig, y_new])
                     print(f"[OL] Dados combinados: {len(X_orig)} originais + {len(X_new)} buffer = {len(X_combined)} total")
@@ -325,7 +337,10 @@ class OnlineLearningManager:
             else:
                 X_combined = X_new
                 y_combined = y_new
-                print(f"[OL] Sem dataset original. Treinando apenas com buffer ({len(X_combined)} amostras)")
+                if len(X_new) >= 100:
+                    print(f"[OL] Buffer com {len(X_new)} amostras reais suficientes. Treinando APENAS com dados reais.")
+                else:
+                    print(f"[OL] Sem dataset original. Treinando apenas com buffer ({len(X_combined)} amostras)")
 
             # Verificar variancia de classes
             unique_classes = np.unique(y_combined)
@@ -553,7 +568,7 @@ def manual_retrain():
     return online_learning_manager.retrain()
 
 
-def seed_from_evaluated_signals(force_retrain: bool = True, max_signals: int = 150) -> Dict:
+def seed_from_evaluated_signals(force_retrain: bool = True, max_signals: int = 0) -> Dict:
     """
     Popula o buffer com sinais avaliados, ENRIQUECIDOS com indicadores reais.
     Usa enrich_signal_with_klines() para buscar klines historicos e calcular
@@ -594,7 +609,7 @@ def seed_from_evaluated_signals(force_retrain: bool = True, max_signals: int = 1
         return {"success": False, "error": f"Import error: {e}"}
 
     # Limitar avaliações para não travar o dashboard (usa cache quando existe)
-    evaluations = evaluate_all_signals(max_to_evaluate=200)
+    evaluations = evaluate_all_signals()
     if not evaluations:
         return {"success": False, "error": "Nenhum sinal avaliado encontrado"}
 
