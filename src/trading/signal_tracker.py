@@ -581,10 +581,49 @@ def get_system_accuracy_report(log_path: str = None) -> Dict:
     }
 
 
+def _build_ml_features_from_signal(signal: Dict) -> Dict:
+    """
+    Extrai features do signal JSON para passar pelo ML atual.
+    Usa indicadores já salvos no sinal (sem buscar candles).
+    """
+    entry = signal.get("entry_price") or 0
+    stop = signal.get("stop_loss") or 0
+    tp1 = signal.get("take_profit_1") or signal.get("take_profit") or 0
+
+    risk_dist = abs(entry - stop) / entry * 100 if entry > 0 and stop > 0 else 2.0
+    reward_dist = abs(tp1 - entry) / entry * 100 if entry > 0 and tp1 > 0 else 2.0
+    rr_ratio = reward_dist / risk_dist if risk_dist > 0 else 1.0
+
+    indicators = signal.get("indicators", {})
+
+    return {
+        "rsi": signal.get("rsi", indicators.get("rsi", {}).get("value", indicators.get("rsi", 50)) if isinstance(indicators.get("rsi"), dict) else indicators.get("rsi", 50)),
+        "macd_histogram": signal.get("macd_histogram", indicators.get("macd", {}).get("histogram", indicators.get("macd_histogram", 0)) if isinstance(indicators.get("macd"), dict) else indicators.get("macd_histogram", 0)),
+        "adx": signal.get("adx", indicators.get("adx", 25)),
+        "atr": signal.get("atr", indicators.get("atr", 0)),
+        "bb_position": signal.get("bb_position", indicators.get("bollinger", {}).get("position", indicators.get("bb_position", 0.5)) if isinstance(indicators.get("bollinger"), dict) else indicators.get("bb_position", 0.5)),
+        "cvd": signal.get("cvd", signal.get("order_flow", {}).get("cvd", 0)),
+        "orderbook_imbalance": signal.get("orderbook_imbalance", signal.get("order_flow", {}).get("orderbook_imbalance", 0.5)),
+        "bullish_tf_count": signal.get("bullish_tf_count", 0),
+        "bearish_tf_count": signal.get("bearish_tf_count", 0),
+        "confidence": signal.get("confidence", 5),
+        "trend_encoded": {"strong_bullish": 2, "bullish": 1, "neutral": 0, "bearish": -1, "strong_bearish": -2}.get(
+            (signal.get("trend") or "neutral").lower(), 0
+        ),
+        "sentiment_encoded": {"bullish": 1, "neutral": 0, "bearish": -1}.get(
+            (signal.get("sentiment") or "neutral").lower(), 0
+        ),
+        "signal_encoded": 1 if signal.get("signal") == "BUY" else 0,
+        "risk_distance_pct": risk_dist,
+        "reward_distance_pct": reward_dist,
+        "risk_reward_ratio": rr_ratio,
+    }
+
+
 def get_model_validator_metrics(evaluations: List[Dict]) -> Dict:
     """
-    Calcula acurácia por modelo (ML, LSTM) sobre sinais finalizados.
-    Permite ver quem acerta/erra e se vale a pena manter ou remover um modelo.
+    Calcula acurácia REAL do ML e LSTM re-rodando o modelo atual em cada sinal histórico.
+    Passa todos os sinais finalizados pelo modelo atual e compara com o resultado real.
 
     Returns:
         Dict com ml_accuracy, lstm_accuracy, both_agree_right_pct, counts, etc.
@@ -603,26 +642,76 @@ def get_model_validator_metrics(evaluations: List[Dict]) -> Dict:
             "both_agree_total": 0,
         }
 
-    ml_with_pred = [e for e in closed if e.get("ml_correct") is not None]
-    lstm_with_vote = [e for e in closed if e.get("lstm_correct") is not None]
-    ml_correct = sum(1 for e in ml_with_pred if e["ml_correct"])
-    lstm_correct = sum(1 for e in lstm_with_vote if e["lstm_correct"])
+    # Carregar modelo ML atual para re-predizer todos os sinais
+    ml_validator = None
+    try:
+        from src.ml.simple_validator import SimpleSignalValidator
+        ml_validator = SimpleSignalValidator()
+        ml_validator.load_models()
+        if not ml_validator.models or not ml_validator.best_model_name:
+            ml_validator = None
+    except Exception as e:
+        logger.warning(f"[VALIDATOR] Não foi possível carregar modelo ML: {e}")
+        ml_validator = None
 
-    # Quando ML e LSTM ambos deram opinião (for/contra) e ambos acertaram
-    both_have = [e for e in closed if e.get("ml_correct") is not None and e.get("lstm_correct") is not None]
-    both_agree_right = sum(1 for e in both_have if e["ml_correct"] and e["lstm_correct"])
-    both_agree_total = len(both_have)
+    ml_total = 0
+    ml_correct_count = 0
+    lstm_total = 0
+    lstm_correct_count = 0
+    both_total = 0
+    both_correct = 0
+
+    for e in closed:
+        pnl = e.get("pnl_percent", 0)
+        outcome = e.get("outcome", "")
+        is_winner = outcome in ("TP1_HIT", "TP2_HIT") or (outcome == "EXPIRED" and pnl > 0)
+
+        # ML: re-rodar modelo atual no sinal
+        ml_pred_correct = None
+        if ml_validator is not None:
+            try:
+                features = _build_ml_features_from_signal(e)
+                result = ml_validator.predict_signal(features)
+                if "error" not in result:
+                    ml_pred = result.get("prediction", 0)
+                    ml_pred_correct = (ml_pred == 1) == is_winner
+                    ml_total += 1
+                    if ml_pred_correct:
+                        ml_correct_count += 1
+            except Exception:
+                pass
+
+        # LSTM: usar probabilidade armazenada no sinal (re-buscar candles seria lento demais)
+        lstm_pred_correct = None
+        lstm_prob = e.get("lstm_probability")
+        if lstm_prob is not None:
+            if lstm_prob > 0.6:
+                lstm_pred_correct = is_winner
+            elif lstm_prob < 0.4:
+                lstm_pred_correct = not is_winner
+            # Neutro (0.4-0.6) = sem opinião, não conta
+
+            if lstm_pred_correct is not None:
+                lstm_total += 1
+                if lstm_pred_correct:
+                    lstm_correct_count += 1
+
+        # Ambos concordaram e acertaram
+        if ml_pred_correct is not None and lstm_pred_correct is not None:
+            both_total += 1
+            if ml_pred_correct and lstm_pred_correct:
+                both_correct += 1
 
     return {
         "total_closed": len(closed),
-        "ml_accuracy": (ml_correct / len(ml_with_pred) * 100) if ml_with_pred else None,
-        "ml_correct": ml_correct,
-        "ml_total": len(ml_with_pred),
-        "lstm_accuracy": (lstm_correct / len(lstm_with_vote) * 100) if lstm_with_vote else None,
-        "lstm_correct": lstm_correct,
-        "lstm_total": len(lstm_with_vote),
-        "both_agree_right_pct": (both_agree_right / both_agree_total * 100) if both_agree_total else None,
-        "both_agree_total": both_agree_total,
+        "ml_accuracy": (ml_correct_count / ml_total * 100) if ml_total > 0 else None,
+        "ml_correct": ml_correct_count,
+        "ml_total": ml_total,
+        "lstm_accuracy": (lstm_correct_count / lstm_total * 100) if lstm_total > 0 else None,
+        "lstm_correct": lstm_correct_count,
+        "lstm_total": lstm_total,
+        "both_agree_right_pct": (both_correct / both_total * 100) if both_total > 0 else None,
+        "both_agree_total": both_total,
     }
 
 
