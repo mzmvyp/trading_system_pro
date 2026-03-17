@@ -52,8 +52,9 @@ from sklearn.metrics import (
     f1_score,
     roc_auc_score,
 )
-from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit, cross_val_score
 from sklearn.neural_network import MLPClassifier
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_sample_weight
 
@@ -300,12 +301,11 @@ def generate_bootstrap_signals(symbol: str, df: pd.DataFrame,
 
         signal_type = None
 
+        # Gerar sinais APENAS com base técnica real (sem aleatórios)
         if rsi < 45 and (trend >= 0 or bb_pos < 0.3):
             signal_type = 'BUY'
         elif rsi > 55 and (trend <= 0 or bb_pos > 0.7):
             signal_type = 'SELL'
-        elif i % 12 == 0:
-            signal_type = 'BUY' if np.random.random() > 0.5 else 'SELL'
 
         if signal_type is None:
             continue
@@ -643,30 +643,70 @@ def train_models(df: pd.DataFrame) -> Dict:
     print(f"\n[TRAIN] Dataset: {len(X)} amostras, {len(available_features)} features")
     print(f"[TRAIN] Distribuicao: {sum(y)} TP ({sum(y)/len(y):.1%}), {len(y)-sum(y)} SL ({1-sum(y)/len(y):.1%})")
 
-    from sklearn.model_selection import train_test_split as tts
-    X_train, X_test, y_train, y_test = tts(X, y, test_size=0.2, stratify=y, random_state=42)
+    # Split TEMPORAL: treino = 80% mais antigo, teste = 20% mais recente
+    # Dados já devem estar ordenados por timestamp para evitar data leakage
+    if 'timestamp' in df.columns:
+        df_sorted = df.sort_values('timestamp')
+        X = df_sorted[available_features].fillna(0).values
+        y = df_sorted['target'].values
+        print("[TRAIN] Split temporal (treino=passado, teste=futuro)")
+    else:
+        print("[TRAIN] Sem timestamp, usando split sequencial")
+
+    split_idx = int(len(X) * 0.8)
+    X_train, X_test = X[:split_idx], X[split_idx:]
+    y_train, y_test = y[:split_idx], y[split_idx:]
+
+    print(f"[TRAIN] Treino: {len(X_train)} ({sum(y_train)} TP, {len(y_train)-sum(y_train)} SL)")
+    print(f"[TRAIN] Teste:  {len(X_test)} ({sum(y_test)} TP, {len(y_test)-sum(y_test)} SL)")
 
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
-    models = {
-        "LogisticRegression": LogisticRegression(
-            class_weight="balanced", max_iter=1000, random_state=42, C=0.5
-        ),
-        "RandomForest": RandomForestClassifier(
-            n_estimators=200, max_depth=6, min_samples_leaf=5,
-            class_weight="balanced", random_state=42
-        ),
-        "GradientBoosting": GradientBoostingClassifier(
-            n_estimators=200, max_depth=4, learning_rate=0.05,
-            min_samples_leaf=5, subsample=0.8, random_state=42
-        ),
-        "MLP": MLPClassifier(
-            hidden_layer_sizes=(64, 32), max_iter=500,
-            early_stopping=True, validation_fraction=0.15,
-            random_state=42, learning_rate='adaptive'
-        ),
+    # Walk-forward CV para dados temporais
+    n_splits = min(5, max(2, len(X_train) // 30))
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+
+    # =========================================================
+    # FASE 1: Hyperparameter Tuning via RandomizedSearchCV
+    # =========================================================
+    print("\n" + "=" * 60)
+    print("HYPERPARAMETER TUNING + TREINAMENTO")
+    print("=" * 60)
+
+    sample_weights = compute_sample_weight('balanced', y_train)
+
+    # Definir modelos e espaços de busca
+    model_configs = {
+        "LogisticRegression": {
+            "model": LogisticRegression(class_weight="balanced", max_iter=1000, random_state=42),
+            "params": {
+                "C": [0.01, 0.1, 0.5, 1.0, 5.0],
+                "solver": ["lbfgs", "liblinear"],
+            },
+            "use_sample_weight": False,
+        },
+        "RandomForest": {
+            "model": RandomForestClassifier(class_weight="balanced", random_state=42),
+            "params": {
+                "n_estimators": [100, 200, 300],
+                "max_depth": [3, 5, 7, 10],
+                "min_samples_leaf": [3, 5, 10, 20],
+            },
+            "use_sample_weight": False,
+        },
+        "GradientBoosting": {
+            "model": GradientBoostingClassifier(random_state=42),
+            "params": {
+                "n_estimators": [100, 200, 300],
+                "max_depth": [3, 4, 5, 6],
+                "learning_rate": [0.01, 0.05, 0.1],
+                "min_samples_leaf": [5, 10, 20],
+                "subsample": [0.7, 0.8, 0.9, 1.0],
+            },
+            "use_sample_weight": True,
+        },
     }
 
     results = {}
@@ -674,24 +714,30 @@ def train_models(df: pd.DataFrame) -> Dict:
     best_name = None
     trained_models = {}
 
-    print("\n" + "=" * 60)
-    print("TREINAMENTO DE MODELOS")
-    print("=" * 60)
-
-    sample_weights = compute_sample_weight('balanced', y_train)
-
-    for name, model in models.items():
+    for name, config in model_configs.items():
         try:
-            if name == "GradientBoosting":
-                model.fit(X_train_scaled, y_train, sample_weight=sample_weights)
+            print(f"\n  {name}: tuning {len(config['params'])} hiperparâmetros...")
+
+            search = RandomizedSearchCV(
+                config["model"],
+                config["params"],
+                n_iter=min(20, np.prod([len(v) for v in config["params"].values()])),
+                cv=tscv,
+                scoring="f1",
+                random_state=42,
+                n_jobs=-1,
+                error_score=0,
+            )
+
+            if config["use_sample_weight"]:
+                search.fit(X_train_scaled, y_train, sample_weight=sample_weights)
             else:
-                model.fit(X_train_scaled, y_train)
+                search.fit(X_train_scaled, y_train)
 
-            n_splits = min(5, max(2, len(X_train) // 30))
-            tscv = TimeSeriesSplit(n_splits=n_splits)
-            cv_scores = cross_val_score(model, X_train_scaled, y_train,
-                                       cv=tscv, scoring="f1")
+            model = search.best_estimator_
+            trained_models[name] = model
 
+            # Avaliar no teste (out-of-time)
             y_pred = model.predict(X_test_scaled)
             acc = accuracy_score(y_test, y_pred)
             f1 = f1_score(y_test, y_pred, zero_division=0)
@@ -706,18 +752,17 @@ def train_models(df: pd.DataFrame) -> Dict:
                 "test_accuracy": float(acc),
                 "test_f1": float(f1),
                 "test_auc": float(auc),
-                "cv_f1_mean": float(np.mean(cv_scores)),
-                "cv_f1_std": float(np.std(cv_scores)),
+                "cv_f1_mean": float(search.best_score_),
+                "best_params": search.best_params_,
             }
-            trained_models[name] = model
 
-            combined_score = 0.6 * f1 + 0.4 * np.mean(cv_scores)
+            combined_score = 0.5 * f1 + 0.3 * search.best_score_ + 0.2 * auc
 
-            print(f"\n  {name}:")
+            print(f"    Best params: {search.best_params_}")
             print(f"    Test Acc:  {acc:.4f}")
             print(f"    Test F1:   {f1:.4f}")
             print(f"    AUC-ROC:   {auc:.4f}")
-            print(f"    CV F1:     {np.mean(cv_scores):.4f} (+/- {np.std(cv_scores):.4f})")
+            print(f"    CV F1:     {search.best_score_:.4f}")
             print(f"    Combined:  {combined_score:.4f}")
 
             if combined_score > best_score:
@@ -731,11 +776,26 @@ def train_models(df: pd.DataFrame) -> Dict:
         print("[ERRO] Nenhum modelo treinado com sucesso")
         return {}
 
+    # =========================================================
+    # FASE 2: Calibração de probabilidades
+    # =========================================================
     print(f"\n{'='*60}")
-    print(f"MELHOR MODELO: {best_name} (score combinado: {best_score:.4f})")
+    print(f"MELHOR MODELO: {best_name} (score: {best_score:.4f})")
     print(f"{'='*60}")
 
     best_model = trained_models[best_name]
+
+    # Calibrar probabilidades para que prob=65% signifique realmente 65%
+    try:
+        print(f"\n  Calibrando probabilidades ({best_name})...")
+        calibrated = CalibratedClassifierCV(best_model, cv='prefit', method='isotonic')
+        calibrated.fit(X_test_scaled, y_test)
+        trained_models[best_name] = calibrated
+        best_model = calibrated
+        print("  Calibração aplicada com sucesso")
+    except Exception as e:
+        print(f"  Calibração falhou (usando modelo sem calibração): {e}")
+
     y_pred_best = best_model.predict(X_test_scaled)
     print(f"\nClassification Report ({best_name}):")
     print(classification_report(y_test, y_pred_best,
@@ -743,8 +803,11 @@ def train_models(df: pd.DataFrame) -> Dict:
                                zero_division=0))
 
     importance = {}
-    if hasattr(best_model, "feature_importances_"):
-        for feat, imp in zip(available_features, best_model.feature_importances_):
+    base_model = best_model
+    if hasattr(best_model, 'estimator'):
+        base_model = best_model.estimator
+    if hasattr(base_model, "feature_importances_"):
+        for feat, imp in zip(available_features, base_model.feature_importances_):
             importance[feat] = float(imp)
         sorted_imp = sorted(importance.items(), key=lambda x: x[1], reverse=True)
         print("Feature Importance (top 8):")

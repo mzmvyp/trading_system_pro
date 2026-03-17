@@ -300,19 +300,10 @@ class DatasetGenerator:
 
     def _validate_features(self, features: Dict) -> bool:
         """Valida se as features mínimas estão presentes"""
-        # INCLUIR TODOS os sinais (BUY, SELL, NO_SIGNAL)
-        # O modelo vai aprender quais realmente funcionavam
-        if features.get('signal_type') not in ['BUY', 'SELL', 'NO_SIGNAL']:
+        # APENAS sinais BUY/SELL com resultado real (TP ou SL)
+        # NO_SIGNAL excluído: criava imbalance massivo e ensinava o modelo a sempre dizer SKIP
+        if features.get('signal_type') not in ['BUY', 'SELL']:
             return False
-
-        # Para NO_SIGNAL, não precisa de preços
-        if features.get('signal_type') == 'NO_SIGNAL':
-            # Só precisa de timestamp e symbol
-            if not features.get('timestamp'):
-                return False
-            if not features.get('symbol'):
-                return False
-            return True
 
         # Para BUY/SELL, deve ter preços válidos
         if features.get('entry_price', 0) <= 0:
@@ -545,16 +536,23 @@ class DatasetGenerator:
         if 'signal_type' in self.dataset.columns:
             self.dataset['signal_encoded'] = (self.dataset['signal_type'] == 'BUY').astype(int)
 
-        # 5. Criar target binário (1 = lucro, 0 = loss/sem trade)
-        # NO_TRADE conta como 0 pois não gerou lucro
+        # 5. Filtrar: só manter sinais com resultado definido (TP1, TP2, SL)
+        # Excluir NO_TRADE, TIMEOUT e resultados ambíguos
+        valid_outcomes = ['TP1', 'TP2', 'SL']
+        before_filter = len(self.dataset)
+        self.dataset = self.dataset[self.dataset['resultado'].isin(valid_outcomes)].copy()
+        removed = before_filter - len(self.dataset)
+        if removed > 0:
+            print(f"  [FILTRO] Removidos {removed} sinais sem resultado definido (NO_TRADE/TIMEOUT)")
+
+        # Target binário: 1 = lucro (TP1/TP2), 0 = loss (SL)
         self.dataset['target'] = self.dataset['resultado'].apply(
             lambda x: 1 if x in ['TP1', 'TP2'] else 0
         )
 
-        # 5b. Criar target para classificação multi-classe
-        # 0 = SL, 1 = TP1, 2 = TP2, 3 = TIMEOUT, 4 = NO_TRADE
-        resultado_map = {'SL': 0, 'TP1': 1, 'TP2': 2, 'TIMEOUT': 3, 'NO_TRADE': 4}
-        self.dataset['target_multiclass'] = self.dataset['resultado'].map(resultado_map).fillna(4)
+        # Target multi-classe: 0 = SL, 1 = TP1, 2 = TP2
+        resultado_map = {'SL': 0, 'TP1': 1, 'TP2': 2}
+        self.dataset['target_multiclass'] = self.dataset['resultado'].map(resultado_map).fillna(0)
 
         # 6. Criar features derivadas (com cuidado para não causar leakage)
         if 'entry_price' in self.dataset.columns and 'stop_loss' in self.dataset.columns:
