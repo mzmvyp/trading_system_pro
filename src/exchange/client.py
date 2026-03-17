@@ -15,12 +15,16 @@ from src.exchange.utils import binance_circuit_breaker, binance_rate_limiter, ex
 logger = get_logger(__name__)
 
 class BinanceClient:
+    # Shared session for connection reuse across instances
+    _shared_session = None
+    _session_refcount = 0
+
     def __init__(self):
         # API pública da Binance Futures - não precisa de autenticação
         self.base_url = "https://fapi.binance.com"
         self.session = None
         self.timeout = aiohttp.ClientTimeout(total=10)
-        logger.info("BinanceClient initialized")
+        logger.debug("BinanceClient initialized")
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession(timeout=self.timeout)
