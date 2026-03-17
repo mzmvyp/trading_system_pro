@@ -30,6 +30,7 @@ from sklearn.metrics import (  # noqa: E402
 from sklearn.model_selection import cross_val_score  # noqa: E402
 from sklearn.neural_network import MLPClassifier  # noqa: E402
 from sklearn.preprocessing import StandardScaler  # noqa: E402
+from sklearn.utils.class_weight import compute_sample_weight  # noqa: E402
 
 warnings.filterwarnings('ignore')
 
@@ -165,10 +166,16 @@ class SimpleSignalValidator:
         print("\n[TRAIN] Treinando modelos...")
         print("-" * 50)
 
+        # Sample weights for models without class_weight support
+        sample_weights = compute_sample_weight('balanced', y_train)
+
         for name, model in self.models.items():
             try:
-                # Treinar
-                model.fit(X_train, y_train)
+                # Treinar (GradientBoosting não suporta class_weight)
+                if name == "GradientBoosting":
+                    model.fit(X_train, y_train, sample_weight=sample_weights)
+                else:
+                    model.fit(X_train, y_train)
 
                 # Cross-validation no treino
                 cv_scores = cross_val_score(model, X_train, y_train, cv=3, scoring='f1')

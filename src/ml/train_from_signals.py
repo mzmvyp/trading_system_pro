@@ -55,6 +55,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
+from sklearn.utils.class_weight import compute_sample_weight
 
 from src.core.logger import get_logger
 
@@ -642,9 +643,8 @@ def train_models(df: pd.DataFrame) -> Dict:
     print(f"\n[TRAIN] Dataset: {len(X)} amostras, {len(available_features)} features")
     print(f"[TRAIN] Distribuicao: {sum(y)} TP ({sum(y)/len(y):.1%}), {len(y)-sum(y)} SL ({1-sum(y)/len(y):.1%})")
 
-    split_idx = int(len(X) * 0.8)
-    X_train, X_test = X[:split_idx], X[split_idx:]
-    y_train, y_test = y[:split_idx], y[split_idx:]
+    from sklearn.model_selection import train_test_split as tts
+    X_train, X_test, y_train, y_test = tts(X, y, test_size=0.2, stratify=y, random_state=42)
 
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
@@ -678,9 +678,14 @@ def train_models(df: pd.DataFrame) -> Dict:
     print("TREINAMENTO DE MODELOS")
     print("=" * 60)
 
+    sample_weights = compute_sample_weight('balanced', y_train)
+
     for name, model in models.items():
         try:
-            model.fit(X_train_scaled, y_train)
+            if name == "GradientBoosting":
+                model.fit(X_train_scaled, y_train, sample_weight=sample_weights)
+            else:
+                model.fit(X_train_scaled, y_train)
 
             n_splits = min(5, max(2, len(X_train) // 30))
             tscv = TimeSeriesSplit(n_splits=n_splits)
