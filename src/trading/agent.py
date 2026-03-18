@@ -41,6 +41,9 @@ class AgnoTradingAgent:
     # Cooldown em memória - impossível de bypassar (compartilhado entre instâncias)
     _last_analysis_time: Dict[str, datetime] = {}
     _last_signal_cache: Dict[str, Dict[str, Any]] = {}  # Último sinal gerado por símbolo
+    # Cache de acurácia dos modelos (compartilhado, atualiza a cada 30 min)
+    _model_accuracy_cache: Optional[Dict] = None
+    _model_accuracy_updated: Optional[datetime] = None
 
     def __init__(self, paper_trading: bool = True):
         """
@@ -110,6 +113,42 @@ class AgnoTradingAgent:
         except Exception as e:
             logger.warning(f"[Bi-LSTM] Não disponível: {e}")
 
+    def _get_model_accuracies(self) -> Dict[str, Optional[float]]:
+        """
+        Retorna acurácia atual do ML e LSTM (cache de 30 min).
+        Modelos com acurácia < 60% não devem bloquear sinais.
+
+        Returns:
+            Dict com 'ml_accuracy' e 'lstm_accuracy' (percentual ou None)
+        """
+        now = datetime.now(timezone.utc)
+        cache_ttl = timedelta(minutes=30)
+
+        if (
+            AgnoTradingAgent._model_accuracy_cache is not None
+            and AgnoTradingAgent._model_accuracy_updated is not None
+            and (now - AgnoTradingAgent._model_accuracy_updated) < cache_ttl
+        ):
+            return AgnoTradingAgent._model_accuracy_cache
+
+        try:
+            from src.trading.signal_tracker import get_system_accuracy_report
+            report = get_system_accuracy_report()
+            ml_acc = report.get("ml", {}).get("accuracy_pct")
+            lstm_acc = report.get("lstm", {}).get("accuracy_pct")
+            result = {"ml_accuracy": ml_acc, "lstm_accuracy": lstm_acc}
+            AgnoTradingAgent._model_accuracy_cache = result
+            AgnoTradingAgent._model_accuracy_updated = now
+            logger.info(
+                f"[ACCURACY] ML={ml_acc:.1f}% LSTM={lstm_acc:.1f}%"
+                if ml_acc is not None and lstm_acc is not None
+                else f"[ACCURACY] ML={ml_acc} LSTM={lstm_acc}"
+            )
+            return result
+        except Exception as e:
+            logger.warning(f"[ACCURACY] Erro ao obter acurácias: {e}")
+            return {"ml_accuracy": None, "lstm_accuracy": None}
+
     def _validate_with_ml_model(self, signal: Dict[str, Any]) -> Dict[str, Any]:
         """
         Valida um sinal usando o modelo ML treinado.
@@ -168,10 +207,20 @@ class AgnoTradingAgent:
             # has_confluence = True se modelo prevê sucesso E probabilidade > threshold
             has_confluence = prediction == 1 and probability >= ml_threshold
 
-            # ML so bloqueia sinais se ml_required=True (configuracao explicita)
-            # Quando ml_required=False, ML apenas informa mas NUNCA bloqueia
+            # ML só bloqueia sinais se ml_required=True E acurácia >= 60%
+            # Se acurácia < 60%, ML não é confiável o suficiente para barrar sinais
+            MIN_ACCURACY_TO_BLOCK = 60.0
             if ml_required:
-                skip_signal = not has_confluence
+                accuracies = self._get_model_accuracies()
+                ml_acc = accuracies.get("ml_accuracy")
+                if ml_acc is not None and ml_acc >= MIN_ACCURACY_TO_BLOCK:
+                    skip_signal = not has_confluence
+                else:
+                    skip_signal = False
+                    logger.info(
+                        f"[ML] Acurácia={ml_acc}% < {MIN_ACCURACY_TO_BLOCK}% — "
+                        f"ML não tem relevância para bloquear sinal"
+                    )
             else:
                 skip_signal = False
 
@@ -773,8 +822,10 @@ Responda APENAS com JSON:
                 llm_vote_weight = 1 if llm_confidence >= 5 else 0.5
 
                 # Bi-LSTM sequence vote (se modelo treinado)
+                # LSTM só pode votar contra (bloquear) se acurácia >= 60%
                 lstm_vote = 0
                 lstm_prob = 0.5
+                MIN_ACCURACY_TO_BLOCK = 60.0
                 if self.lstm_sequence_validator is not None:
                     try:
                         from src.backtesting.backtest_engine import BacktestEngine
@@ -789,14 +840,39 @@ Responda APENAS com JSON:
                             _df = _engine.calculate_indicators(_df)
                             lstm_result = self.lstm_sequence_validator.predict_from_candles(_df)
                             lstm_prob = lstm_result.get("probability", 0.5)
+
+                            # Verificar acurácia do LSTM antes de permitir voto
+                            accuracies = self._get_model_accuracies()
+                            lstm_acc = accuracies.get("lstm_accuracy")
+                            lstm_is_reliable = lstm_acc is not None and lstm_acc >= MIN_ACCURACY_TO_BLOCK
+
                             if lstm_prob > 0.6:
-                                lstm_vote = 1
-                                confluence["details"].append(f"Bi-LSTM win prob={lstm_prob:.1%}")
+                                if lstm_is_reliable:
+                                    lstm_vote = 1
+                                    confluence["details"].append(f"Bi-LSTM win prob={lstm_prob:.1%}")
+                                else:
+                                    confluence["details"].append(
+                                        f"Bi-LSTM prob={lstm_prob:.1%} (ignorado: acc={lstm_acc:.1f}% < {MIN_ACCURACY_TO_BLOCK}%)"
+                                        if lstm_acc is not None
+                                        else f"Bi-LSTM prob={lstm_prob:.1%} (ignorado: sem dados de acurácia)"
+                                    )
                             elif lstm_prob < 0.4:
-                                votes_against += 1
-                                confluence["details"].append(f"Bi-LSTM contra (prob={lstm_prob:.1%})")
+                                if lstm_is_reliable:
+                                    votes_against += 1
+                                    confluence["details"].append(f"Bi-LSTM contra (prob={lstm_prob:.1%})")
+                                else:
+                                    confluence["details"].append(
+                                        f"Bi-LSTM contra prob={lstm_prob:.1%} (ignorado: acc={lstm_acc:.1f}% < {MIN_ACCURACY_TO_BLOCK}%)"
+                                        if lstm_acc is not None
+                                        else f"Bi-LSTM contra prob={lstm_prob:.1%} (ignorado: sem dados de acurácia)"
+                                    )
                             agno_signal["lstm_probability"] = lstm_prob
-                            logger.info(f"[Bi-LSTM] {symbol}: prob={lstm_prob:.1%}, vote={'FOR' if lstm_vote else 'NEUTRAL/AGAINST'}")
+                            acc_str = f"{lstm_acc:.1f}%" if lstm_acc is not None else "N/A"
+                            logger.info(
+                                f"[Bi-LSTM] {symbol}: prob={lstm_prob:.1%}, "
+                                f"acc={acc_str}, reliable={lstm_is_reliable}, "
+                                f"vote={'FOR' if lstm_vote else 'NEUTRAL/AGAINST'}"
+                            )
                     except Exception as e:
                         logger.warning(f"[Bi-LSTM] Erro na predição: {e}")
 
