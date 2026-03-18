@@ -43,7 +43,7 @@ def get_active_positions():
     return active_symbols
 
 
-async def log_monitor_summary(settings, interval_sec: int):
+async def log_monitor_summary(settings):
     """No início de cada ciclo do monitor: posições abertas, saldo, próxima análise."""
     logger.info("--- [CICLO] Resumo ---")
     try:
@@ -72,8 +72,13 @@ async def log_monitor_summary(settings, interval_sec: int):
             logger.info(f"  Posições ativas (paper): {active if active else 'Nenhuma'}")
     except Exception as e:
         logger.warning(f"Erro ao obter resumo: {e}")
-    next_min = interval_sec // 60
-    logger.info(f"  Próxima análise em {next_min} min")
+    # Calcular próxima análise baseada no fechamento do candle de 1h
+    from datetime import datetime as _dt, timezone as _tz
+    now_utc = _dt.now(_tz.utc)
+    next_hour = now_utc.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    next_analysis = next_hour + timedelta(seconds=35)
+    wait_minutes = int((next_analysis - now_utc).total_seconds() // 60)
+    logger.info(f"  Próxima análise em {wait_minutes}min (candle close: {next_analysis.strftime('%H:%M:%S')} UTC)")
 
 
 def _register_trade_result(symbol: str, add_trade_result_fn):
@@ -181,7 +186,7 @@ async def main():
 
             symbols = settings.top_crypto_pairs  # Todos os pares configurados
 
-            logger.info(f"[MONITOR] Monitoramento continuo | Pares: {symbols} | Intervalo: {args.interval}s | Modo: {settings.trading_mode.upper()}")
+            logger.info(f"[MONITOR] Monitoramento continuo | Pares: {symbols} | Sync: candle 1h close | Modo: {settings.trading_mode.upper()}")
 
             # ============================================================
             # Otimizador contínuo: roda a cada N h, testa M combinações
@@ -271,7 +276,7 @@ async def main():
 
             while True:
                 try:
-                    await log_monitor_summary(settings, args.interval)
+                    await log_monitor_summary(settings)
                     # Verificar posições ativas: em modo real = Binance; em paper = state.json
                     if settings.trading_mode == "real":
                         try:
