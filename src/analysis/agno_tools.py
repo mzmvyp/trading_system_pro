@@ -1397,7 +1397,19 @@ async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
             },
 
             "conflicting_signals": [],  # Será preenchido depois
-            "aggregated_scores": {}  # Será preenchido depois
+            "aggregated_scores": {},  # Será preenchido depois
+
+            # Dados brutos para calculo tecnico de SL/TP (nao enviados ao LLM)
+            "_raw_indicators": {
+                "ema_20": ema_20,
+                "ema_50": ema_50,
+                "ema_200": ema_200,
+                "sma_200": indicators.get("sma_200"),
+                "bb_upper": indicators.get("bb_upper"),
+                "bb_lower": indicators.get("bb_lower"),
+                "bb_middle": indicators.get("bb_middle", ema_20),
+            },
+            "_market_structure": technical_indicators.get("market_structure", {}),
         }
 
         # Identificar sinais conflitantes
@@ -1491,11 +1503,15 @@ Você é um trader profissional. Analise os dados e forneça um sinal de trading
 - Bollinger: {analysis['key_indicators']['bollinger']['zone']}
 - EMAs: {analysis['key_indicators']['ema_structure']['ema_alignment']}
 
-## NÍVEIS CHAVE
+## NÍVEIS TÉCNICOS (use para SL/TP)
 
-- Suporte: ${analysis['key_levels']['immediate_support']:,.2f} ({analysis['key_levels']['distance_to_support_pct']:+.2f}%)
-- Resistência: ${analysis['key_levels']['immediate_resistance']:,.2f} ({analysis['key_levels']['distance_to_resistance_pct']:+.2f}%)
+- Suporte imediato: ${analysis['key_levels']['immediate_support']:,.2f} ({analysis['key_levels']['distance_to_support_pct']:+.2f}%)
+- Resistência imediata: ${analysis['key_levels']['immediate_resistance']:,.2f} ({analysis['key_levels']['distance_to_resistance_pct']:+.2f}%)
+- Fibonacci 38.2%: ${analysis['key_levels']['fib_382']:,.2f}
+- Fibonacci 50.0%: ${analysis['key_levels']['fib_50']:,.2f}
+- Fibonacci 61.8%: ${analysis['key_levels']['fib_618']:,.2f}
 - POC Volume: ${analysis['key_levels']['volume_poc']:,.2f}
+- IMPORTANTE: SL DEVE estar atrás de suporte (BUY) ou resistência (SELL). TP nos próximos níveis
 
 ## VOLUME E FLUXO
 
@@ -1510,9 +1526,7 @@ Você é um trader profissional. Analise os dados e forneça um sinal de trading
 ## VOLATILIDADE
 
 - Nível: {analysis['volatility']['level']}
-- Stop sugerido: {analysis['volatility']['suggested_stop_pct']:.2f}%
-- TP1 sugerido: {analysis['volatility']['suggested_tp1_pct']:.2f}%
-- TP2 sugerido: {analysis['volatility']['suggested_tp2_pct']:.2f}%
+- ATR: {analysis['volatility'].get('atr_value', 0):.2f} ({analysis['volatility'].get('atr_pct', 0):.2f}%)
 
 ## SINAIS CONFLITANTES
 

@@ -937,41 +937,93 @@ Responda APENAS com JSON:
                     sl = agno_signal.get("stop_loss", 0) or 0
                     tp1 = agno_signal.get("take_profit_1", 0) or 0
                     tp2 = agno_signal.get("take_profit_2", 0) or 0
+                    op_type = agno_signal.get("operation_type", "DAY_TRADE")
 
-                    # 2. Auto-calcular valores faltantes usando ATR
-                    atr_value = agno_signal.get("atr", 0)
-                    needs_calc = sl <= 0 or tp1 <= 0 or tp2 <= 0
+                    # 2. Calcular SL/TP baseado em NIVEIS TECNICOS REAIS
+                    # Usa suporte/resistencia, Fibonacci, EMAs, BBands, POC
+                    # SEMPRE recalcular tecnicamente — mesmo se DeepSeek forneceu valores
+                    # Os valores técnicos são mais confiáveis que os do LLM
+                    needs_calc = True  # Sempre usar niveis tecnicos
 
-                    if needs_calc:
+                    if needs_calc and "error" not in analysis_data:
+                        try:
+                            from src.analysis.technical_levels_calculator import calculate_technical_sl_tp
+                            tech_levels = calculate_technical_sl_tp(
+                                entry_price=entry,
+                                direction=direction,
+                                analysis_data=analysis_data,
+                                operation_type=op_type,
+                            )
+                            if "error" not in tech_levels:
+                                # Sempre usar SL/TP técnicos — são baseados em niveis reais
+                                old_sl, old_tp1, old_tp2 = sl, tp1, tp2
+
+                                sl = tech_levels["stop_loss"]
+                                agno_signal["stop_loss"] = sl
+                                agno_signal["sl_method"] = tech_levels["sl_method"]
+                                agno_signal["stop_loss_auto_calculated"] = True
+
+                                tp1 = tech_levels["take_profit_1"]
+                                agno_signal["take_profit_1"] = tp1
+                                agno_signal["tp1_method"] = tech_levels["tp1_method"]
+                                agno_signal["tp1_auto_calculated"] = True
+
+                                tp2 = tech_levels["take_profit_2"]
+                                agno_signal["take_profit_2"] = tp2
+                                agno_signal["tp2_method"] = tech_levels["tp2_method"]
+                                agno_signal["tp2_auto_calculated"] = True
+
+                                if old_sl > 0 or old_tp1 > 0:
+                                    logger.info(
+                                        f"[TECH OVERRIDE] LLM: SL=${old_sl:,.2f} TP1=${old_tp1:,.2f} TP2=${old_tp2:,.2f} → "
+                                        f"TECH: SL=${sl:,.2f} ({tech_levels['sl_method']}) "
+                                        f"TP1=${tp1:,.2f} ({tech_levels['tp1_method']}) "
+                                        f"TP2=${tp2:,.2f} ({tech_levels['tp2_method']})"
+                                    )
+                                else:
+                                    logger.info(
+                                        f"[TECH SL/TP] SL=${sl:,.2f} ({tech_levels['sl_method']}) | "
+                                        f"TP1=${tp1:,.2f} ({tech_levels['tp1_method']}) | "
+                                        f"TP2=${tp2:,.2f} ({tech_levels['tp2_method']}) | "
+                                        f"R:R={tech_levels.get('risk_reward', 0):.1f}"
+                                    )
+
+                                agno_signal["sl_tp_source"] = "technical_levels"
+                                agno_signal["risk_reward"] = tech_levels.get("risk_reward", 0)
+                                agno_signal["technical_levels_detail"] = tech_levels.get("levels_used", {})
+                            else:
+                                logger.warning(f"[TECH SL/TP] Erro no calculador técnico: {tech_levels.get('error')}")
+                        except Exception as e:
+                            logger.warning(f"[TECH SL/TP] Falha no calculador técnico: {e}")
+
+                    # Fallback ATR caso calculador técnico não tenha funcionado
+                    sl = agno_signal.get("stop_loss", 0) or 0
+                    tp1 = agno_signal.get("take_profit_1", 0) or 0
+                    tp2 = agno_signal.get("take_profit_2", 0) or 0
+                    if sl <= 0 or tp1 <= 0 or tp2 <= 0:
+                        atr_value = agno_signal.get("atr", 0)
                         if atr_value and atr_value > 0:
                             sl_dist = atr_value * 1.5
                             tp1_dist = atr_value * 3.0
                             tp2_dist = atr_value * 5.0
-                            logger.info(f"[ATR SL/TP] ATR={atr_value:.4f}, SL_dist={sl_dist:.4f}, TP1_dist={tp1_dist:.4f}, TP2_dist={tp2_dist:.4f}")
                         else:
-                            # Fallback: 1.5% SL, 3% TP1, 5% TP2
                             sl_dist = entry * 0.015
                             tp1_dist = entry * 0.03
                             tp2_dist = entry * 0.05
-                            logger.info(f"[FALLBACK SL/TP] Sem ATR, usando percentuais: SL=1.5%, TP1=3%, TP2=5%")
-
+                        logger.warning(f"[FALLBACK SL/TP] Calculador técnico não cobriu todos os níveis, usando ATR/percentual")
                         if sl <= 0:
                             sl = (entry - sl_dist) if direction == "BUY" else (entry + sl_dist)
                             agno_signal["stop_loss"] = sl
                             agno_signal["stop_loss_auto_calculated"] = True
-                            logger.warning(f"[SL AUTO] Stop Loss calculado automaticamente: ${sl:.2f}")
-
                         if tp1 <= 0:
                             tp1 = (entry + tp1_dist) if direction == "BUY" else (entry - tp1_dist)
                             agno_signal["take_profit_1"] = tp1
                             agno_signal["tp1_auto_calculated"] = True
-                            logger.warning(f"[TP1 AUTO] Take Profit 1 calculado automaticamente: ${tp1:.2f}")
-
                         if tp2 <= 0:
                             tp2 = (entry + tp2_dist) if direction == "BUY" else (entry - tp2_dist)
                             agno_signal["take_profit_2"] = tp2
                             agno_signal["tp2_auto_calculated"] = True
-                            logger.warning(f"[TP2 AUTO] Take Profit 2 calculado automaticamente: ${tp2:.2f}")
+                        agno_signal["sl_tp_source"] = agno_signal.get("sl_tp_source", "atr_fallback")
 
                     # 3. HARD BLOCK: Se mesmo após cálculo, algum valor é inválido, NÃO executar
                     sl = agno_signal.get("stop_loss", 0) or 0
