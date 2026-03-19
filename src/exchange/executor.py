@@ -156,10 +156,14 @@ class BinanceFuturesExecutor:
                 else:
                     raise ValueError(f"Metodo HTTP nao suportado: {method}")
 
-                # Verificar erro da API
-                if isinstance(data, dict) and "code" in data and data["code"] < 0:
+                # Verificar erro da API (code pode vir como int ou str da Binance)
+                try:
+                    code_val = int(data["code"]) if isinstance(data, dict) and "code" in data else 0
+                except (TypeError, ValueError):
+                    code_val = 0
+                if isinstance(data, dict) and "code" in data and code_val < 0:
                     error_msg = data.get("msg", "Erro desconhecido")
-                    error_code = data["code"]
+                    error_code = code_val
 
                     # Erro -1021: Timestamp ahead of server - fazer retry com server time sync
                     if error_code == -1021 and signed and retry_timestamp:
@@ -194,10 +198,14 @@ class BinanceFuturesExecutor:
                                     async with retry_session.delete(url, params=request_params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as retry_response:
                                         retry_data = await retry_response.json()
 
-                                # Verificar se o retry foi bem-sucedido
-                                if isinstance(retry_data, dict) and "code" in retry_data and retry_data["code"] < 0:
+                                # Verificar se o retry foi bem-sucedido (code pode ser int ou str)
+                                try:
+                                    retry_code = int(retry_data["code"]) if isinstance(retry_data, dict) and "code" in retry_data else 0
+                                except (TypeError, ValueError):
+                                    retry_code = 0
+                                if isinstance(retry_data, dict) and "code" in retry_data and retry_code < 0:
                                     error_msg = retry_data.get("msg", "Erro desconhecido")
-                                    error_code = retry_data["code"]
+                                    error_code = retry_code
                                     if error_code == -4046:
                                         logger.info(f"[BINANCE API] Codigo: {error_code}, Mensagem: {error_msg}")
                                     else:

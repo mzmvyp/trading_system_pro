@@ -268,11 +268,15 @@ class OnlineLearningManager:
             print("[OL] Threshold atingido! Iniciando retreino...")
             self.retrain()
 
-    def retrain(self) -> Dict:
+    def retrain(self, force_save: bool = False) -> Dict:
         """
         Retreina o modelo com novos dados.
         Se nao existe modelo anterior, cria do zero (primeiro treinamento).
         Usa TODOS os dados do buffer + dataset original (se existir).
+
+        Args:
+            force_save: Se True (ex.: botao "Forcar Retreino" no dashboard), salva o novo
+                        modelo mesmo quando o F1 na validacao nao melhora (substitui o atual).
 
         Returns:
             Dict com resultados do retreino
@@ -469,6 +473,10 @@ class OnlineLearningManager:
                             # Modelo novo reflete a realidade atual do mercado.
                             should_save = True
                             print(f"[OL] Buffer com {len(self.buffer)} amostras reais — substituindo modelo (dados reais > guard-rail)")
+                        elif force_save:
+                            should_save = True
+                            if improvement < 0:
+                                print("[OL] Forcar Retreino: salvando novo modelo mesmo sem melhoria (force_save=True)")
                         else:
                             should_save = improvement >= CONFIG["min_improvement"]
                     except Exception as e:
@@ -709,9 +717,9 @@ def add_trade_result(signal: Dict, result: str, return_pct: float = 0.0):
     online_learning_manager.add_signal_result(signal, result, return_pct)
 
 
-def manual_retrain():
-    """Forca retreino manual"""
-    return online_learning_manager.retrain()
+def manual_retrain(force_save: bool = True):
+    """Forca retreino manual. Com force_save=True, substitui o modelo mesmo se F1 na validacao nao melhorar."""
+    return online_learning_manager.retrain(force_save=force_save)
 
 
 def seed_from_evaluated_signals(force_retrain: bool = True, max_signals: int = 0) -> Dict:

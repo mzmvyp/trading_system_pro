@@ -254,15 +254,28 @@ def main():
                 else:
                     st.error(f"Falhou: {result.get('reason', result.get('error', ''))}")
 
+            # Retreino COMPLETO: pipeline com RandomizedSearchCV + Calibração (1–2 min)
+            if st.button("🔬 Retreino completo (tuning + calibração)", use_container_width=True):
+                with st.spinner("Pipeline completo: tuning de hiperparâmetros e calibração (pode levar 1–2 min)..."):
+                    try:
+                        from src.ml.train_from_signals import run_training_pipeline
+                        success = run_training_pipeline()
+                        if success:
+                            st.success("✅ Pipeline completo concluído! Modelo tunado e calibrado salvo.")
+                            st.rerun()
+                        else:
+                            st.error("Falhou: dados insuficientes ou erro no pipeline. Use 'Alimentar com Sinais' antes se tiver poucos sinais.")
+                    except Exception as e:
+                        st.error(f"Erro: {e}")
+
             # Info sobre retreino
             st.markdown("---")
-            st.caption("**Como funciona o retreino:**")
-            st.caption("• Usa TODOS os sinais avaliados (sem limite)")
-            st.caption("• Prioriza dados reais sobre dados sinteticos")
-            st.caption("• Treina ensemble (LogReg, RF, GB)")
-            st.caption("• Salva apenas se F1 melhorar")
-            st.caption("• Buffer limpo apos retreino")
-            st.caption("• Treino automatico a cada 12h (ML_AUTO_TRAIN_HOURS)")
+            st.caption("**Por que ainda GradientBoosting?** O nome é o algoritmo que ganhou (melhor F1) entre LogReg, RF e GB no retreino rápido.")
+            st.caption("**Dois tipos de retreino:**")
+            st.caption("• **Forcar Retreino** = rápido, 3 modelos com params fixos, escolhe o melhor.")
+            st.caption("• **Retreino completo** = 1–2 min, RandomizedSearchCV + CalibratedClassifierCV (prob mais realista).")
+            st.caption("• **Alimentar com Sinais** = preenche o buffer com sinais avaliados (SL/TP) e dispara retreino rápido se buffer ≥ 10.")
+            st.caption("• Buffer limpo apos retreino. Auto-retreino a cada 12h no monitor.")
 
         # ================= MAIN CONTENT =================
         if not has_model:
