@@ -1136,8 +1136,13 @@ Responda APENAS com JSON:
 
                 # ML em modo OBSERVADOR: registra predicao mas NAO bloqueia sinais
                 ml_opinion = 'SUCESSO' if ml_pred == 1 else 'FALHA'
+                from src.core.config import settings as _settings
+                _ml_thr = getattr(_settings, 'ml_validation_threshold', 0.65)
                 if ml_validation.get("has_confluence"):
                     logger.info(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML concorda (prob={ml_prob:.1%}, predicao={ml_opinion})")
+                elif ml_pred == 1:
+                    # ML prediz sucesso mas prob < threshold — confiança baixa
+                    logger.info(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML concorda fraco (prob={ml_prob:.1%} < threshold {_ml_thr:.0%}, predicao={ml_opinion})")
                 else:
                     logger.info(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML discorda (prob={ml_prob:.1%}, predicao={ml_opinion})")
 
