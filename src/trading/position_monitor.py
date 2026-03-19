@@ -9,8 +9,9 @@ Verifica saúde das posições em tempo real:
 
 FILOSOFIA DE REAVALIAÇÃO:
 - O Stop Loss é a proteção principal. A reavaliação NÃO substitui o SL.
-- Só fecha posição por reavaliação se TODOS os indicadores confirmarem reversão.
-- Posição em lucro NUNCA é fechada pela reavaliação (deixar TP/trailing funcionar).
+- Só fecha posição por reavaliação se TODOS os indicadores confirmarem reversão E posição em prejuízo.
+- Posição em LUCRO + reversão completa: move SL para breakeven+0.5% (protege lucro).
+- Posição em LUCRO + sinais parciais (2/3): aperta SL para 50% entre entry e preço atual.
 - Indicadores que CONFIRMAM a posição (ex: RSI oversold para SHORT) não contam contra.
 """
 
@@ -197,35 +198,23 @@ class PositionMonitor:
 
         return results
 
-    def _evaluate_reversal(self, side: str, trend: str, macd_hist: float, rsi: float, pnl: float) -> tuple:
+    def _evaluate_reversal(self, side: str, trend: str, macd_hist: float, rsi: float,
+                           pnl: float, entry_price: float = 0, current_price: float = 0) -> tuple:
         """
-        Avalia se há uma reversão COMPLETA contra a posição.
+        Avalia reversão contra a posição e decide ação.
 
-        Filosofia:
-        - Posição em LUCRO: nunca fecha (deixar TP/trailing funcionar)
-        - Posição em PREJUÍZO: só fecha se TODOS os indicadores confirmam reversão
-        - Indicadores individuais flutuam naturalmente; um MACD levemente positivo
-          não significa que o short falhou. Precisa de TUDO alinhado contra.
+        Ações possíveis:
+        - "close": fechar posição (só se em prejuízo + 3/3 sinais contra)
+        - "move_sl_breakeven": mover SL para breakeven+0.5% (em lucro + 3/3 contra)
+        - "tighten_sl": apertar SL para 50% entre entry e preço atual (em lucro + 2/3 contra)
+        - None: manter tudo como está
 
         Returns:
-            (should_close: bool, reason: str, details: list)
+            (action: str|None, reason: str, details: list)
         """
         against_details = []
 
-        # ============================================================
-        # REGRA 1: Posição em lucro = NUNCA fechar por reavaliação
-        # O Take Profit e trailing stop cuidam disso.
-        # ============================================================
-        if pnl >= 0:
-            return False, "", [f"PnL positivo (${pnl:.2f}) - confiando no TP/trailing"]
-
-        # ============================================================
-        # REGRA 2: Posição em prejuízo — só fecha com REVERSÃO COMPLETA
-        # TODOS os 3 indicadores devem confirmar reversão:
-        #   - Trend invertido (era favorável, agora contra)
-        #   - MACD histograma contra a posição
-        #   - RSI contra a posição (acima de 55 para short, abaixo de 45 para long)
-        # ============================================================
+        # Contar sinais contra
         trend_against = False
         macd_against = False
         rsi_against = False
@@ -240,7 +229,6 @@ class PositionMonitor:
             if rsi < 40:
                 rsi_against = True
                 against_details.append(f"RSI={rsi:.0f}")
-
         else:  # SHORT
             if "bullish" in trend:
                 trend_against = True
@@ -252,32 +240,110 @@ class PositionMonitor:
                 rsi_against = True
                 against_details.append(f"RSI={rsi:.0f}")
 
-        # Precisam TODOS os 3 para confirmar reversão completa
-        all_against = trend_against and macd_against and rsi_against
+        against_count = sum([trend_against, macd_against, rsi_against])
+        all_against = against_count == 3
 
-        if all_against:
+        # ============================================================
+        # POSIÇÃO EM PREJUÍZO + REVERSÃO COMPLETA (3/3) = FECHAR
+        # ============================================================
+        if pnl < 0 and all_against:
             reason = f"REVERSAO COMPLETA {side} (PnL: ${pnl:.2f}): {', '.join(against_details)}"
-            return True, reason, against_details
+            return "close", reason, against_details
 
-        # Log de aviso quando há sinais parciais (mas NÃO fecha)
+        # ============================================================
+        # POSIÇÃO EM LUCRO + REVERSÃO COMPLETA (3/3) = MOVER SL PARA BREAKEVEN+0.5%
+        # Protege o lucro sem fechar prematuramente. Se o preço voltar
+        # a favor, a posição continua. Se não, sai no breakeven com lucro.
+        # ============================================================
+        if pnl >= 0 and all_against and entry_price > 0:
+            reason = (f"PROTECAO LUCRO {side} (PnL: ${pnl:.2f}): "
+                      f"{', '.join(against_details)} - movendo SL para breakeven+0.5%")
+            return "move_sl_breakeven", reason, against_details
+
+        # ============================================================
+        # POSIÇÃO EM LUCRO + 2/3 SINAIS CONTRA = APERTAR SL
+        # Aperta SL para 50% entre entry e preço atual (garante parte do lucro)
+        # ============================================================
+        if pnl > 0 and against_count >= 2 and entry_price > 0 and current_price > 0:
+            reason = (f"APERTANDO SL {side} (PnL: ${pnl:.2f}): "
+                      f"{against_count}/3 sinais contra ({', '.join(against_details)})")
+            return "tighten_sl", reason, against_details
+
+        # ============================================================
+        # SINAIS PARCIAIS (prejuízo ou lucro insuficiente) = MANTER
+        # ============================================================
         if against_details:
-            partial_count = sum([trend_against, macd_against, rsi_against])
             logger.info(
-                f"[REAVALIACAO] {side}: {partial_count}/3 sinais contra "
-                f"({', '.join(against_details)}) - MANTENDO (precisa 3/3 para fechar)"
+                f"[REAVALIACAO] {side}: {against_count}/3 sinais contra "
+                f"({', '.join(against_details)}) - MANTENDO"
             )
 
-        return False, "", against_details
+        return None, "", against_details
+
+    async def _move_stop_loss(self, executor, symbol: str, side: str,
+                              position_amt: float, new_sl: float) -> bool:
+        """
+        Move o SL de uma posição: cancela SL antigos e coloca novo.
+        Usa o mesmo padrão do stop_adjuster.py.
+
+        Returns:
+            True se moveu com sucesso
+        """
+        try:
+            # 1. Cancelar SL existentes (apenas STOP_MARKET, preserva TP)
+            algo_orders = await executor.get_open_algo_orders(symbol)
+            for order in algo_orders:
+                if (order.get("type") or "").upper() == "STOP_MARKET" and order.get("algoId"):
+                    try:
+                        await executor.cancel_algo_order(order["algoId"])
+                        logger.info(f"[REAVALIACAO] {symbol}: cancelado SL antigo algoId={order['algoId']}")
+                    except Exception as e:
+                        logger.warning(f"[REAVALIACAO] {symbol}: erro ao cancelar SL: {e}")
+
+            # 2. Colocar novo SL
+            close_side = "SELL" if side == "LONG" else "BUY"
+            result = await executor.place_stop_loss(symbol, close_side, position_amt, new_sl)
+            if isinstance(result, dict) and "error" not in result:
+                logger.info(f"[REAVALIACAO] {symbol}: SL movido para ${new_sl:.4f}")
+                return True
+            else:
+                logger.error(f"[REAVALIACAO] {symbol}: erro ao colocar novo SL: {result}")
+                return False
+        except Exception as e:
+            logger.error(f"[REAVALIACAO] {symbol}: exceção ao mover SL: {e}")
+            return False
+
+    def _calculate_new_sl(self, action: str, side: str, entry_price: float,
+                          current_price: float) -> Optional[float]:
+        """
+        Calcula o novo preço de SL baseado na ação.
+
+        - move_sl_breakeven: entry + 0.5% na direção favorável
+        - tighten_sl: 50% entre entry e preço atual
+        """
+        if action == "move_sl_breakeven":
+            if side == "LONG":
+                return entry_price * 1.005  # Breakeven + 0.5%
+            else:
+                return entry_price * 0.995  # Breakeven + 0.5% para short
+        elif action == "tighten_sl":
+            if side == "LONG":
+                # SL = meio entre entry e preço atual (garante ~50% do lucro)
+                return entry_price + (current_price - entry_price) * 0.5
+            else:
+                # SL = meio entre entry e preço atual (short)
+                return entry_price - (entry_price - current_price) * 0.5
+        return None
 
     async def reevaluate_positions(self, executor, agent) -> Dict[str, Any]:
         """
         Reavalia posições abertas usando análise técnica.
 
-        NOVA LÓGICA (conservadora):
-        - Só fecha se TODOS os indicadores confirmam reversão (trend + MACD + RSI)
-        - Nunca fecha posição em lucro (TP/trailing cuida disso)
-        - Intervalo mínimo de 2h entre reavaliações
-        - Tempo mínimo de 2h antes da primeira reavaliação
+        Ações:
+        - Em prejuízo + 3/3 sinais contra: FECHA posição
+        - Em lucro + 3/3 sinais contra: MOVE SL para breakeven+0.5%
+        - Em lucro + 2/3 sinais contra: APERTA SL (50% do lucro)
+        - Caso contrário: mantém tudo
         """
         from src.core.config import settings
 
@@ -287,6 +353,7 @@ class PositionMonitor:
         results = {
             "reevaluated": 0,
             "closed_by_reversal": 0,
+            "sl_moved": 0,
             "kept": 0,
             "errors": []
         }
@@ -300,6 +367,9 @@ class PositionMonitor:
                 symbol = pos.get("symbol", "")
                 side = pos.get("side", "LONG")
                 pnl = pos.get("unrealized_pnl", 0)
+                entry_price = pos.get("entry_price", 0)
+                position_amt = abs(pos.get("position_amt", 0))
+                mark_price = pos.get("mark_price", 0)
                 if not symbol:
                     continue
 
@@ -315,7 +385,6 @@ class PositionMonitor:
                 # Verificar tempo mínimo aberto
                 entry_time = await self._find_entry_time(symbol)
                 if entry_time:
-                    # Garantir timezone-aware para evitar erro de subtração
                     if entry_time.tzinfo is None:
                         entry_time = entry_time.replace(tzinfo=timezone.utc)
                     hours_open = (now - entry_time).total_seconds() / 3600
@@ -327,7 +396,6 @@ class PositionMonitor:
                 self._last_reeval[symbol] = now
 
                 try:
-                    # Análise técnica rápida (sem chamar DeepSeek, só indicadores)
                     from src.analysis.agno_tools import analyze_technical_indicators
                     logger.info(f"[REAVALIACAO] Analisando {symbol} ({side}, PnL: ${pnl:.2f})...")
                     tech = await analyze_technical_indicators(symbol)
@@ -339,12 +407,13 @@ class PositionMonitor:
                     rsi = indicators.get("rsi", 50)
                     trend = indicators.get("trend", "neutral")
                     macd_hist = indicators.get("macd_histogram", 0)
+                    current_price = indicators.get("close", mark_price) or mark_price
 
-                    should_close, reason, details = self._evaluate_reversal(
-                        side, trend, macd_hist, rsi, pnl
+                    action, reason, details = self._evaluate_reversal(
+                        side, trend, macd_hist, rsi, pnl, entry_price, current_price
                     )
 
-                    if should_close:
+                    if action == "close":
                         logger.warning(f"[REAVALIACAO] {symbol} ({side}): {reason} - FECHANDO!")
                         try:
                             close_result = await executor.close_position(symbol)
@@ -354,6 +423,21 @@ class PositionMonitor:
                                 results["errors"].append(f"Close {symbol}: {close_result}")
                         except Exception as e:
                             results["errors"].append(f"Close {symbol}: {e}")
+
+                    elif action in ("move_sl_breakeven", "tighten_sl"):
+                        new_sl = self._calculate_new_sl(action, side, entry_price, current_price)
+                        if new_sl:
+                            logger.info(f"[REAVALIACAO] {symbol} ({side}): {reason} - SL -> ${new_sl:.4f}")
+                            success = await self._move_stop_loss(
+                                executor, symbol, side, position_amt, new_sl
+                            )
+                            if success:
+                                results["sl_moved"] += 1
+                            else:
+                                results["errors"].append(f"Move SL {symbol}: failed")
+                        else:
+                            results["kept"] += 1
+
                     else:
                         results["kept"] += 1
                         logger.debug(f"[REAVALIACAO] {symbol}: RSI={rsi:.0f}, trend={trend}, PnL=${pnl:.2f} - Mantendo")
@@ -367,14 +451,16 @@ class PositionMonitor:
 
         if results["reevaluated"] > 0:
             logger.info(f"[REAVALIACAO] {results['reevaluated']} posicoes reavaliadas: "
-                  f"{results['closed_by_reversal']} fechadas, {results['kept']} mantidas")
+                  f"{results['closed_by_reversal']} fechadas, "
+                  f"{results['sl_moved']} SL movidos, "
+                  f"{results['kept']} mantidas")
 
         return results
 
     async def reevaluate_paper_positions(self, agent) -> Dict[str, Any]:
         """
-        Reavalia posições abertas em paper trading usando análise técnica.
-        Mesma lógica conservadora do modo real.
+        Reavalia posições abertas em paper trading.
+        Mesma lógica do modo real, com ajuste de SL no state.json.
         """
         from src.core.config import settings
 
@@ -384,12 +470,12 @@ class PositionMonitor:
         results = {
             "reevaluated": 0,
             "closed_by_reversal": 0,
+            "sl_moved": 0,
             "kept": 0,
             "errors": []
         }
 
         try:
-            # Carregar posições paper do state.json
             if not os.path.exists("portfolio/state.json"):
                 return results
 
@@ -400,6 +486,8 @@ class PositionMonitor:
             if not positions:
                 return results
 
+            state_modified = False
+
             for pos_key, pos in positions.items():
                 if pos.get("status") != "OPEN":
                     continue
@@ -409,26 +497,11 @@ class PositionMonitor:
                 if not symbol:
                     continue
 
-                # Normalizar side para LONG/SHORT
                 normalized_side = "LONG" if side in ("BUY", "LONG") else "SHORT"
-
-                # Calcular PnL atual
                 entry_price = pos.get("entry_price", 0)
                 position_size = pos.get("position_size", 0)
+                current_price = 0
                 pnl = 0
-                if entry_price > 0 and position_size > 0:
-                    try:
-                        from src.analysis.agno_tools import analyze_technical_indicators
-                        # Usar preço do ticker para calcular PnL
-                        tech_check = await analyze_technical_indicators(symbol)
-                        if tech_check and "indicators" in tech_check:
-                            current_price = tech_check["indicators"].get("close", entry_price)
-                            if normalized_side == "LONG":
-                                pnl = (current_price - entry_price) * position_size
-                            else:
-                                pnl = (entry_price - current_price) * position_size
-                    except Exception:
-                        pnl = 0
 
                 # Verificar intervalo mínimo de reavaliação
                 now = datetime.now(timezone.utc)
@@ -454,7 +527,7 @@ class PositionMonitor:
 
                 try:
                     from src.analysis.agno_tools import analyze_technical_indicators
-                    logger.info(f"[REAVALIACAO PAPER] Analisando {symbol} ({normalized_side}, PnL: ${pnl:.2f})...")
+                    logger.info(f"[REAVALIACAO PAPER] Analisando {symbol} ({normalized_side})...")
                     tech = await analyze_technical_indicators(symbol)
 
                     if not tech or "indicators" not in tech:
@@ -464,19 +537,28 @@ class PositionMonitor:
                     rsi = indicators.get("rsi", 50)
                     trend = indicators.get("trend", "neutral")
                     macd_hist = indicators.get("macd_histogram", 0)
+                    current_price = indicators.get("close", entry_price)
 
-                    should_close, reason, details = self._evaluate_reversal(
-                        normalized_side, trend, macd_hist, rsi, pnl
+                    # Calcular PnL
+                    if entry_price > 0 and position_size > 0 and current_price > 0:
+                        if normalized_side == "LONG":
+                            pnl = (current_price - entry_price) * position_size
+                        else:
+                            pnl = (entry_price - current_price) * position_size
+
+                    logger.info(f"[REAVALIACAO PAPER] {symbol} PnL: ${pnl:.2f}")
+
+                    action, reason, details = self._evaluate_reversal(
+                        normalized_side, trend, macd_hist, rsi, pnl, entry_price, current_price
                     )
 
-                    if should_close:
+                    if action == "close":
                         logger.warning(f"[REAVALIACAO PAPER] {symbol} ({normalized_side}): {reason} - FECHANDO!")
                         try:
-                            # Fechar via paper trading system
                             if hasattr(agent, 'paper_system') and agent.paper_system:
-                                current_price = await agent.paper_system.get_current_price(symbol)
-                                if current_price:
-                                    await agent.paper_system.close_position_manual(pos_key, current_price)
+                                cp = await agent.paper_system.get_current_price(symbol)
+                                if cp:
+                                    await agent.paper_system.close_position_manual(pos_key, cp)
                                     results["closed_by_reversal"] += 1
                                 else:
                                     results["errors"].append(f"Preço não disponível para {symbol}")
@@ -484,6 +566,28 @@ class PositionMonitor:
                                 results["errors"].append(f"Paper system não disponível para fechar {symbol}")
                         except Exception as e:
                             results["errors"].append(f"Close paper {symbol}: {e}")
+
+                    elif action in ("move_sl_breakeven", "tighten_sl"):
+                        new_sl = self._calculate_new_sl(action, normalized_side, entry_price, current_price)
+                        if new_sl:
+                            old_sl = pos.get("stop_loss", 0)
+                            # Só move se o novo SL é MELHOR que o atual
+                            sl_is_better = False
+                            if normalized_side == "LONG":
+                                sl_is_better = new_sl > old_sl if old_sl else True
+                            else:
+                                sl_is_better = new_sl < old_sl if old_sl else True
+
+                            if sl_is_better:
+                                pos["stop_loss"] = new_sl
+                                state_modified = True
+                                results["sl_moved"] += 1
+                                logger.info(f"[REAVALIACAO PAPER] {symbol}: {reason} - SL ${old_sl:.4f} -> ${new_sl:.4f}")
+                            else:
+                                results["kept"] += 1
+                                logger.debug(f"[REAVALIACAO PAPER] {symbol}: novo SL ${new_sl:.4f} não é melhor que atual ${old_sl:.4f}")
+                        else:
+                            results["kept"] += 1
                     else:
                         results["kept"] += 1
                         logger.debug(f"[REAVALIACAO PAPER] {symbol}: RSI={rsi:.0f}, trend={trend}, PnL=${pnl:.2f} - Mantendo")
@@ -492,12 +596,19 @@ class PositionMonitor:
                     logger.error(f"[REAVALIACAO PAPER] Erro ao reavaliar {symbol}: {e}")
                     results["errors"].append(f"Reeval paper {symbol}: {e}")
 
+            # Salvar state.json se houve mudanças no SL
+            if state_modified:
+                with open("portfolio/state.json", "w", encoding="utf-8") as f:
+                    json.dump(state, f, indent=2, default=str)
+
         except Exception as e:
             logger.exception(f"[REAVALIACAO PAPER] Erro geral: {e}")
 
         if results["reevaluated"] > 0:
             logger.info(f"[REAVALIACAO PAPER] {results['reevaluated']} posicoes reavaliadas: "
-                  f"{results['closed_by_reversal']} fechadas, {results['kept']} mantidas")
+                  f"{results['closed_by_reversal']} fechadas, "
+                  f"{results['sl_moved']} SL movidos, "
+                  f"{results['kept']} mantidas")
 
         return results
 
