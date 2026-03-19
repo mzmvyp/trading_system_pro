@@ -1399,6 +1399,13 @@ async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
             "conflicting_signals": [],  # Será preenchido depois
             "aggregated_scores": {},  # Será preenchido depois
 
+            # Multi-timeframe data para confluencia
+            "multi_timeframe": {
+                "bullish_count": confluence_bullish,
+                "bearish_count": confluence_bearish,
+                "timeframe_alignment": timeframe_alignment,
+            },
+
             # Dados brutos para calculo tecnico de SL/TP (nao enviados ao LLM)
             "_raw_indicators": {
                 "ema_20": ema_20,
