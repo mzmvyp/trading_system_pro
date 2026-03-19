@@ -5,7 +5,13 @@ Position Monitor - Monitoramento e Reavaliação de Posições Abertas
 Verifica saúde das posições em tempo real:
 1. Garante que toda posição tem SL ativo na Binance
 2. Circuit breaker: fecha forçado se ROI < threshold
-3. Reavalia posição com análise técnica e fecha se sinal inverteu
+3. Reavalia posição — SÓ fecha em reversão COMPLETA confirmada
+
+FILOSOFIA DE REAVALIAÇÃO:
+- O Stop Loss é a proteção principal. A reavaliação NÃO substitui o SL.
+- Só fecha posição por reavaliação se TODOS os indicadores confirmarem reversão.
+- Posição em lucro NUNCA é fechada pela reavaliação (deixar TP/trailing funcionar).
+- Indicadores que CONFIRMAM a posição (ex: RSI oversold para SHORT) não contam contra.
 """
 
 import json
@@ -23,9 +29,6 @@ class PositionMonitor:
 
     # Circuit breaker: fecha posição se ROI margem atingir esse limite
     MAX_LOSS_ROI_PERCENT = -15.0  # -15% do ROI na margem = fechar
-
-    # Reavaliação: tempo mínimo aberto antes de reavaliar (horas)
-    MIN_HOURS_BEFORE_REEVAL = 1.0
 
     def __init__(self):
         self._last_reeval: Dict[str, datetime] = {}
@@ -151,7 +154,6 @@ class PositionMonitor:
                                 if isinstance(sl_result, dict) and "error" not in sl_result:
                                     results["sl_replaced"] += 1
                                     logger.info(f"[SL RECOLOCADO] {symbol}: SL em ${sl_price:.4f}")
-                                    logger.info(f"[SL RECOLOCADO] {symbol}: SL em ${sl_price:.4f}")
                                 else:
                                     logger.error(f"[SL ERRO] {symbol}: {sl_result}")
                                     results["errors"].append(f"SL replace {symbol}: {sl_result}")
@@ -195,17 +197,87 @@ class PositionMonitor:
 
         return results
 
+    def _evaluate_reversal(self, side: str, trend: str, macd_hist: float, rsi: float, pnl: float) -> tuple:
+        """
+        Avalia se há uma reversão COMPLETA contra a posição.
+
+        Filosofia:
+        - Posição em LUCRO: nunca fecha (deixar TP/trailing funcionar)
+        - Posição em PREJUÍZO: só fecha se TODOS os indicadores confirmam reversão
+        - Indicadores individuais flutuam naturalmente; um MACD levemente positivo
+          não significa que o short falhou. Precisa de TUDO alinhado contra.
+
+        Returns:
+            (should_close: bool, reason: str, details: list)
+        """
+        against_details = []
+
+        # ============================================================
+        # REGRA 1: Posição em lucro = NUNCA fechar por reavaliação
+        # O Take Profit e trailing stop cuidam disso.
+        # ============================================================
+        if pnl >= 0:
+            return False, "", [f"PnL positivo (${pnl:.2f}) - confiando no TP/trailing"]
+
+        # ============================================================
+        # REGRA 2: Posição em prejuízo — só fecha com REVERSÃO COMPLETA
+        # TODOS os 3 indicadores devem confirmar reversão:
+        #   - Trend invertido (era favorável, agora contra)
+        #   - MACD histograma contra a posição
+        #   - RSI contra a posição (acima de 55 para short, abaixo de 45 para long)
+        # ============================================================
+        trend_against = False
+        macd_against = False
+        rsi_against = False
+
+        if side == "LONG":
+            if "bearish" in trend:
+                trend_against = True
+                against_details.append(f"trend={trend}")
+            if macd_hist < 0:
+                macd_against = True
+                against_details.append(f"MACD={macd_hist:.4f}")
+            if rsi < 40:
+                rsi_against = True
+                against_details.append(f"RSI={rsi:.0f}")
+
+        else:  # SHORT
+            if "bullish" in trend:
+                trend_against = True
+                against_details.append(f"trend={trend}")
+            if macd_hist > 0:
+                macd_against = True
+                against_details.append(f"MACD={macd_hist:.4f}")
+            if rsi > 60:
+                rsi_against = True
+                against_details.append(f"RSI={rsi:.0f}")
+
+        # Precisam TODOS os 3 para confirmar reversão completa
+        all_against = trend_against and macd_against and rsi_against
+
+        if all_against:
+            reason = f"REVERSAO COMPLETA {side} (PnL: ${pnl:.2f}): {', '.join(against_details)}"
+            return True, reason, against_details
+
+        # Log de aviso quando há sinais parciais (mas NÃO fecha)
+        if against_details:
+            partial_count = sum([trend_against, macd_against, rsi_against])
+            logger.info(
+                f"[REAVALIACAO] {side}: {partial_count}/3 sinais contra "
+                f"({', '.join(against_details)}) - MANTENDO (precisa 3/3 para fechar)"
+            )
+
+        return False, "", against_details
+
     async def reevaluate_positions(self, executor, agent) -> Dict[str, Any]:
         """
         Reavalia posições abertas usando análise técnica.
-        Fecha posições onde o sinal inverteu.
 
-        Args:
-            executor: BinanceFuturesExecutor
-            agent: AgnoTradingAgent (para gerar nova análise)
-
-        Returns:
-            Dict com resultado da reavaliação
+        NOVA LÓGICA (conservadora):
+        - Só fecha se TODOS os indicadores confirmam reversão (trend + MACD + RSI)
+        - Nunca fecha posição em lucro (TP/trailing cuida disso)
+        - Intervalo mínimo de 2h entre reavaliações
+        - Tempo mínimo de 2h antes da primeira reavaliação
         """
         from src.core.config import settings
 
@@ -227,6 +299,7 @@ class PositionMonitor:
             for pos in positions:
                 symbol = pos.get("symbol", "")
                 side = pos.get("side", "LONG")
+                pnl = pos.get("unrealized_pnl", 0)
                 if not symbol:
                     continue
 
@@ -256,7 +329,7 @@ class PositionMonitor:
                 try:
                     # Análise técnica rápida (sem chamar DeepSeek, só indicadores)
                     from src.analysis.agno_tools import analyze_technical_indicators
-                    logger.info(f"[REAVALIACAO] Analisando {symbol} ({side})...")
+                    logger.info(f"[REAVALIACAO] Analisando {symbol} ({side}, PnL: ${pnl:.2f})...")
                     tech = await analyze_technical_indicators(symbol)
 
                     if not tech or "indicators" not in tech:
@@ -267,53 +340,12 @@ class PositionMonitor:
                     trend = indicators.get("trend", "neutral")
                     macd_hist = indicators.get("macd_histogram", 0)
 
-                    should_close = False
-                    reason = ""
-                    # Contar sinais contra a posicao
-                    against_signals = 0
-                    against_details = []
-
-                    if side == "LONG":
-                        if "bearish" in trend:
-                            against_signals += 2
-                            against_details.append(f"trend={trend}")
-                        if macd_hist < 0:
-                            against_signals += 1
-                            against_details.append(f"MACD={macd_hist:.4f}")
-                        if rsi < 35:
-                            against_signals += 1
-                            against_details.append(f"RSI caindo={rsi:.0f}")
-
-                        # Fechar se 2+ sinais contra (antes exigia 3 AND)
-                        if against_signals >= 2:
-                            should_close = True
-                            reason = f"Sinais contra LONG ({against_signals}): {', '.join(against_details)}"
-                        elif rsi > 80:
-                            should_close = True
-                            reason = f"RSI extremo sobrecomprado: {rsi:.0f}"
-
-                    else:  # SHORT
-                        if "bullish" in trend:
-                            against_signals += 2
-                            against_details.append(f"trend={trend}")
-                        if macd_hist > 0:
-                            against_signals += 1
-                            against_details.append(f"MACD={macd_hist:.4f}")
-                        if rsi > 65:
-                            against_signals += 1
-                            against_details.append(f"RSI subindo={rsi:.0f}")
-
-                        # Fechar se 2+ sinais contra
-                        if against_signals >= 2:
-                            should_close = True
-                            reason = f"Sinais contra SHORT ({against_signals}): {', '.join(against_details)}"
-                        elif rsi < 20:
-                            should_close = True
-                            reason = f"RSI extremo sobrevendido: {rsi:.0f}"
+                    should_close, reason, details = self._evaluate_reversal(
+                        side, trend, macd_hist, rsi, pnl
+                    )
 
                     if should_close:
                         logger.warning(f"[REAVALIACAO] {symbol} ({side}): {reason} - FECHANDO!")
-                        logger.info(f"[REAVALIACAO] {symbol}: {reason} - FECHANDO!")
                         try:
                             close_result = await executor.close_position(symbol)
                             if isinstance(close_result, dict) and "error" not in close_result:
@@ -324,7 +356,7 @@ class PositionMonitor:
                             results["errors"].append(f"Close {symbol}: {e}")
                     else:
                         results["kept"] += 1
-                        logger.debug(f"[REAVALIACAO] {symbol}: RSI={rsi:.0f}, trend={trend} - Mantendo")
+                        logger.debug(f"[REAVALIACAO] {symbol}: RSI={rsi:.0f}, trend={trend}, PnL=${pnl:.2f} - Mantendo")
 
                 except Exception as e:
                     logger.error(f"[REAVALIACAO] Erro ao reavaliar {symbol}: {e}")
@@ -342,13 +374,7 @@ class PositionMonitor:
     async def reevaluate_paper_positions(self, agent) -> Dict[str, Any]:
         """
         Reavalia posições abertas em paper trading usando análise técnica.
-        Fecha posições onde o sinal inverteu.
-
-        Args:
-            agent: AgnoTradingAgent (para acesso ao paper trading system)
-
-        Returns:
-            Dict com resultado da reavaliação
+        Mesma lógica conservadora do modo real.
         """
         from src.core.config import settings
 
@@ -386,6 +412,24 @@ class PositionMonitor:
                 # Normalizar side para LONG/SHORT
                 normalized_side = "LONG" if side in ("BUY", "LONG") else "SHORT"
 
+                # Calcular PnL atual
+                entry_price = pos.get("entry_price", 0)
+                position_size = pos.get("position_size", 0)
+                pnl = 0
+                if entry_price > 0 and position_size > 0:
+                    try:
+                        from src.analysis.agno_tools import analyze_technical_indicators
+                        # Usar preço do ticker para calcular PnL
+                        tech_check = await analyze_technical_indicators(symbol)
+                        if tech_check and "indicators" in tech_check:
+                            current_price = tech_check["indicators"].get("close", entry_price)
+                            if normalized_side == "LONG":
+                                pnl = (current_price - entry_price) * position_size
+                            else:
+                                pnl = (entry_price - current_price) * position_size
+                    except Exception:
+                        pnl = 0
+
                 # Verificar intervalo mínimo de reavaliação
                 now = datetime.now(timezone.utc)
                 last_reeval = self._last_reeval.get(symbol)
@@ -410,7 +454,7 @@ class PositionMonitor:
 
                 try:
                     from src.analysis.agno_tools import analyze_technical_indicators
-                    logger.info(f"[REAVALIACAO PAPER] Analisando {symbol} ({normalized_side})...")
+                    logger.info(f"[REAVALIACAO PAPER] Analisando {symbol} ({normalized_side}, PnL: ${pnl:.2f})...")
                     tech = await analyze_technical_indicators(symbol)
 
                     if not tech or "indicators" not in tech:
@@ -421,50 +465,12 @@ class PositionMonitor:
                     trend = indicators.get("trend", "neutral")
                     macd_hist = indicators.get("macd_histogram", 0)
 
-                    should_close = False
-                    reason = ""
-                    against_signals = 0
-                    against_details = []
-
-                    if normalized_side == "LONG":
-                        if "bearish" in trend:
-                            against_signals += 2
-                            against_details.append(f"trend={trend}")
-                        if macd_hist < 0:
-                            against_signals += 1
-                            against_details.append(f"MACD={macd_hist:.4f}")
-                        if rsi < 35:
-                            against_signals += 1
-                            against_details.append(f"RSI caindo={rsi:.0f}")
-
-                        if against_signals >= 2:
-                            should_close = True
-                            reason = f"Sinais contra LONG ({against_signals}): {', '.join(against_details)}"
-                        elif rsi > 80:
-                            should_close = True
-                            reason = f"RSI extremo sobrecomprado: {rsi:.0f}"
-
-                    else:  # SHORT
-                        if "bullish" in trend:
-                            against_signals += 2
-                            against_details.append(f"trend={trend}")
-                        if macd_hist > 0:
-                            against_signals += 1
-                            against_details.append(f"MACD={macd_hist:.4f}")
-                        if rsi > 65:
-                            against_signals += 1
-                            against_details.append(f"RSI subindo={rsi:.0f}")
-
-                        if against_signals >= 2:
-                            should_close = True
-                            reason = f"Sinais contra SHORT ({against_signals}): {', '.join(against_details)}"
-                        elif rsi < 20:
-                            should_close = True
-                            reason = f"RSI extremo sobrevendido: {rsi:.0f}"
+                    should_close, reason, details = self._evaluate_reversal(
+                        normalized_side, trend, macd_hist, rsi, pnl
+                    )
 
                     if should_close:
                         logger.warning(f"[REAVALIACAO PAPER] {symbol} ({normalized_side}): {reason} - FECHANDO!")
-                        logger.info(f"[REAVALIACAO PAPER] {symbol}: {reason} - FECHANDO!")
                         try:
                             # Fechar via paper trading system
                             if hasattr(agent, 'paper_system') and agent.paper_system:
@@ -480,7 +486,7 @@ class PositionMonitor:
                             results["errors"].append(f"Close paper {symbol}: {e}")
                     else:
                         results["kept"] += 1
-                        logger.debug(f"[REAVALIACAO PAPER] {symbol}: RSI={rsi:.0f}, trend={trend} - Mantendo")
+                        logger.debug(f"[REAVALIACAO PAPER] {symbol}: RSI={rsi:.0f}, trend={trend}, PnL=${pnl:.2f} - Mantendo")
 
                 except Exception as e:
                     logger.error(f"[REAVALIACAO PAPER] Erro ao reavaliar {symbol}: {e}")
