@@ -318,6 +318,17 @@ class RealPaperTradingSystem:
                     position_size = position_value_fallback / entry_price
                     logger.warning(f"[POSICAO FALLBACK] Sem stop loss valido, usando 1% do capital: {position_size:.6f} unidades")
 
+            # Aplicar valor minimo de posicao configurado
+            min_position_value = getattr(settings, 'min_position_value_usdt', 100.0)
+            position_value_check = position_size * entry_price
+            if position_value_check < min_position_value:
+                new_position_size = min_position_value / entry_price
+                logger.info(
+                    f"[SIZING] Posicao ${position_value_check:.2f} abaixo do minimo ${min_position_value:.2f}. "
+                    f"Escalando: {position_size:.6f} -> {new_position_size:.6f} unidades"
+                )
+                position_size = new_position_size
+
             # Calcular valor da posição (apenas para tracking, não deduz do saldo)
             position_value = position_size * entry_price
 

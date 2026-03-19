@@ -680,6 +680,26 @@ class BinanceFuturesExecutor:
                     position_size = position_value / entry_price
                     logger.warning(f"[POSICAO FALLBACK] Sem stop loss valido, usando 1% do saldo: {position_size:.6f} unidades")
 
+            # Aplicar valor minimo de posicao configurado
+            min_position_value = getattr(settings, 'min_position_value_usdt', 100.0)
+            position_value_check = position_size * entry_price
+            if position_value_check < min_position_value:
+                # Escalar posicao para atingir o minimo
+                new_position_size = min_position_value / entry_price
+                new_margin = min_position_value / 20  # ~20x leverage estimado
+                if new_margin <= available:
+                    logger.info(
+                        f"[SIZING] Posicao ${position_value_check:.2f} abaixo do minimo ${min_position_value:.2f}. "
+                        f"Escalando: {position_size:.4f} -> {new_position_size:.4f} unidades"
+                    )
+                    position_size = new_position_size
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Saldo insuficiente para posicao minima de ${min_position_value:.2f}. "
+                                 f"Margem estimada: ${new_margin:.2f}, Disponivel: ${available:.2f}"
+                    }
+
             # Arredondar para a precisão correta
             position_size = self._round_quantity(position_size, symbol_info.get("quantity_precision", 3))
 
@@ -704,7 +724,13 @@ class BinanceFuturesExecutor:
             # Para que a margem isolada seja apenas o valor do risco (stop loss)
             # alavancagem = valor_posicao / margem_desejada
             position_value = position_size * entry_price
-            desired_margin = risk_amount * 1.2  # Margem = risco + 20% buffer
+            # Margem desejada: se posicao foi escalada, usar ~5% do valor como margem
+            # Caso contrario, usar risco original + buffer
+            if position_value > risk_amount * 5:
+                # Posicao foi escalada acima do risco - usar 5-10% como margem
+                desired_margin = max(position_value * 0.05, risk_amount * 1.2)
+            else:
+                desired_margin = risk_amount * 1.2  # Margem = risco + 20% buffer
 
             if desired_margin > 0:
                 calculated_leverage = int(position_value / desired_margin)

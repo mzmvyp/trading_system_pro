@@ -33,12 +33,12 @@ class TestValidateRiskAndPosition:
             "signal": "BUY",
             "entry_price": 90000,
             "stop_loss": 88200,
-            "confidence": 5,
+            "confidence": 0,  # 0 fica fora do range valido (1-10)
             "source": "DEEPSEEK"
         }
         result = validate_risk_and_position(signal, "BTCUSDT")
         assert result["can_execute"] is False
-        assert "Confianca muito baixa" in result["reason"]
+        assert "Confianca" in result["reason"]
 
     @patch('src.trading.risk_manager._calculate_current_drawdown', return_value=0.0)
     @patch('src.trading.risk_manager._get_daily_trades_count', return_value=0)

@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     # Exemplo: 2% significa que se o stop loss for atingido, voce perde 2% do capital
     risk_percent_per_trade: float = 2.0  # 2% do capital arriscado por trade (reduzido de 5%)
 
+    # Valor minimo de posicao (nocional) em USDT
+    # Evita abrir posicoes microscopicas que nao fazem sentido operacionalmente
+    # Se o sizing por risco resultar em valor menor, escala ate o minimo
+    min_position_value_usdt: float = 100.0  # Minimo $100 de valor nocional
+
     # Como calcular o tamanho da posicao:
     # 1. Risco em $ = capital * (risk_percent_per_trade / 100)
     # 2. Distancia do stop = |entry_price - stop_loss|
@@ -118,7 +123,7 @@ class Settings(BaseSettings):
     ml_validation_threshold: float = 0.65
     # Se True, só executa sinais que passam na validação ML
     # Se False, apenas loga a validação mas executa de qualquer forma
-    ml_validation_required: bool = True
+    ml_validation_required: bool = False  # Desabilitado: accuracy 58.8% < 60% minimo, ML so observa
 
     # ========================================
     # ONLINE LEARNING - RETREINAMENTO AUTOMÁTICO
