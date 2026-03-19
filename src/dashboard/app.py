@@ -71,6 +71,70 @@ def binance_signature(params: dict, secret: str) -> str:
     ).hexdigest()
     return signature
 
+# Cache do offset de timestamp do servidor Binance
+_binance_time_offset = None
+
+def get_synced_timestamp() -> int:
+    """Retorna timestamp sincronizado com o servidor Binance para evitar erro -1021"""
+    global _binance_time_offset
+
+    if _binance_time_offset is None:
+        try:
+            config = get_binance_config()
+            resp = requests.get(f"{config['base_url']}/fapi/v1/time", timeout=5)
+            if resp.status_code == 200:
+                server_time = resp.json().get("serverTime", 0)
+                local_time = int(time.time() * 1000)
+                _binance_time_offset = server_time - local_time
+            else:
+                _binance_time_offset = -1000  # fallback: subtrair 1s
+        except Exception:
+            _binance_time_offset = -1000
+
+    return int(time.time() * 1000) + _binance_time_offset
+
+def reset_binance_time_sync():
+    """Reseta o offset para forçar re-sincronização"""
+    global _binance_time_offset
+    _binance_time_offset = None
+
+def _binance_request(method: str, url: str, params: dict, config: dict, max_retries: int = 2):
+    """Faz request à Binance com retry automático em caso de erro -1021 (timestamp)"""
+    headers = {"X-MBX-APIKEY": config["api_key"]}
+
+    for attempt in range(max_retries + 1):
+        # Atualizar timestamp e assinatura a cada tentativa
+        params["timestamp"] = get_synced_timestamp()
+        params["recvWindow"] = 10000
+        # Remover assinatura anterior antes de recalcular
+        params.pop("signature", None)
+        params["signature"] = binance_signature(params, config["api_secret"])
+
+        if method == "GET":
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+        elif method == "POST":
+            response = requests.post(url, params=params, headers=headers, timeout=10)
+        elif method == "DELETE":
+            response = requests.delete(url, params=params, headers=headers, timeout=10)
+        else:
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+
+        if response.status_code == 200:
+            return response
+
+        # Verificar se é erro de timestamp
+        try:
+            err = response.json()
+            if err.get("code") == -1021 and attempt < max_retries:
+                reset_binance_time_sync()  # Forçar re-sync
+                continue
+        except Exception:
+            pass
+
+        return response  # Retornar resposta com erro se não for -1021
+
+    return response
+
 @st.cache_data(ttl=10)
 def get_binance_positions():
     """Obtém posições abertas na Binance Futures"""
@@ -80,17 +144,11 @@ def get_binance_positions():
         return {"error": "API keys não configuradas", "positions": []}
 
     try:
-        params = {"timestamp": int(time.time() * 1000)}
-        params["signature"] = binance_signature(params, config["api_secret"])
-
-        headers = {"X-MBX-APIKEY": config["api_key"]}
         url = f"{config['base_url']}/fapi/v2/positionRisk"
-
-        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response = _binance_request("GET", url, {}, config)
 
         if response.status_code == 200:
             all_positions = response.json()
-            # Filtrar apenas posições com quantidade != 0
             open_positions = [p for p in all_positions if float(p.get("positionAmt", 0)) != 0]
             return {"positions": open_positions, "mode": config["mode"]}
         else:
@@ -107,13 +165,8 @@ def get_binance_open_orders():
         return {"error": "API keys não configuradas", "orders": []}
 
     try:
-        params = {"timestamp": int(time.time() * 1000)}
-        params["signature"] = binance_signature(params, config["api_secret"])
-
-        headers = {"X-MBX-APIKEY": config["api_key"]}
         url = f"{config['base_url']}/fapi/v1/openOrders"
-
-        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response = _binance_request("GET", url, {}, config)
 
         if response.status_code == 200:
             return {"orders": response.json(), "mode": config["mode"]}
@@ -163,14 +216,9 @@ def close_binance_position(symbol: str) -> dict:
             "type": "MARKET",
             "quantity": quantity,
             "reduceOnly": "true",
-            "timestamp": int(time.time() * 1000)
         }
-        params["signature"] = binance_signature(params, config["api_secret"])
-
-        headers = {"X-MBX-APIKEY": config["api_key"]}
         url = f"{config['base_url']}/fapi/v1/order"
-
-        response = requests.post(url, params=params, headers=headers, timeout=10)
+        response = _binance_request("POST", url, params, config)
 
         if response.status_code == 200:
             order = response.json()
@@ -194,16 +242,9 @@ def cancel_binance_orders(symbol: str) -> dict:
         return {"success": False, "error": "API keys não configuradas"}
 
     try:
-        params = {
-            "symbol": symbol,
-            "timestamp": int(time.time() * 1000)
-        }
-        params["signature"] = binance_signature(params, config["api_secret"])
-
-        headers = {"X-MBX-APIKEY": config["api_key"]}
+        params = {"symbol": symbol}
         url = f"{config['base_url']}/fapi/v1/allOpenOrders"
-
-        response = requests.delete(url, params=params, headers=headers, timeout=10)
+        response = _binance_request("DELETE", url, params, config)
 
         if response.status_code == 200:
             return {"success": True, "canceled": response.json().get("code", 0) == 200}
@@ -222,13 +263,8 @@ def get_binance_balance():
         return {"error": "API keys não configuradas"}
 
     try:
-        params = {"timestamp": int(time.time() * 1000)}
-        params["signature"] = binance_signature(params, config["api_secret"])
-
-        headers = {"X-MBX-APIKEY": config["api_key"]}
         url = f"{config['base_url']}/fapi/v2/balance"
-
-        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response = _binance_request("GET", url, {}, config)
 
         if response.status_code == 200:
             balances = response.json()
