@@ -149,6 +149,39 @@ class AgnoTradingAgent:
             logger.warning(f"[ACCURACY] Erro ao obter acurácias: {e}")
             return {"ml_accuracy": None, "lstm_accuracy": None}
 
+    def _check_ml_prediction_bias(self) -> bool:
+        """
+        Verifica se o modelo ML está viciado (predizendo >85% como mesma classe).
+        Um modelo assim não aprendeu padrões úteis — está apenas chutando.
+
+        Returns:
+            True se modelo está viciado, False se distribuição é razoável
+        """
+        try:
+            import json as _json
+            pred_log_path = os.path.join("ml_models", "prediction_log.json")
+            if not os.path.exists(pred_log_path):
+                return False  # Sem dados, não podemos afirmar que é viciado
+
+            with open(pred_log_path, 'r') as f:
+                predictions = _json.load(f)
+
+            # Considerar apenas as últimas 50 predições (janela recente)
+            recent = predictions[-50:]
+            if len(recent) < 10:
+                return False  # Poucos dados para concluir
+
+            skip_count = sum(1 for p in recent if p.get('ml_prediction', 0) == 0)
+            skip_ratio = skip_count / len(recent)
+
+            # Se >85% é mesma classe (SKIP ou EXECUTE), modelo está viciado
+            if skip_ratio > 0.85 or skip_ratio < 0.15:
+                return True
+
+            return False
+        except Exception:
+            return False  # Na dúvida, não bloquear
+
     def _validate_with_ml_model(self, signal: Dict[str, Any]) -> Dict[str, Any]:
         """
         Valida um sinal usando o modelo ML treinado.
@@ -213,7 +246,19 @@ class AgnoTradingAgent:
             if ml_required:
                 accuracies = self._get_model_accuracies()
                 ml_acc = accuracies.get("ml_accuracy")
-                if ml_acc is not None and ml_acc >= MIN_ACCURACY_TO_BLOCK:
+
+                # Verificar se modelo está "viciado" (predizendo quase tudo
+                # como mesma classe). Um modelo que prediz >85% SKIP ou >85%
+                # EXECUTE não aprendeu nada útil — está apenas chutando.
+                ml_is_biased = self._check_ml_prediction_bias()
+
+                if ml_is_biased:
+                    skip_signal = False
+                    logger.info(
+                        f"[ML] Modelo viciado (>85% mesma classe) — "
+                        f"ML não pode bloquear sinais até ser retreinado"
+                    )
+                elif ml_acc is not None and ml_acc >= MIN_ACCURACY_TO_BLOCK:
                     skip_signal = not has_confluence
                 else:
                     skip_signal = False
@@ -1091,8 +1136,13 @@ Responda APENAS com JSON:
 
                 # ML em modo OBSERVADOR: registra predicao mas NAO bloqueia sinais
                 ml_opinion = 'SUCESSO' if ml_pred == 1 else 'FALHA'
+                from src.core.config import settings as _settings
+                _ml_thr = getattr(_settings, 'ml_validation_threshold', 0.65)
                 if ml_validation.get("has_confluence"):
                     logger.info(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML concorda (prob={ml_prob:.1%}, predicao={ml_opinion})")
+                elif ml_pred == 1:
+                    # ML prediz sucesso mas prob < threshold — confiança baixa
+                    logger.info(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML concorda fraco (prob={ml_prob:.1%} < threshold {_ml_thr:.0%}, predicao={ml_opinion})")
                 else:
                     logger.info(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML discorda (prob={ml_prob:.1%}, predicao={ml_opinion})")
 
