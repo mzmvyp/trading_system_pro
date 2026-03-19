@@ -280,9 +280,6 @@ class PositionMonitor:
                         if macd_hist < 0:
                             against_signals += 1
                             against_details.append(f"MACD={macd_hist:.4f}")
-                        if rsi > 70:
-                            against_signals += 1
-                            against_details.append(f"RSI sobrecomprado={rsi:.0f}")
                         if rsi < 35:
                             against_signals += 1
                             against_details.append(f"RSI caindo={rsi:.0f}")
@@ -302,9 +299,6 @@ class PositionMonitor:
                         if macd_hist > 0:
                             against_signals += 1
                             against_details.append(f"MACD={macd_hist:.4f}")
-                        if rsi < 30:
-                            against_signals += 1
-                            against_details.append(f"RSI sobrevendido={rsi:.0f}")
                         if rsi > 65:
                             against_signals += 1
                             against_details.append(f"RSI subindo={rsi:.0f}")
@@ -439,9 +433,6 @@ class PositionMonitor:
                         if macd_hist < 0:
                             against_signals += 1
                             against_details.append(f"MACD={macd_hist:.4f}")
-                        if rsi > 70:
-                            against_signals += 1
-                            against_details.append(f"RSI sobrecomprado={rsi:.0f}")
                         if rsi < 35:
                             against_signals += 1
                             against_details.append(f"RSI caindo={rsi:.0f}")
@@ -460,9 +451,6 @@ class PositionMonitor:
                         if macd_hist > 0:
                             against_signals += 1
                             against_details.append(f"MACD={macd_hist:.4f}")
-                        if rsi < 30:
-                            against_signals += 1
-                            against_details.append(f"RSI sobrevendido={rsi:.0f}")
                         if rsi > 65:
                             against_signals += 1
                             against_details.append(f"RSI subindo={rsi:.0f}")

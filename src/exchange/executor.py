@@ -708,8 +708,9 @@ class BinanceFuturesExecutor:
 
             if desired_margin > 0:
                 calculated_leverage = int(position_value / desired_margin)
-                # Limitar entre 1x e 10x (conservador para preservar capital)
-                calculated_leverage = max(1, min(calculated_leverage, 10))
+                # Limitar entre 1x e 50x — margem isolada protege contra liquidação
+                # e o stop loss é a proteção real. Cap alto permite margem ≈ risco.
+                calculated_leverage = max(1, min(calculated_leverage, 50))
             else:
                 calculated_leverage = self.default_leverage
 
