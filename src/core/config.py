@@ -104,8 +104,8 @@ class Settings(BaseSettings):
     # REAVALIAÇÃO DE SINAIS ATIVOS
     # ========================================
     reevaluation_enabled: bool = True
-    reevaluation_interval_hours: float = 0.5  # Reavaliar a cada 30 min
-    reevaluation_min_time_open_hours: float = 0.25  # Reavaliar apos 15 min aberta
+    reevaluation_interval_hours: float = 2.0  # Reavaliar a cada 2h (era 30 min — muito agressivo)
+    reevaluation_min_time_open_hours: float = 2.0  # Só reavaliar após 2h aberta (era 15 min)
     reevaluation_min_confidence: int = 7  # Confiança mínima para agir na reavaliação
 
     # ========================================
