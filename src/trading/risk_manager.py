@@ -273,6 +273,7 @@ def validate_risk_and_position(
 
         logger.info(f"[P&L MODE] Tamanho posição: {position_size:.6f} unidades, Valor: ${position_value:.2f}, Risco: ${max_risk_amount:.2f}")
 
+        daily_trades = _get_daily_trades_count()
         return {
             "can_execute": True,
             "recommended_position_size": position_size,

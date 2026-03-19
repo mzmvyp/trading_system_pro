@@ -347,7 +347,7 @@ class AgnoTradingAgent:
             details.append(f"Trend contra ({primary_trend})")
 
         # 4. ADX trend strength
-        adx = trend_data.get("adx", 0)
+        adx = trend_data.get("trend_strength_adx", trend_data.get("adx", 0))
         if adx >= adx_threshold:
             votes_for += 1
             details.append(f"ADX strong trend ({adx:.1f} >= {adx_threshold})")
@@ -363,11 +363,16 @@ class AgnoTradingAgent:
             votes_for += 1
             details.append(f"BB near upper band ({bb_pos:.2f})")
 
-        # 6. Volume surge
-        vol_ratio = volume_flow.get("volume_ratio", 1.0)
-        if vol_ratio >= volume_threshold:
+        # 6. Orderbook imbalance alignment
+        ob_imbalance = volume_flow.get("orderbook_imbalance", 0)
+        ob_bias = volume_flow.get("orderbook_bias", "neutral")
+        # Valores possíveis: strong_buy_pressure, buy_pressure, neutral, sell_pressure, strong_sell_pressure
+        if (is_buy and "buy" in ob_bias) or (not is_buy and "sell" in ob_bias):
             votes_for += 1
-            details.append(f"Volume surge ({vol_ratio:.2f}x >= {volume_threshold}x)")
+            details.append(f"Orderbook aligned ({ob_bias}, imb={ob_imbalance:.2f})")
+        elif (is_buy and "sell" in ob_bias) or (not is_buy and "buy" in ob_bias):
+            votes_against += 1
+            details.append(f"Orderbook contra ({ob_bias}, imb={ob_imbalance:.2f})")
 
         # 7. Multi-timeframe alignment
         bullish_count = mtf.get("bullish_count", 0)
@@ -386,13 +391,13 @@ class AgnoTradingAgent:
             details.append(f"MTF contra SELL ({bullish_count}/5 bullish)")
 
         # 8. CVD (Cumulative Volume Delta) alignment
-        cvd = volume_flow.get("cvd", 0)
-        if (is_buy and cvd > 0) or (not is_buy and cvd < 0):
+        cvd_direction = volume_flow.get("cvd_direction", "neutral")
+        if (is_buy and cvd_direction == "positive") or (not is_buy and cvd_direction == "negative"):
             votes_for += 1
-            details.append(f"CVD aligned ({cvd:.2f})")
-        elif (is_buy and cvd < 0) or (not is_buy and cvd > 0):
+            details.append(f"CVD aligned ({cvd_direction})")
+        elif (is_buy and cvd_direction == "negative") or (not is_buy and cvd_direction == "positive"):
             votes_against += 1
-            details.append(f"CVD contra ({cvd:.2f})")
+            details.append(f"CVD contra ({cvd_direction})")
 
         total_votes = votes_for + votes_against
         score = votes_for / max(total_votes, 1)
@@ -751,11 +756,13 @@ Responda APENAS com JSON:
 
                     agno_signal["rsi"] = indicators.get("rsi", {}).get("value", 50)
                     agno_signal["macd_histogram"] = indicators.get("macd", {}).get("histogram", 0)
-                    agno_signal["adx"] = trend_analysis.get("adx", 25)
-                    agno_signal["atr"] = analysis_data.get("volatility", {}).get("atr", 0)
+                    agno_signal["adx"] = trend_analysis.get("trend_strength_adx", 25)
+                    agno_signal["atr"] = analysis_data.get("volatility", {}).get("atr_value", 0)
                     agno_signal["bb_position"] = indicators.get("bollinger", {}).get("position", 0.5)
                     agno_signal["trend"] = trend_analysis.get("primary_trend", "neutral")
-                    agno_signal["cvd"] = volume_flow.get("cvd", 0)
+                    agno_signal["cvd_direction"] = volume_flow.get("cvd_direction", "neutral")
+                    # CVD numérico para ML model (derivado da direção se raw não disponível)
+                    agno_signal["cvd"] = 1.0 if volume_flow.get("cvd_direction") == "positive" else -1.0 if volume_flow.get("cvd_direction") == "negative" else 0.0
                     agno_signal["orderbook_imbalance"] = volume_flow.get("orderbook_imbalance", 0.5)
                     agno_signal["bullish_tf_count"] = analysis_data.get("multi_timeframe", {}).get("bullish_count", 0)
                     agno_signal["bearish_tf_count"] = analysis_data.get("multi_timeframe", {}).get("bearish_count", 0)

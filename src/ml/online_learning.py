@@ -450,6 +450,13 @@ class OnlineLearningManager:
             should_save = False
             improvement = 0.0
 
+            # Se temos dados reais suficientes (>= 100 amostras), SEMPRE salvar
+            # o modelo novo. O modelo antigo pode ter sido treinado com dados
+            # sintéticos/bootstrap com métricas infladas (ex: 86.9% accuracy mas
+            # classificando 100% como SKIP em dados reais). O modelo treinado com
+            # dados reais é sempre preferível, mesmo com F1 menor na validação.
+            buffer_has_enough_real_data = len(self.buffer) >= 100
+
             if has_current_model:
                 current_model = current_validator.models.get(current_validator.best_model_name)
                 if current_model:
@@ -461,9 +468,17 @@ class OnlineLearningManager:
                         improvement = new_f1 - current_f1
                         print(f"[OL] Modelo atual F1: {current_f1:.3f} | Novo F1: {new_f1:.3f} | Melhoria: {improvement:+.3f}")
 
-                        should_save = improvement >= CONFIG["min_improvement"] or force_save
-                        if force_save and improvement < 0:
-                            print("[OL] Forcar Retreino: salvando novo modelo mesmo sem melhoria (force_save=True)")
+                        if buffer_has_enough_real_data:
+                            # Com dados reais suficientes, sempre substituir o modelo.
+                            # Modelo novo reflete a realidade atual do mercado.
+                            should_save = True
+                            print(f"[OL] Buffer com {len(self.buffer)} amostras reais — substituindo modelo (dados reais > guard-rail)")
+                        elif force_save:
+                            should_save = True
+                            if improvement < 0:
+                                print("[OL] Forcar Retreino: salvando novo modelo mesmo sem melhoria (force_save=True)")
+                        else:
+                            should_save = improvement >= CONFIG["min_improvement"]
                     except Exception as e:
                         print(f"[OL] Erro ao comparar com modelo atual: {e}. Salvando novo modelo.")
                         should_save = True
@@ -484,6 +499,16 @@ class OnlineLearningManager:
                 # Limpar buffer
                 self.buffer = []
                 self._save_buffer()
+
+                # Limpar prediction_log do modelo antigo (predições obsoletas)
+                # para que o dashboard reflita o novo modelo
+                pred_log_path = os.path.join(CONFIG["model_dir"], "prediction_log.json")
+                if os.path.exists(pred_log_path):
+                    try:
+                        os.remove(pred_log_path)
+                        print("[OL] Prediction log limpo (modelo novo substitui predições antigas)")
+                    except Exception:
+                        pass
 
                 # Registrar performance
                 self._record_performance(new_accuracy, new_f1, len(X_combined))

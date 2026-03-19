@@ -15,7 +15,7 @@ MIN_SL_DISTANCE_PCT = 0.3
 # SL maximo: se nenhum nivel tecnico estiver a menos de 8%, algo esta errado
 MAX_SL_DISTANCE_PCT = 8.0
 # Minimo risk:reward aceitavel
-MIN_RISK_REWARD = 1.5
+MIN_RISK_REWARD = 2.0
 
 
 def calculate_technical_sl_tp(
