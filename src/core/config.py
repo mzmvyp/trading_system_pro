@@ -50,9 +50,8 @@ class Settings(BaseSettings):
     initial_capital: float = 10000.0  # Capital inicial em USDT
 
     # Porcentagem do capital a arriscar por trade
-    # CORRIGIDO: Reduzido de 5% para 2% - mais conservador
-    # Exemplo: 2% significa que se o stop loss for atingido, voce perde 2% do capital
-    risk_percent_per_trade: float = 2.0  # 2% do capital arriscado por trade (reduzido de 5%)
+    # 5% do capital = se stop loss atingido, perde 5% do capital
+    risk_percent_per_trade: float = 5.0  # 5% do capital arriscado por trade
 
     # Valor minimo de posicao (nocional) em USDT
     # Evita abrir posicoes microscopicas que nao fazem sentido operacionalmente
