@@ -247,47 +247,24 @@ class AgnoTradingAgent:
             # has_confluence = True se modelo prevê sucesso E probabilidade > threshold
             has_confluence = prediction == 1 and probability >= ml_threshold
 
-            # ML só bloqueia sinais se ml_required=True E acurácia >= 60%
-            # E com mínimo de amostras para que a acurácia seja confiável
-            MIN_ACCURACY_TO_BLOCK = 60.0
-            MIN_SAMPLES_TO_BLOCK = 20  # Precisa de pelo menos 20 trades avaliados
-            if ml_required:
-                accuracies = self._get_model_accuracies()
-                ml_acc = accuracies.get("ml_accuracy")
-                ml_samples = accuracies.get("ml_total", 0)
+            # ML só vota se acurácia > 60%. Abaixo disso, não tem moral pra opinar.
+            accuracies = self._get_model_accuracies()
+            ml_acc = accuracies.get("ml_accuracy")
 
-                # Verificar se modelo está "viciado" (predizendo quase tudo
-                # como mesma classe). Um modelo que prediz >85% SKIP ou >85%
-                # EXECUTE não aprendeu nada útil — está apenas chutando.
-                ml_is_biased = self._check_ml_prediction_bias()
-
-                if ml_is_biased:
-                    skip_signal = False
-                    logger.info(
-                        f"[ML] Modelo viciado (>85% mesma classe) — "
-                        f"ML não pode bloquear sinais até ser retreinado"
-                    )
-                elif ml_samples < MIN_SAMPLES_TO_BLOCK:
-                    skip_signal = False
-                    logger.info(
-                        f"[ML] Amostras insuficientes: {ml_samples}/{MIN_SAMPLES_TO_BLOCK} — "
-                        f"ML não pode bloquear sinais (acc={ml_acc}% com poucos dados não é confiável)"
-                    )
-                elif ml_acc is not None and ml_acc >= MIN_ACCURACY_TO_BLOCK:
-                    skip_signal = not has_confluence
-                    if skip_signal:
-                        logger.info(
-                            f"[ML] BLOQUEANDO sinal: acc={ml_acc:.1f}% >= {MIN_ACCURACY_TO_BLOCK}%, "
-                            f"amostras={ml_samples}, prob={probability:.1%}, threshold={ml_threshold:.0%}"
-                        )
-                else:
-                    skip_signal = False
-                    logger.info(
-                        f"[ML] Acurácia={ml_acc}% < {MIN_ACCURACY_TO_BLOCK}% (amostras={ml_samples}) — "
-                        f"ML não tem relevância para bloquear sinal"
-                    )
+            if ml_acc is not None and ml_acc > 60.0:
+                # ML com acurácia boa — pode votar
+                skip_signal = ml_required and not has_confluence
+                logger.info(
+                    f"[ML] acc={ml_acc:.1f}% > 60% — ML VOTOU: "
+                    f"{'APROVADO' if has_confluence else 'REJEITADO'} "
+                    f"(prob={probability:.1%}, required={ml_required})"
+                )
             else:
+                # ML com acurácia <= 60% — pula, não tem direito de voto
                 skip_signal = False
+                logger.info(
+                    f"[ML] acc={ml_acc}% <= 60% — ML SEM DIREITO DE VOTO, sinal passa direto"
+                )
 
             return {
                 "skip_signal": skip_signal,
