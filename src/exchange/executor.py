@@ -634,10 +634,10 @@ class BinanceFuturesExecutor:
             if not symbol_info or "error" in symbol_info:
                 return {"success": False, "error": f"Erro ao obter info do simbolo: {symbol_info}"}
 
-            # 4. Calcular risco baseado no SALDO DISPONIVEL
-            # Usa o disponivel para evitar "Margin insufficient" da Binance
-            # Se tem pouca margem livre, reduz o risco proporcionalmente
-            capital_base = available  # Usar saldo DISPONIVEL, nao o total
+            # 4. Calcular risco baseado no CAPITAL TOTAL (não disponível)
+            # Margem isolada: Binance só precisa da margem da posição
+            # O risco é % do capital total, a margem isolada = risco
+            capital_base = total_balance  # Usar capital TOTAL para sizing
             risk_percent = settings.risk_percent_per_trade / 100.0
             risk_amount = capital_base * risk_percent
 
