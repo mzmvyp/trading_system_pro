@@ -278,11 +278,17 @@ def _add_model_attribution(result: Dict, signal: Dict) -> None:
     """
     Preenche no result se cada modelo acertou ou errou (para relatório de validadores).
     Só aplica quando o sinal está finalizado (SL/TP/EXPIRED).
+
+    Calcula duas métricas de acurácia para o ML:
+    - ml_correct: acurácia por classe (prediction vs outcome) — métrica original
+    - ml_operational_correct: acurácia operacional (prob>=threshold AND pred==1 vs outcome)
+      Mede exatamente a decisão que o sistema toma: "quando o ML deixa passar, acerta?"
     """
     outcome = result.get("outcome", "")
     if outcome not in ("SL_HIT", "TP1_HIT", "TP2_HIT", "EXPIRED"):
         result["is_winner"] = False
         result["ml_correct"] = None
+        result["ml_operational_correct"] = None
         result["lstm_correct"] = None
         return
 
@@ -296,6 +302,22 @@ def _add_model_attribution(result: Dict, signal: Dict) -> None:
         result["ml_correct"] = (int(ml_pred) == 1) == is_winner
     else:
         result["ml_correct"] = None
+
+    # ML OPERACIONAL: mede acurácia sob a regra real de bloqueio (prob >= threshold E pred == 1)
+    # Isso resolve o desalinhamento entre "acurácia por classe" e "decisão de bloqueio"
+    ml_prob = signal.get("ml_probability")
+    ML_OPERATIONAL_THRESHOLD = 0.65
+    if ml_pred is not None and ml_prob is not None:
+        ml_would_pass = (int(ml_pred) == 1) and (ml_prob >= ML_OPERATIONAL_THRESHOLD)
+        ml_would_block = not ml_would_pass
+        if ml_would_pass:
+            # ML deixou passar — acertou se foi winner
+            result["ml_operational_correct"] = is_winner
+        else:
+            # ML bloqueou — acertou se foi loser
+            result["ml_operational_correct"] = not is_winner
+    else:
+        result["ml_operational_correct"] = None
 
     # LSTM: votou a favor (prob > 0.6) ou contra (prob < 0.4) — acertou se (a favor e win) ou (contra e loss)
     lstm_prob = signal.get("lstm_probability")
@@ -338,9 +360,11 @@ def _append_model_votes_log(signal: Dict, evaluation: Dict) -> None:
         "is_winner": is_winner,
         "executed": signal.get("executed", False),
         "ml_prediction": signal.get("ml_prediction"),
+        "ml_probability": signal.get("ml_probability"),
         "lstm_probability": lstm_prob,
         "lstm_vote": lstm_vote,
         "ml_correct": evaluation.get("ml_correct"),
+        "ml_operational_correct": evaluation.get("ml_operational_correct"),
         "lstm_correct": evaluation.get("lstm_correct"),
         "confluence_score": signal.get("confluence_score"),
         "confluence_votes_for": signal.get("confluence_votes_for"),
@@ -560,11 +584,43 @@ def get_system_accuracy_report(log_path: str = None) -> Dict:
         w = by_direction[sig]["wins"]
         by_direction[sig]["accuracy_pct"] = (w / t * 100) if t else 0
 
-    # ML
+    # ML — acurácia por classe (prediction vs outcome)
     ml_with = [r for r in unique if r.get("ml_correct") is not None]
     ml_correct = sum(1 for r in ml_with if r["ml_correct"])
     ml_total = len(ml_with)
     ml_acc = (ml_correct / ml_total * 100) if ml_total else None
+
+    # ML OPERACIONAL — acurácia sob a regra real de bloqueio (prob >= 0.65 + pred == 1)
+    # Esta é a métrica que deveria ser usada para decidir se o ML "merece" bloquear sinais
+    ml_op_with = [r for r in unique if r.get("ml_operational_correct") is not None]
+    ml_op_correct = sum(1 for r in ml_op_with if r["ml_operational_correct"])
+    ml_op_total = len(ml_op_with)
+    ml_op_acc = (ml_op_correct / ml_op_total * 100) if ml_op_total else None
+
+    # ML OPERACIONAL detalhado: separar "quando passa" vs "quando bloqueia"
+    ml_pass_wins = 0
+    ml_pass_total = 0
+    ml_block_correct = 0
+    ml_block_total = 0
+    ML_OP_THRESHOLD = 0.65
+    for r in unique:
+        ml_pred = r.get("ml_prediction")
+        ml_prob = r.get("ml_probability")
+        is_w = r.get("is_winner")
+        if ml_pred is None or ml_prob is None or is_w is None:
+            continue
+        would_pass = (int(ml_pred) == 1) and (ml_prob >= ML_OP_THRESHOLD)
+        if would_pass:
+            ml_pass_total += 1
+            if is_w:
+                ml_pass_wins += 1
+        else:
+            ml_block_total += 1
+            if not is_w:
+                ml_block_correct += 1
+
+    ml_pass_acc = (ml_pass_wins / ml_pass_total * 100) if ml_pass_total else None
+    ml_block_acc = (ml_block_correct / ml_block_total * 100) if ml_block_total else None
 
     # LSTM
     lstm_with = [r for r in unique if r.get("lstm_correct") is not None]
@@ -576,6 +632,17 @@ def get_system_accuracy_report(log_path: str = None) -> Dict:
         "by_source": by_source,
         "by_direction": by_direction,
         "ml": {"accuracy_pct": ml_acc, "correct": ml_correct, "total": ml_total},
+        "ml_operational": {
+            "accuracy_pct": ml_op_acc,
+            "correct": ml_op_correct,
+            "total": ml_op_total,
+            "pass_accuracy_pct": ml_pass_acc,
+            "pass_wins": ml_pass_wins,
+            "pass_total": ml_pass_total,
+            "block_accuracy_pct": ml_block_acc,
+            "block_correct": ml_block_correct,
+            "block_total": ml_block_total,
+        },
         "lstm": {"accuracy_pct": lstm_acc, "correct": lstm_correct, "total": lstm_total},
         "total_records": len(unique),
     }
