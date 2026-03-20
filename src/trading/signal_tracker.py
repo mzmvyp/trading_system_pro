@@ -309,7 +309,6 @@ def _add_model_attribution(result: Dict, signal: Dict) -> None:
     ML_OPERATIONAL_THRESHOLD = 0.65
     if ml_pred is not None and ml_prob is not None:
         ml_would_pass = (int(ml_pred) == 1) and (ml_prob >= ML_OPERATIONAL_THRESHOLD)
-        ml_would_block = not ml_would_pass
         if ml_would_pass:
             # ML deixou passar — acertou se foi winner
             result["ml_operational_correct"] = is_winner

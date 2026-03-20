@@ -286,8 +286,6 @@ class AgnoTradingAgent:
             from src.core.config import settings
             ml_threshold = getattr(settings, 'ml_validation_threshold', 0.65)
             ml_required = getattr(settings, 'ml_validation_required', False)
-            ml_enabled = getattr(settings, 'ml_validation_enabled', True)
-
             # has_confluence = True se modelo prevê sucesso E probabilidade > threshold
             has_confluence = prediction == 1 and probability >= ml_threshold
 
@@ -310,8 +308,8 @@ class AgnoTradingAgent:
                 if ml_is_biased:
                     skip_signal = False
                     logger.info(
-                        f"[ML] Modelo viciado (>85% mesma classe) — "
-                        f"ML não pode bloquear sinais até ser retreinado"
+                        "[ML] Modelo viciado (>85% mesma classe) — "
+                        "ML não pode bloquear sinais até ser retreinado"
                     )
                 elif ml_acc is not None and ml_acc >= MIN_ACCURACY_TO_BLOCK:
                     skip_signal = not has_confluence
@@ -410,8 +408,6 @@ class AgnoTradingAgent:
         rsi_oversold = getattr(best, "rsi_oversold", 30) if best else 30
         rsi_overbought = getattr(best, "rsi_overbought", 70) if best else 70
         adx_threshold = getattr(best, "adx_min_strength", getattr(best, "adx_threshold", 25)) if best else 25
-        volume_threshold = getattr(best, "volume_surge_multiplier", getattr(best, "volume_spike_threshold", 1.5)) if best else 1.5
-
         indicators = analysis_data.get("key_indicators", {})
         trend_data = analysis_data.get("trend_analysis", {})
         volume_flow = analysis_data.get("volume_flow", {})
@@ -828,8 +824,8 @@ Responda APENAS com JSON:
             # 2. SINAL AGNO - OTIMIZADO: Coleta dados localmente + 1 única chamada DeepSeek
             # ANTES: AGNO agent chamava ferramentas via DeepSeek (5+ API calls por símbolo)
             # AGORA: Coleta tudo localmente e envia 1 prompt com dados prontos
-            from src.prompts.deepseek_prompt import prepare_analysis_for_llm, _create_analysis_prompt
             from src.analysis.market_classifier import classify_market_condition
+            from src.prompts.deepseek_prompt import _create_analysis_prompt, prepare_analysis_for_llm
 
             logger.info(f"[AGNO] Coletando dados localmente para {symbol}...")
             analysis_data = await prepare_analysis_for_llm(symbol)
@@ -912,7 +908,7 @@ Responda APENAS com JSON:
             # Quem decide abrir ou não é o nosso sistema (confluência + ML/LSTM/risk).
             # Se devolveu NO_SIGNAL (modelo antigo/fallback), tratar como confiança 0.
             if _sig == "NO_SIGNAL":
-                logger.info(f"[AGNO] DeepSeek devolveu NO_SIGNAL - sistema não executará (confiança insuficiente)")
+                logger.info("[AGNO] DeepSeek devolveu NO_SIGNAL - sistema não executará (confiança insuficiente)")
                 agno_signal["confidence"] = 0
 
             # ========================================
@@ -925,7 +921,6 @@ Responda APENAS com JSON:
                 confluence = self._calculate_technical_confluence(
                     {**analysis_data, "symbol": symbol}, llm_signal_dir
                 )
-                tech_score = confluence["score"]
                 votes_for = confluence["votes_for"]
                 votes_against = confluence["votes_against"]
 
@@ -1123,7 +1118,7 @@ Responda APENAS com JSON:
                             sl_dist = entry * 0.015
                             tp1_dist = entry * 0.03
                             tp2_dist = entry * 0.05
-                        logger.warning(f"[FALLBACK SL/TP] Calculador técnico não cobriu todos os níveis, usando ATR/percentual")
+                        logger.warning("[FALLBACK SL/TP] Calculador técnico não cobriu todos os níveis, usando ATR/percentual")
                         if sl <= 0:
                             sl = (entry - sl_dist) if direction == "BUY" else (entry + sl_dist)
                             agno_signal["stop_loss"] = sl
@@ -1932,7 +1927,6 @@ Responda APENAS com JSON:
         if not filepath or not os.path.exists(filepath):
             # Tentar encontrar pelo padrão
             symbol = signal.get("symbol", "")
-            ts = signal.get("timestamp", "")
             if not filepath:
                 logger.warning(f"[TRACK] Sinal sem _signal_file: {symbol}")
                 return

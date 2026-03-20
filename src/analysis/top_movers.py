@@ -153,7 +153,7 @@ async def get_top_movers(
         g_str = ", ".join(f"{g['symbol']}(+{g['price_change_pct']:.1f}%)" for g in gainers)
         logger.info(f"[TOP_MOVERS] Gainers: {g_str}")
     if losers:
-        l_str = ", ".join(f"{l['symbol']}({l['price_change_pct']:.1f}%)" for l in losers)
+        l_str = ", ".join(f"{loser['symbol']}({loser['price_change_pct']:.1f}%)" for loser in losers)
         logger.info(f"[TOP_MOVERS] Losers: {l_str}")
 
     return result
@@ -199,13 +199,13 @@ async def get_dynamic_symbols(
                 "mover_type": "gainer",
             }
 
-    for l in movers.get("losers", []):
-        sym = l["symbol"]
+    for loser in movers.get("losers", []):
+        sym = loser["symbol"]
         if sym not in dynamic_symbols:
             dynamic_symbols.append(sym)
             dynamic_metadata[sym] = {
-                "price_change_pct": l["price_change_pct"],
-                "volume_usdt": l["volume_usdt"],
+                "price_change_pct": loser["price_change_pct"],
+                "volume_usdt": loser["volume_usdt"],
                 "mover_type": "loser",
             }
 

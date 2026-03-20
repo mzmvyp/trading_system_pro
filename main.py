@@ -73,7 +73,8 @@ async def log_monitor_summary(settings):
     except Exception as e:
         logger.warning(f"Erro ao obter resumo: {e}")
     # Calcular próxima análise baseada no fechamento do candle de 1h
-    from datetime import datetime as _dt, timezone as _tz
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
     now_utc = _dt.now(_tz.utc)
     next_hour = now_utc.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     next_analysis = next_hour + timedelta(seconds=35)
@@ -201,7 +202,7 @@ async def main():
                 _opt_days = int(os.getenv("OPTIMIZER_DAYS_BACK", "60"))
                 _opt_cycle = int(os.getenv("OPTIMIZER_CYCLE_HOURS", "6"))
                 _opt_min_score = float(os.getenv("OPTIMIZER_MIN_SCORE", "0.35"))
-                optimizer = start_global_optimizer(
+                start_global_optimizer(
                     symbols=symbols,
                     interval="1h",
                     cycle_hours=_opt_cycle,
@@ -420,7 +421,8 @@ async def main():
                     # Isso garante que a análise usa candles RECÉM-FECHADOS.
                     # Origem: sinais/core/timeframe_scheduler.py
                     # ============================================================
-                    from datetime import datetime as _dt, timezone as _tz
+                    from datetime import datetime as _dt
+                    from datetime import timezone as _tz
                     now_utc = _dt.now(_tz.utc)
                     # Próxima hora cheia
                     next_hour = now_utc.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
