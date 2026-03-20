@@ -122,7 +122,7 @@ class Settings(BaseSettings):
     ml_validation_threshold: float = 0.65
     # Se True, só executa sinais que passam na validação ML
     # Se False, apenas loga a validação mas executa de qualquer forma
-    ml_validation_required: bool = False  # Desabilitado: accuracy 58.8% < 60% minimo, ML so observa
+    ml_validation_required: bool = True
 
     # ========================================
     # ONLINE LEARNING - RETREINAMENTO AUTOMÁTICO

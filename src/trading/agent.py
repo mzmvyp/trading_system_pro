@@ -134,9 +134,16 @@ class AgnoTradingAgent:
         try:
             from src.trading.signal_tracker import get_system_accuracy_report
             report = get_system_accuracy_report()
-            ml_acc = report.get("ml", {}).get("accuracy_pct")
-            lstm_acc = report.get("lstm", {}).get("accuracy_pct")
-            result = {"ml_accuracy": ml_acc, "lstm_accuracy": lstm_acc}
+            ml_data = report.get("ml", {})
+            lstm_data = report.get("lstm", {})
+            ml_acc = ml_data.get("accuracy_pct")
+            lstm_acc = lstm_data.get("accuracy_pct")
+            result = {
+                "ml_accuracy": ml_acc,
+                "ml_total": ml_data.get("total", 0),
+                "lstm_accuracy": lstm_acc,
+                "lstm_total": lstm_data.get("total", 0),
+            }
             AgnoTradingAgent._model_accuracy_cache = result
             AgnoTradingAgent._model_accuracy_updated = now
             logger.info(
@@ -147,7 +154,7 @@ class AgnoTradingAgent:
             return result
         except Exception as e:
             logger.warning(f"[ACCURACY] Erro ao obter acurácias: {e}")
-            return {"ml_accuracy": None, "lstm_accuracy": None}
+            return {"ml_accuracy": None, "ml_total": 0, "lstm_accuracy": None, "lstm_total": 0}
 
     def _check_ml_prediction_bias(self) -> bool:
         """
@@ -241,11 +248,13 @@ class AgnoTradingAgent:
             has_confluence = prediction == 1 and probability >= ml_threshold
 
             # ML só bloqueia sinais se ml_required=True E acurácia >= 60%
-            # Se acurácia < 60%, ML não é confiável o suficiente para barrar sinais
+            # E com mínimo de amostras para que a acurácia seja confiável
             MIN_ACCURACY_TO_BLOCK = 60.0
+            MIN_SAMPLES_TO_BLOCK = 20  # Precisa de pelo menos 20 trades avaliados
             if ml_required:
                 accuracies = self._get_model_accuracies()
                 ml_acc = accuracies.get("ml_accuracy")
+                ml_samples = accuracies.get("ml_total", 0)
 
                 # Verificar se modelo está "viciado" (predizendo quase tudo
                 # como mesma classe). Um modelo que prediz >85% SKIP ou >85%
@@ -258,12 +267,23 @@ class AgnoTradingAgent:
                         f"[ML] Modelo viciado (>85% mesma classe) — "
                         f"ML não pode bloquear sinais até ser retreinado"
                     )
+                elif ml_samples < MIN_SAMPLES_TO_BLOCK:
+                    skip_signal = False
+                    logger.info(
+                        f"[ML] Amostras insuficientes: {ml_samples}/{MIN_SAMPLES_TO_BLOCK} — "
+                        f"ML não pode bloquear sinais (acc={ml_acc}% com poucos dados não é confiável)"
+                    )
                 elif ml_acc is not None and ml_acc >= MIN_ACCURACY_TO_BLOCK:
                     skip_signal = not has_confluence
+                    if skip_signal:
+                        logger.info(
+                            f"[ML] BLOQUEANDO sinal: acc={ml_acc:.1f}% >= {MIN_ACCURACY_TO_BLOCK}%, "
+                            f"amostras={ml_samples}, prob={probability:.1%}, threshold={ml_threshold:.0%}"
+                        )
                 else:
                     skip_signal = False
                     logger.info(
-                        f"[ML] Acurácia={ml_acc}% < {MIN_ACCURACY_TO_BLOCK}% — "
+                        f"[ML] Acurácia={ml_acc}% < {MIN_ACCURACY_TO_BLOCK}% (amostras={ml_samples}) — "
                         f"ML não tem relevância para bloquear sinal"
                     )
             else:
