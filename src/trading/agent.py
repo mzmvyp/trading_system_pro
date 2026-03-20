@@ -118,8 +118,11 @@ class AgnoTradingAgent:
         Retorna acurácia atual do ML e LSTM (cache de 30 min).
         Modelos com acurácia < 60% não devem bloquear sinais.
 
+        Usa acurácia OPERACIONAL do ML (baseada em prob >= 0.65 + pred == 1)
+        ao invés da acurácia por classe, para refletir a decisão real de bloqueio.
+
         Returns:
-            Dict com 'ml_accuracy' e 'lstm_accuracy' (percentual ou None)
+            Dict com 'ml_accuracy', 'ml_class_accuracy', 'lstm_accuracy' (percentual ou None)
         """
         now = datetime.now(timezone.utc)
         cache_ttl = timedelta(minutes=30)
@@ -134,37 +137,80 @@ class AgnoTradingAgent:
         try:
             from src.trading.signal_tracker import get_system_accuracy_report
             report = get_system_accuracy_report()
-            ml_acc = report.get("ml", {}).get("accuracy_pct")
+
+            # Acurácia OPERACIONAL (prob >= 0.65 + pred == 1 vs outcome) — métrica correta para bloqueio
+            ml_op = report.get("ml_operational", {})
+            ml_op_acc = ml_op.get("accuracy_pct")
+
+            # Acurácia por classe (prediction vs outcome) — métrica original (mantida para comparação)
+            ml_class_acc = report.get("ml", {}).get("accuracy_pct")
+
+            # Usar acurácia operacional se disponível, senão fallback para classe
+            ml_acc = ml_op_acc if ml_op_acc is not None else ml_class_acc
+
             lstm_acc = report.get("lstm", {}).get("accuracy_pct")
-            result = {"ml_accuracy": ml_acc, "lstm_accuracy": lstm_acc}
+            result = {
+                "ml_accuracy": ml_acc,
+                "ml_class_accuracy": ml_class_acc,
+                "ml_operational_accuracy": ml_op_acc,
+                "lstm_accuracy": lstm_acc,
+            }
             AgnoTradingAgent._model_accuracy_cache = result
             AgnoTradingAgent._model_accuracy_updated = now
+
+            # Log detalhado para comparar as duas métricas
+            ml_pass_acc = ml_op.get("pass_accuracy_pct")
+            ml_block_acc = ml_op.get("block_accuracy_pct")
+            ml_str = f"ML class={ml_class_acc}" if ml_class_acc is None else f"ML class={ml_class_acc:.1f}%"
+            ml_op_str = f"ML operational={ml_op_acc}" if ml_op_acc is None else f"ML operational={ml_op_acc:.1f}%"
+            ml_pass_str = f"pass_winrate={ml_pass_acc}" if ml_pass_acc is None else f"pass_winrate={ml_pass_acc:.1f}%"
+            ml_block_str = f"block_correct={ml_block_acc}" if ml_block_acc is None else f"block_correct={ml_block_acc:.1f}%"
+            lstm_str = f"LSTM={lstm_acc}" if lstm_acc is None else f"LSTM={lstm_acc:.1f}%"
             logger.info(
-                f"[ACCURACY] ML={ml_acc:.1f}% LSTM={lstm_acc:.1f}%"
-                if ml_acc is not None and lstm_acc is not None
-                else f"[ACCURACY] ML={ml_acc} LSTM={lstm_acc}"
+                f"[ACCURACY] {ml_str} | {ml_op_str} ({ml_pass_str}, {ml_block_str}) | {lstm_str}"
             )
             return result
         except Exception as e:
             logger.warning(f"[ACCURACY] Erro ao obter acurácias: {e}")
-            return {"ml_accuracy": None, "lstm_accuracy": None}
+            return {"ml_accuracy": None, "ml_class_accuracy": None, "ml_operational_accuracy": None, "lstm_accuracy": None}
 
     def _check_ml_prediction_bias(self) -> bool:
         """
         Verifica se o modelo ML está viciado (predizendo >85% como mesma classe).
         Um modelo assim não aprendeu padrões úteis — está apenas chutando.
 
+        Tenta prediction_log.json primeiro, depois fallback para model_votes_log.jsonl.
+
         Returns:
             True se modelo está viciado, False se distribuição é razoável
         """
         try:
             import json as _json
-            pred_log_path = os.path.join("ml_models", "prediction_log.json")
-            if not os.path.exists(pred_log_path):
-                return False  # Sem dados, não podemos afirmar que é viciado
+            predictions = []
 
-            with open(pred_log_path, 'r') as f:
-                predictions = _json.load(f)
+            # Fonte primária: prediction_log.json
+            pred_log_path = os.path.join("ml_models", "prediction_log.json")
+            if os.path.exists(pred_log_path):
+                with open(pred_log_path, 'r') as f:
+                    predictions = _json.load(f)
+
+            # Fallback: model_votes_log.jsonl (sempre tem ml_prediction se ML rodou)
+            if not predictions:
+                votes_log_path = os.path.join("signals", "model_votes_log.jsonl")
+                if os.path.exists(votes_log_path):
+                    with open(votes_log_path, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                try:
+                                    record = _json.loads(line)
+                                    if record.get("ml_prediction") is not None:
+                                        predictions.append(record)
+                                except _json.JSONDecodeError:
+                                    continue
+
+            if not predictions:
+                return False  # Sem dados, não podemos afirmar que é viciado
 
             # Considerar apenas as últimas 50 predições (janela recente)
             recent = predictions[-50:]
@@ -176,6 +222,11 @@ class AgnoTradingAgent:
 
             # Se >85% é mesma classe (SKIP ou EXECUTE), modelo está viciado
             if skip_ratio > 0.85 or skip_ratio < 0.15:
+                logger.info(
+                    f"[ML BIAS] Modelo viciado detectado: "
+                    f"SKIP={skip_count}/{len(recent)} ({skip_ratio:.1%}), "
+                    f"EXECUTE={len(recent)-skip_count}/{len(recent)} ({1-skip_ratio:.1%})"
+                )
                 return True
 
             return False
@@ -240,12 +291,16 @@ class AgnoTradingAgent:
             # has_confluence = True se modelo prevê sucesso E probabilidade > threshold
             has_confluence = prediction == 1 and probability >= ml_threshold
 
-            # ML só bloqueia sinais se ml_required=True E acurácia >= 60%
-            # Se acurácia < 60%, ML não é confiável o suficiente para barrar sinais
+            # ML só bloqueia sinais se ml_required=True E acurácia OPERACIONAL >= 60%
+            # Usa acurácia operacional (baseada em prob >= threshold) ao invés de classe,
+            # para refletir a decisão real que o sistema toma ao bloquear/passar sinais.
             MIN_ACCURACY_TO_BLOCK = 60.0
             if ml_required:
                 accuracies = self._get_model_accuracies()
-                ml_acc = accuracies.get("ml_accuracy")
+                # Acurácia operacional (preferida) — mede decisão real de bloqueio
+                ml_acc = accuracies.get("ml_accuracy")  # já retorna operacional com fallback para classe
+                ml_class_acc = accuracies.get("ml_class_accuracy")
+                ml_op_acc = accuracies.get("ml_operational_accuracy")
 
                 # Verificar se modelo está "viciado" (predizendo quase tudo
                 # como mesma classe). Um modelo que prediz >85% SKIP ou >85%
@@ -260,11 +315,17 @@ class AgnoTradingAgent:
                     )
                 elif ml_acc is not None and ml_acc >= MIN_ACCURACY_TO_BLOCK:
                     skip_signal = not has_confluence
+                    if skip_signal:
+                        logger.info(
+                            f"[ML BLOCK] pred={prediction}, prob={probability:.1%} (threshold={ml_threshold:.1%}) "
+                            f"| acc_operacional={ml_op_acc}%, acc_classe={ml_class_acc}%"
+                        )
                 else:
                     skip_signal = False
                     logger.info(
-                        f"[ML] Acurácia={ml_acc}% < {MIN_ACCURACY_TO_BLOCK}% — "
-                        f"ML não tem relevância para bloquear sinal"
+                        f"[ML] Acurácia operacional={ml_acc}% < {MIN_ACCURACY_TO_BLOCK}% — "
+                        f"ML não tem relevância para bloquear sinal "
+                        f"(classe={ml_class_acc}%, operacional={ml_op_acc}%)"
                     )
             else:
                 skip_signal = False
