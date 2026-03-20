@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     ]
 
     # ========================================
+    # TOP MOVERS DINÂMICOS
+    # ========================================
+    # Adiciona pares com maior movimento (gainers + losers) à análise
+    top_movers_enabled: bool = True
+    top_movers_n_gainers: int = 5   # Top N que mais subiram (24h)
+    top_movers_n_losers: int = 5    # Top N que mais caíram (24h)
+    top_movers_min_volume_usdt: float = 50_000_000  # Volume mínimo 50M USDT (filtrar liquidez)
+
+    # ========================================
     # TIMEOUT POR TIPO DE OPERAÇÃO
     # ========================================
     timeout_scalp_hours: float = 0.5        # 30 minutos
