@@ -73,7 +73,8 @@ async def log_monitor_summary(settings):
     except Exception as e:
         logger.warning(f"Erro ao obter resumo: {e}")
     # Calcular próxima análise baseada no fechamento do candle de 1h
-    from datetime import datetime as _dt, timezone as _tz
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
     now_utc = _dt.now(_tz.utc)
     next_hour = now_utc.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     next_analysis = next_hour + timedelta(seconds=35)
@@ -181,12 +182,13 @@ async def main():
                 logger.info("[ALERTA] Sinal forte detectado! Considere executar o trade com cautela.")
 
         elif args.mode == 'monitor':
-            # Monitoramento contínuo do Top 10 - SEM dependência do real_paper_trading
+            # Monitoramento contínuo do Top 10 + Top Movers dinâmicos
             from src.core.config import settings
 
-            symbols = settings.top_crypto_pairs  # Todos os pares configurados
+            symbols = list(settings.top_crypto_pairs)  # Pares fixos (cópia)
+            dynamic_metadata = {}  # Metadata dos pares dinâmicos (preenchido a cada ciclo)
 
-            logger.info(f"[MONITOR] Monitoramento continuo | Pares: {symbols} | Sync: candle 1h close | Modo: {settings.trading_mode.upper()}")
+            logger.info(f"[MONITOR] Monitoramento continuo | Pares fixos: {symbols} | Top Movers: {'ON' if settings.top_movers_enabled else 'OFF'} | Sync: candle 1h close | Modo: {settings.trading_mode.upper()}")
 
             # ============================================================
             # Otimizador contínuo: roda a cada N h, testa M combinações
@@ -200,7 +202,7 @@ async def main():
                 _opt_days = int(os.getenv("OPTIMIZER_DAYS_BACK", "60"))
                 _opt_cycle = int(os.getenv("OPTIMIZER_CYCLE_HOURS", "6"))
                 _opt_min_score = float(os.getenv("OPTIMIZER_MIN_SCORE", "0.35"))
-                optimizer = start_global_optimizer(
+                start_global_optimizer(
                     symbols=symbols,
                     interval="1h",
                     cycle_hours=_opt_cycle,
@@ -357,15 +359,46 @@ async def main():
 
                     logger.info(f"[POSICOES] Ativas: {active_positions if active_positions else 'Nenhuma'} | Modo: {settings.trading_mode.upper()}")
 
+                    # ============================================================
+                    # TOP MOVERS DINÂMICOS: Adicionar pares com maior movimento
+                    # Busca top gainers/losers de Binance Futures a cada ciclo
+                    # ============================================================
+                    all_symbols = list(settings.top_crypto_pairs)
+                    if settings.top_movers_enabled:
+                        try:
+                            from src.analysis.top_movers import get_dynamic_symbols
+                            all_symbols, dynamic_metadata = await get_dynamic_symbols(
+                                fixed_symbols=settings.top_crypto_pairs,
+                                n_gainers=settings.top_movers_n_gainers,
+                                n_losers=settings.top_movers_n_losers,
+                                min_volume_usdt=settings.top_movers_min_volume_usdt,
+                            )
+                        except Exception as e:
+                            logger.warning(f"[TOP_MOVERS] Erro ao buscar top movers: {e} (usando apenas pares fixos)")
+
                     # Filtrar apenas símbolos sem posição ativa
-                    symbols_to_analyze = [s for s in symbols if s not in active_positions]
+                    symbols_to_analyze = [s for s in all_symbols if s not in active_positions]
 
                     if not symbols_to_analyze:
                         logger.info("[OK] Todos os pares tem posicoes ativas. Aguardando...")
                     else:
-                        logger.info(f"[ANALISE] Analisando {len(symbols_to_analyze)} pares sem posicoes ativas...")
+                        n_fixed = sum(1 for s in symbols_to_analyze if s in settings.top_crypto_pairs)
+                        n_dynamic = len(symbols_to_analyze) - n_fixed
+                        logger.info(
+                            f"[ANALISE] Analisando {len(symbols_to_analyze)} pares "
+                            f"({n_fixed} fixos + {n_dynamic} dinâmicos) sem posicoes ativas..."
+                        )
 
                         for symbol in symbols_to_analyze:
+                            # Log extra para pares dinâmicos
+                            if symbol in dynamic_metadata:
+                                meta = dynamic_metadata[symbol]
+                                logger.info(
+                                    f"[TOP_MOVER] {symbol}: {meta['mover_type'].upper()} "
+                                    f"({meta['price_change_pct']:+.1f}% 24h, "
+                                    f"vol=${meta['volume_usdt']/1e6:.0f}M)"
+                                )
+
                             try:
                                 await asyncio.wait_for(
                                     agent.analyze(symbol),
@@ -388,7 +421,8 @@ async def main():
                     # Isso garante que a análise usa candles RECÉM-FECHADOS.
                     # Origem: sinais/core/timeframe_scheduler.py
                     # ============================================================
-                    from datetime import datetime as _dt, timezone as _tz
+                    from datetime import datetime as _dt
+                    from datetime import timezone as _tz
                     now_utc = _dt.now(_tz.utc)
                     # Próxima hora cheia
                     next_hour = now_utc.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
@@ -412,11 +446,25 @@ async def main():
                     await asyncio.sleep(30)
 
         elif args.mode == 'top5':
-            # Todos os pares configurados
+            # Todos os pares configurados + top movers dinâmicos
             from src.core.config import settings
-            symbols = settings.top_crypto_pairs  # Todos os pares configurados
+            symbols = list(settings.top_crypto_pairs)
+            dynamic_metadata = {}
 
-            logger.info(f"[TOP] Analisando {len(symbols)} pares configurados...")
+            # Adicionar top movers dinâmicos
+            if settings.top_movers_enabled:
+                try:
+                    from src.analysis.top_movers import get_dynamic_symbols
+                    symbols, dynamic_metadata = await get_dynamic_symbols(
+                        fixed_symbols=settings.top_crypto_pairs,
+                        n_gainers=settings.top_movers_n_gainers,
+                        n_losers=settings.top_movers_n_losers,
+                        min_volume_usdt=settings.top_movers_min_volume_usdt,
+                    )
+                except Exception as e:
+                    logger.warning(f"[TOP_MOVERS] Erro: {e} (usando apenas pares fixos)")
+
+            logger.info(f"[TOP] Analisando {len(symbols)} pares ({len(symbols) - len(dynamic_metadata)} fixos + {len(dynamic_metadata)} dinâmicos)...")
 
             # Verificar posições ativas
             active_positions = get_active_positions()
@@ -431,7 +479,11 @@ async def main():
                 logger.info(f"[ANALISE] Analisando {len(symbols_to_analyze)} pares sem posicoes ativas...")
 
                 for i, symbol in enumerate(symbols_to_analyze, 1):
-                    logger.info(f"[{i}/{len(symbols_to_analyze)}] Analisando {symbol}...")
+                    mover_tag = ""
+                    if symbol in dynamic_metadata:
+                        meta = dynamic_metadata[symbol]
+                        mover_tag = f" [TOP_MOVER {meta['mover_type'].upper()} {meta['price_change_pct']:+.1f}%]"
+                    logger.info(f"[{i}/{len(symbols_to_analyze)}] Analisando {symbol}...{mover_tag}")
                     signal = await agent.analyze(symbol)
 
                     # Mostrar resumo rápido
@@ -443,13 +495,30 @@ async def main():
                     await asyncio.sleep(3)  # Pausa entre análises
 
         elif args.mode == 'top10':
-            # Todos os pares configurados
+            # Todos os pares configurados + top movers dinâmicos
             from src.core.config import settings
-            symbols = settings.top_crypto_pairs
+            symbols = list(settings.top_crypto_pairs)
+            dynamic_metadata = {}
 
-            logger.info(f"[TOP] Analisando {len(symbols)} pares configurados...")
+            if settings.top_movers_enabled:
+                try:
+                    from src.analysis.top_movers import get_dynamic_symbols
+                    symbols, dynamic_metadata = await get_dynamic_symbols(
+                        fixed_symbols=settings.top_crypto_pairs,
+                        n_gainers=settings.top_movers_n_gainers,
+                        n_losers=settings.top_movers_n_losers,
+                        min_volume_usdt=settings.top_movers_min_volume_usdt,
+                    )
+                except Exception as e:
+                    logger.warning(f"[TOP_MOVERS] Erro: {e} (usando apenas pares fixos)")
+
+            logger.info(f"[TOP] Analisando {len(symbols)} pares ({len(symbols) - len(dynamic_metadata)} fixos + {len(dynamic_metadata)} dinâmicos)...")
             for i, symbol in enumerate(symbols, 1):
-                logger.info(f"[{i}/{len(symbols)}] Analisando {symbol}...")
+                mover_tag = ""
+                if symbol in dynamic_metadata:
+                    meta = dynamic_metadata[symbol]
+                    mover_tag = f" [TOP_MOVER {meta['mover_type'].upper()} {meta['price_change_pct']:+.1f}%]"
+                logger.info(f"[{i}/{len(symbols)}] Analisando {symbol}...{mover_tag}")
                 await agent.analyze(symbol)
                 await asyncio.sleep(5)  # Pausa entre análises
 
