@@ -220,23 +220,23 @@ class PositionMonitor:
         rsi_against = False
 
         if side == "LONG":
-            if "bearish" in trend:
+            if "strong_bearish" in trend:
                 trend_against = True
                 against_details.append(f"trend={trend}")
             if macd_hist < 0:
                 macd_against = True
                 against_details.append(f"MACD={macd_hist:.4f}")
-            if rsi < 40:
+            if rsi < 35:
                 rsi_against = True
                 against_details.append(f"RSI={rsi:.0f}")
         else:  # SHORT
-            if "bullish" in trend:
+            if "strong_bullish" in trend:
                 trend_against = True
                 against_details.append(f"trend={trend}")
             if macd_hist > 0:
                 macd_against = True
                 against_details.append(f"MACD={macd_hist:.4f}")
-            if rsi > 60:
+            if rsi > 65:
                 rsi_against = True
                 against_details.append(f"RSI={rsi:.0f}")
 

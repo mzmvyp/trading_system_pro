@@ -603,6 +603,24 @@ class BinanceFuturesExecutor:
         logger.warning(f"Take Profit 2: ${take_profit_2:.2f}")
         logger.warning("="*60)
 
+        # PROTEÇÃO: Garantir distância mínima do SL (1.5% do entry)
+        # SL muito apertado → alavancagem absurda → liquidação por ruído
+        sl_distance_pct = abs(entry_price - stop_loss) / entry_price * 100
+        MIN_SL_DISTANCE_PCT = 1.5  # Mínimo 1.5% de distância
+
+        if sl_distance_pct < MIN_SL_DISTANCE_PCT:
+            old_sl = stop_loss
+            if signal_type == "BUY":
+                stop_loss = entry_price * (1 - MIN_SL_DISTANCE_PCT / 100)
+            else:  # SELL
+                stop_loss = entry_price * (1 + MIN_SL_DISTANCE_PCT / 100)
+            logger.warning(
+                f"[SL AJUSTADO] Distância original {sl_distance_pct:.2f}% muito apertada "
+                f"(mín {MIN_SL_DISTANCE_PCT}%). SL: ${old_sl:.4f} → ${stop_loss:.4f}"
+            )
+            # Atualizar no sinal para consistência
+            signal["stop_loss"] = stop_loss
+
         try:
             # 1. Verificar saldo
             balance = await self.get_balance()
@@ -708,9 +726,9 @@ class BinanceFuturesExecutor:
 
             if desired_margin > 0:
                 calculated_leverage = int(position_value / desired_margin)
-                # Limitar entre 1x e 50x — margem isolada protege contra liquidação
-                # e o stop loss é a proteção real. Cap alto permite margem ≈ risco.
-                calculated_leverage = max(1, min(calculated_leverage, 50))
+                # Limitar entre 1x e 10x — alavancagem alta (20-50x) causa
+                # liquidações por ruído mesmo com SL correto (slippage, spreads)
+                calculated_leverage = max(1, min(calculated_leverage, 10))
             else:
                 calculated_leverage = self.default_leverage
 
