@@ -1898,8 +1898,8 @@ def validate_risk_and_position(
                 "confidence": confidence
             }
 
-        # Validar mínimo de confiança (sempre 7 para escala 0-10)
-        min_confidence = settings.min_confidence_0_10  # Sempre 7
+        # Validar mínimo de confiança (escala 0-10, configurável via MIN_CONFIDENCE_0_10)
+        min_confidence = settings.min_confidence_0_10
 
         if confidence < min_confidence:
             return {

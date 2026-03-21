@@ -561,9 +561,9 @@ class AgnoTradingAgent:
 
         return None
 
-    def _get_default_price(self, symbol: str) -> float:
-        """Retorna preço padrão para um símbolo"""
-        return self.DEFAULT_PRICES.get(symbol, 100)
+    def _get_default_price(self, symbol: str) -> Optional[float]:
+        """Retorna preço padrão para um símbolo (None se desconhecido)"""
+        return self.DEFAULT_PRICES.get(symbol)
 
     def _calculate_stop_loss(self, entry_price: float, signal_type: str, distance_pct: float = 0.02) -> float:
         """
@@ -844,8 +844,9 @@ Responda APENAS com JSON:
                     logger.warning(f"[AGNO] {symbol} não está ativo (settling/closed) — pulando análise")
                     return {"signal": "NO_SIGNAL", "confidence": 0, "source": "AGNO",
                             "reason": f"Symbol not trading: {error_msg}", "symbol": symbol}
-                logger.warning(f"[AGNO] Erro ao coletar dados para {symbol}: {error_msg}")
-                response = await self.agent.arun(f"Analise {symbol} e forneça sinal de trading em JSON.")
+                logger.warning(f"[AGNO] Erro ao coletar dados para {symbol}: {error_msg} — pulando análise (sem dados confiáveis)")
+                return {"signal": "NO_SIGNAL", "confidence": 0, "source": "AGNO",
+                        "reason": f"Dados indisponíveis: {error_msg}", "symbol": symbol}
 
             # Salvar resposta bruta para auditoria
             self._save_deepseek_response(symbol, prompt if "error" not in analysis_data else "", response, analysis_data if "error" not in analysis_data else {})
@@ -1504,9 +1505,7 @@ Responda APENAS com JSON:
         else:
             # VALIDAÇÃO FINAL: Garantir que entry_price e stop_loss existem antes de retornar
             if not signal.get("entry_price") or not signal.get("stop_loss"):
-                logger.error(f"[ERRO CRITICO] Sinal {signal['signal']} sem entry_price ou stop_loss definidos!")
-                logger.error(f"Entry: {signal.get('entry_price')}, Stop: {signal.get('stop_loss')}")
-                logger.error(f"Response preview: {response_text[:500]}...")
+                logger.warning(f"[SEM PREÇO] {symbol}: sem entry_price ou stop_loss extraíveis da resposta")
                 # Tentar extrair preço do texto novamente com padrões mais flexíveis
                 if not signal.get("entry_price") and response_text:
                     # Procurar por qualquer número que pareça um preço (mais flexível)
@@ -1529,24 +1528,13 @@ Responda APENAS com JSON:
                             except ValueError:
                                 continue
 
-                # Se ainda não tem entry_price, usar valores padrão baseados no símbolo
+                # Sem entry_price → descartar sinal (NÃO usar preço hardcoded $100)
                 if not signal.get("entry_price"):
-                    # Valores padrão aproximados (será substituído quando o sistema coletar preço real)
-                    default_prices = {
-                        "BTCUSDT": 90000,
-                        "ETHUSDT": 3000,
-                        "SOLUSDT": 140,
-                        "BNBUSDT": 600,
-                        "ADAUSDT": 0.5,
-                        "XRPUSDT": 2.0,
-                        "DOGEUSDT": 0.15,
-                        "AVAXUSDT": 40,
-                        "DOTUSDT": 7,
-                        "LINKUSDT": 20
-                    }
-                    default_price = default_prices.get(symbol, 100)
-                    signal["entry_price"] = default_price
-                    logger.warning(f"[FALLBACK] Usando preço padrão para {symbol}: ${default_price}")
+                    logger.warning(f"[DESCARTADO] {symbol}: sem entry_price real — descartando sinal")
+                    signal["signal"] = "NO_SIGNAL"
+                    signal["confidence"] = 0
+                    signal["block_reason"] = "Sem entry_price real disponível"
+                    return signal
 
                 # Calcular stop loss se não tiver
                 if not signal.get("stop_loss") and signal.get("entry_price"):
@@ -1586,14 +1574,12 @@ Responda APENAS com JSON:
                 # CORREÇÃO: Não usar asyncio.run() aqui pois já estamos em um event loop
                 # O preço será obtido no método analyze() antes de chamar _process_agent_response
                 if not signal.get("entry_price"):
-                    # Usar valores padrão baseados no símbolo
-                    default_prices = {
-                        "BTCUSDT": 90000, "ETHUSDT": 3000, "SOLUSDT": 140,
-                        "BNBUSDT": 600, "ADAUSDT": 0.5, "XRPUSDT": 2.0,
-                        "DOGEUSDT": 0.15, "AVAXUSDT": 40, "DOTUSDT": 7, "LINKUSDT": 20
-                    }
-                    signal["entry_price"] = default_prices.get(symbol, 100)
-                    logger.warning(f"[FALLBACK] Usando preço padrão para {symbol}: ${signal['entry_price']}")
+                    # Sem entry_price → descartar (NÃO usar preço hardcoded $100)
+                    logger.warning(f"[DESCARTADO] {symbol}: sem entry_price real — descartando sinal")
+                    signal["signal"] = "NO_SIGNAL"
+                    signal["confidence"] = 0
+                    signal["block_reason"] = "Sem entry_price real disponível"
+                    return signal
 
             # CORRIGIDO: Stop Loss - melhor extração com validação
             if signal["signal"] == "BUY":
@@ -1790,24 +1776,13 @@ Responda APENAS com JSON:
                             except ValueError:
                                 continue
 
-                # Se ainda não tem entry_price, usar valores padrão baseados no símbolo
+                # Sem entry_price → descartar sinal (NÃO usar preço hardcoded $100)
                 if not signal.get("entry_price"):
-                    # Valores padrão aproximados (será substituído quando o sistema coletar preço real)
-                    default_prices = {
-                        "BTCUSDT": 90000,
-                        "ETHUSDT": 3000,
-                        "SOLUSDT": 140,
-                        "BNBUSDT": 600,
-                        "ADAUSDT": 0.5,
-                        "XRPUSDT": 2.0,
-                        "DOGEUSDT": 0.15,
-                        "AVAXUSDT": 40,
-                        "DOTUSDT": 7,
-                        "LINKUSDT": 20
-                    }
-                    default_price = default_prices.get(symbol, 100)
-                    signal["entry_price"] = default_price
-                    logger.warning(f"[FALLBACK] Usando preço padrão para {symbol}: ${default_price}")
+                    logger.warning(f"[DESCARTADO] {symbol}: sem entry_price real — descartando sinal")
+                    signal["signal"] = "NO_SIGNAL"
+                    signal["confidence"] = 0
+                    signal["block_reason"] = "Sem entry_price real disponível"
+                    return signal
 
                 # Calcular stop loss se não tiver
                 if not signal.get("stop_loss") and signal.get("entry_price"):
