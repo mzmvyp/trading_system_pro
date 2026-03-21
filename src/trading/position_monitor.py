@@ -28,8 +28,9 @@ logger = get_logger(__name__)
 class PositionMonitor:
     """Monitora e reavalia posições abertas na Binance"""
 
-    # Circuit breaker: fecha posição se ROI margem atingir esse limite
-    MAX_LOSS_ROI_PERCENT = -15.0  # -15% do ROI na margem = fechar
+    # Circuit breaker: fecha posição se prejuízo no PREÇO atingir esse limite
+    # Usa variação do preço (não ROI da margem) para ser independente da alavancagem
+    MAX_LOSS_PRICE_PERCENT = -5.0  # -5% de variação do preço contra a posição = fechar
 
     def __init__(self):
         self._last_reeval: Dict[str, datetime] = {}
@@ -86,26 +87,28 @@ class PositionMonitor:
                 results["checked"] += 1
 
                 try:
-                    # 1. CIRCUIT BREAKER: verificar ROI da margem
+                    # 1. CIRCUIT BREAKER: verificar variação do PREÇO (não ROI margem)
+                    # ROI margem com alavancagem alta dispara circuit breaker com variações minúsculas
                     entry_price = pos.get("entry_price", 0)
+                    mark_price = pos.get("mark_price", 0)
                     pnl = pos.get("unrealized_pnl", 0)
-                    leverage = pos.get("leverage", 20)
+                    leverage = pos.get("leverage", 1)
                     position_amt = abs(pos.get("position_amt", 0))
                     side = pos.get("side", "LONG")
 
-                    # Calcular ROI na margem (= PnL / margem_usada)
-                    if entry_price > 0 and position_amt > 0:
-                        notional = position_amt * entry_price
-                        margin_used = notional / leverage if leverage > 0 else notional
-                        roi_percent = (pnl / margin_used * 100) if margin_used > 0 else 0
+                    # Calcular variação do preço (independente da alavancagem)
+                    if entry_price > 0 and mark_price > 0:
+                        if side == "LONG":
+                            price_change_pct = ((mark_price - entry_price) / entry_price) * 100
+                        else:  # SHORT
+                            price_change_pct = ((entry_price - mark_price) / entry_price) * 100
                     else:
-                        roi_percent = 0
+                        price_change_pct = 0
 
-                    if roi_percent < self.MAX_LOSS_ROI_PERCENT:
+                    if price_change_pct < self.MAX_LOSS_PRICE_PERCENT:
                         logger.warning(
-                            f"[CIRCUIT BREAKER] {symbol}: ROI={roi_percent:.1f}% < {self.MAX_LOSS_ROI_PERCENT}% - FECHANDO!"
+                            f"[CIRCUIT BREAKER] {symbol}: Preço variou {price_change_pct:.1f}% contra (limite: {self.MAX_LOSS_PRICE_PERCENT}%) - FECHANDO!"
                         )
-                        logger.info(f"[CIRCUIT BREAKER] {symbol}: ROI {roi_percent:.1f}% - FECHANDO POSICAO!")
                         try:
                             close_result = await executor.close_position(symbol)
                             if isinstance(close_result, dict) and "error" not in close_result:
@@ -220,23 +223,23 @@ class PositionMonitor:
         rsi_against = False
 
         if side == "LONG":
-            if "bearish" in trend:
+            if "strong_bearish" in trend:
                 trend_against = True
                 against_details.append(f"trend={trend}")
             if macd_hist < 0:
                 macd_against = True
                 against_details.append(f"MACD={macd_hist:.4f}")
-            if rsi < 40:
+            if rsi < 35:
                 rsi_against = True
                 against_details.append(f"RSI={rsi:.0f}")
         else:  # SHORT
-            if "bullish" in trend:
+            if "strong_bullish" in trend:
                 trend_against = True
                 against_details.append(f"trend={trend}")
             if macd_hist > 0:
                 macd_against = True
                 against_details.append(f"MACD={macd_hist:.4f}")
-            if rsi > 60:
+            if rsi > 65:
                 rsi_against = True
                 against_details.append(f"RSI={rsi:.0f}")
 
@@ -391,6 +394,11 @@ class PositionMonitor:
                     if hours_open < settings.reevaluation_min_time_open_hours:
                         logger.debug(f"[REAVALIACAO] {symbol}: pulando, aberta ha {hours_open:.1f}h (min: {settings.reevaluation_min_time_open_hours}h)")
                         continue
+                else:
+                    # SEM TIMESTAMP = não reavaliar (posição pode ter sido aberta agora)
+                    # Evita fechar posições recém-abertas por falta de execution record
+                    logger.info(f"[REAVALIACAO] {symbol}: sem entry_time encontrado — pulando reavaliação (segurança)")
+                    continue
 
                 results["reevaluated"] += 1
                 self._last_reeval[symbol] = now
@@ -516,11 +524,17 @@ class PositionMonitor:
                 if entry_time_str:
                     try:
                         entry_time = datetime.fromisoformat(entry_time_str)
+                        if entry_time.tzinfo is None:
+                            entry_time = entry_time.replace(tzinfo=timezone.utc)
                         hours_open = (now - entry_time).total_seconds() / 3600
                         if hours_open < settings.reevaluation_min_time_open_hours:
                             continue
                     except (ValueError, TypeError):
                         pass
+                else:
+                    # Sem timestamp = não reavaliar (segurança)
+                    logger.info(f"[REAVALIACAO PAPER] {symbol}: sem entry_time — pulando reavaliação")
+                    continue
 
                 results["reevaluated"] += 1
                 self._last_reeval[symbol] = now
@@ -639,25 +653,37 @@ class PositionMonitor:
         return None
 
     async def _find_entry_time(self, symbol: str) -> Optional[datetime]:
-        """Busca timestamp de entrada nos execution records"""
+        """Busca timestamp de entrada nos execution records ou state.json"""
+        # 1. Tentar real_orders
         try:
             records_dir = "real_orders"
-            if not os.path.exists(records_dir):
-                return None
+            if os.path.exists(records_dir):
+                import glob
+                pattern = os.path.join(records_dir, f"execution_{symbol}_*.json")
+                files = sorted(glob.glob(pattern), reverse=True)
 
-            import glob
-            pattern = os.path.join(records_dir, f"execution_{symbol}_*.json")
-            files = sorted(glob.glob(pattern), reverse=True)
+                for f in files:
+                    try:
+                        with open(f, "r") as fh:
+                            record = json.load(fh)
+                            if record.get("status") == "OPEN" and record.get("timestamp"):
+                                return datetime.fromisoformat(record["timestamp"])
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        continue
+        except Exception:
+            pass
 
-            for f in files:
-                try:
-                    with open(f, "r") as fh:
-                        record = json.load(fh)
-                        if record.get("status") == "OPEN" and record.get("timestamp"):
-                            return datetime.fromisoformat(record["timestamp"])
-                except (json.JSONDecodeError, KeyError, ValueError):
-                    continue
-
+        # 2. Fallback: buscar no state.json (portfolio)
+        try:
+            state_file = Path("portfolio/state.json")
+            if state_file.exists():
+                with open(state_file, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+                for pos_key, pos in state.get("positions", {}).items():
+                    if pos.get("symbol") == symbol and pos.get("status") == "OPEN":
+                        ts = pos.get("entry_time") or pos.get("timestamp")
+                        if ts:
+                            return datetime.fromisoformat(ts)
         except Exception:
             pass
 
