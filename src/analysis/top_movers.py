@@ -20,11 +20,56 @@ logger = get_logger(__name__)
 
 # Binance Futures API pública
 BINANCE_FUTURES_TICKER_URL = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+BINANCE_FUTURES_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+
+# Cache de símbolos ativos (TRADING status) — atualizado junto com o cache de movers
+_active_symbols_cache: Optional[set] = None
+_active_symbols_cache_time: Optional[datetime] = None
 
 # Cache para evitar chamadas repetidas dentro do mesmo ciclo
 _top_movers_cache: Optional[Dict] = None
 _top_movers_cache_time: Optional[datetime] = None
 _CACHE_TTL_SECONDS = 300  # 5 minutos
+
+
+async def _fetch_active_trading_symbols(timeout_seconds: int = 15) -> set:
+    """
+    Busca exchangeInfo para obter apenas símbolos com status TRADING.
+    Isso filtra pares em settling, delivering, closed, pre-trading, etc.
+    """
+    global _active_symbols_cache, _active_symbols_cache_time
+
+    now = datetime.now(timezone.utc)
+    if (
+        _active_symbols_cache is not None
+        and _active_symbols_cache_time is not None
+        and (now - _active_symbols_cache_time).total_seconds() < _CACHE_TTL_SECONDS
+    ):
+        return _active_symbols_cache
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(BINANCE_FUTURES_EXCHANGE_INFO_URL) as resp:
+                if resp.status != 200:
+                    logger.warning(f"[TOP_MOVERS] exchangeInfo retornou {resp.status}")
+                    return _active_symbols_cache or set()
+                data = await resp.json()
+                active = {
+                    s["symbol"]
+                    for s in data.get("symbols", [])
+                    if s.get("status") == "TRADING"
+                }
+                _active_symbols_cache = active
+                _active_symbols_cache_time = now
+                logger.debug(f"[TOP_MOVERS] {len(active)} símbolos ativos em Futures")
+                return active
+    except asyncio.TimeoutError:
+        logger.warning("[TOP_MOVERS] Timeout ao buscar exchangeInfo")
+        return _active_symbols_cache or set()
+    except Exception as e:
+        logger.warning(f"[TOP_MOVERS] Erro ao buscar exchangeInfo: {e}")
+        return _active_symbols_cache or set()
 
 
 async def fetch_all_futures_tickers(timeout_seconds: int = 15) -> List[Dict]:
@@ -80,6 +125,11 @@ def _filter_usdt_perpetuals(tickers: List[Dict], min_volume_usdt: float = 50_000
         if last_price <= 0:
             continue
 
+        # Filtrar símbolos sem trades (settling/delisted)
+        trade_count = int(t.get("count", 0))
+        if trade_count < 100:
+            continue
+
         filtered.append({
             "symbol": symbol,
             "price_change_pct": price_change_pct,
@@ -124,14 +174,25 @@ async def get_top_movers(
 
     exclude_set = set(exclude_symbols or [])
 
-    # Buscar todos os tickers
-    tickers = await fetch_all_futures_tickers()
+    # Buscar símbolos ativos (status=TRADING) e todos os tickers em paralelo
+    active_symbols, tickers = await asyncio.gather(
+        _fetch_active_trading_symbols(),
+        fetch_all_futures_tickers(),
+    )
     if not tickers:
         logger.warning("[TOP_MOVERS] Sem dados de tickers")
         return {"gainers": [], "losers": []}
 
     # Filtrar pares válidos
     valid = _filter_usdt_perpetuals(tickers, min_volume_usdt)
+
+    # Filtrar apenas símbolos com status TRADING (exclui settling, delivering, closed)
+    if active_symbols:
+        before = len(valid)
+        valid = [t for t in valid if t["symbol"] in active_symbols]
+        filtered_out = before - len(valid)
+        if filtered_out > 0:
+            logger.info(f"[TOP_MOVERS] {filtered_out} símbolos removidos (não-TRADING)")
 
     # Excluir pares já na lista fixa
     valid = [t for t in valid if t["symbol"] not in exclude_set]

@@ -838,7 +838,13 @@ Responda APENAS com JSON:
                 logger.info(f"[AGNO] Chamando DeepSeek (1 chamada única) para {symbol}")
                 response = await self.agent.arun(prompt)
             else:
-                logger.warning(f"[AGNO] Erro ao coletar dados para {symbol}: {analysis_data.get('error')}")
+                error_msg = analysis_data.get("error", "")
+                # Símbolos em settling/delisted/closed não devem ser analisados
+                if any(kw in str(error_msg) for kw in ["delivering", "settling", "closed", "pre-trading", "-4108"]):
+                    logger.warning(f"[AGNO] {symbol} não está ativo (settling/closed) — pulando análise")
+                    return {"signal": "NO_SIGNAL", "confidence": 0, "source": "AGNO",
+                            "reason": f"Symbol not trading: {error_msg}", "symbol": symbol}
+                logger.warning(f"[AGNO] Erro ao coletar dados para {symbol}: {error_msg}")
                 response = await self.agent.arun(f"Analise {symbol} e forneça sinal de trading em JSON.")
 
             # Salvar resposta bruta para auditoria
