@@ -719,16 +719,17 @@ class BinanceFuturesExecutor:
                 }
 
             # 5. Calcular e configurar alavancagem DINAMICA
-            # Para que a margem isolada seja apenas o valor do risco (stop loss)
+            # Conceito: margem isolada = valor do risco (5% do capital)
             # alavancagem = valor_posicao / margem_desejada
+            # A alavancagem é CONSEQUÊNCIA do cálculo, não um input.
+            # O SL é a proteção real — a margem só precisa cobrir o risco.
             position_value = position_size * entry_price
-            desired_margin = risk_amount * 1.2  # Margem = risco + 20% buffer
+            desired_margin = risk_amount * 1.2  # Margem = risco + 20% buffer para taxas/slippage
 
             if desired_margin > 0:
                 calculated_leverage = int(position_value / desired_margin)
-                # Limitar entre 1x e 10x — alavancagem alta (20-50x) causa
-                # liquidações por ruído mesmo com SL correto (slippage, spreads)
-                calculated_leverage = max(1, min(calculated_leverage, 10))
+                # Cap de segurança: limite da Binance Futures (varia por par, 125x max)
+                calculated_leverage = max(1, min(calculated_leverage, 125))
             else:
                 calculated_leverage = self.default_leverage
 
