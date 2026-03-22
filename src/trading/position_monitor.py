@@ -18,6 +18,7 @@ FILOSOFIA DE REAVALIAÇÃO:
 import json
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.core.logger import get_logger
@@ -32,8 +33,22 @@ class PositionMonitor:
     # Usa variação do preço (não ROI da margem) para ser independente da alavancagem
     MAX_LOSS_PRICE_PERCENT = -5.0  # -5% de variação do preço contra a posição = fechar
 
+    # Trailing stop: níveis progressivos de proteção
+    # Quando o preço atinge X% de lucro, mover SL para garantir Y% de lucro
+    TRAILING_LEVELS = [
+        # (lucro_trigger_pct, sl_lock_pct)
+        # Exemplo: quando lucro >= 1.0%, mover SL para garantir 0.3% de lucro
+        (0.8, 0.2),    # 0.8% lucro → SL garante 0.2%
+        (1.5, 0.7),    # 1.5% lucro → SL garante 0.7%
+        (2.5, 1.5),    # 2.5% lucro → SL garante 1.5%
+        (4.0, 2.8),    # 4.0% lucro → SL garante 2.8%
+        (6.0, 4.5),    # 6.0% lucro → SL garante 4.5%
+        (10.0, 8.0),   # 10.0% lucro → SL garante 8.0%
+    ]
+
     def __init__(self):
         self._last_reeval: Dict[str, datetime] = {}
+        self._trailing_sl_applied: Dict[str, float] = {}  # {symbol: último SL trailing aplicado}
 
     async def check_all_positions(self, executor) -> Dict[str, Any]:
         """
@@ -201,6 +216,109 @@ class PositionMonitor:
 
         return results
 
+    async def apply_trailing_stop(self, executor) -> Dict[str, Any]:
+        """
+        Trailing stop progressivo: roda CADA ciclo (sem restrição de tempo).
+        Quando o preço atinge certos níveis de lucro, move o SL para proteger ganhos.
+
+        Usa TRAILING_LEVELS: lista de (trigger_pct, lock_pct).
+        Exemplo: lucro de 1.5% → SL move para garantir 0.7% de lucro.
+
+        IMPORTANTE: Só move SL para CIMA (LONG) ou para BAIXO (SHORT) — nunca piora.
+        """
+        results = {"checked": 0, "sl_trailed": 0, "errors": []}
+
+        try:
+            positions = await executor.get_all_positions()
+            if not positions:
+                return results
+
+            for pos in positions:
+                symbol = pos.get("symbol", "")
+                side = pos.get("side", "LONG")
+                entry_price = pos.get("entry_price", 0)
+                mark_price = pos.get("mark_price", 0)
+                position_amt = abs(pos.get("position_amt", 0))
+
+                if not symbol or entry_price <= 0 or mark_price <= 0 or position_amt <= 0:
+                    continue
+
+                results["checked"] += 1
+
+                # Calcular lucro % do preço
+                if side == "LONG":
+                    profit_pct = ((mark_price - entry_price) / entry_price) * 100
+                else:
+                    profit_pct = ((entry_price - mark_price) / entry_price) * 100
+
+                if profit_pct <= 0:
+                    continue  # Sem lucro, nada a proteger
+
+                # Encontrar o melhor nível de trailing aplicável
+                best_lock_pct = None
+                for trigger_pct, lock_pct in self.TRAILING_LEVELS:
+                    if profit_pct >= trigger_pct:
+                        best_lock_pct = lock_pct
+
+                if best_lock_pct is None:
+                    continue  # Lucro ainda não atingiu nenhum nível
+
+                # Calcular novo SL
+                if side == "LONG":
+                    new_sl = entry_price * (1 + best_lock_pct / 100)
+                else:
+                    new_sl = entry_price * (1 - best_lock_pct / 100)
+
+                # Verificar se é MELHOR que o SL trailing já aplicado
+                current_trailing = self._trailing_sl_applied.get(symbol, 0)
+                sl_is_better = False
+                if side == "LONG":
+                    sl_is_better = new_sl > current_trailing if current_trailing else True
+                else:
+                    sl_is_better = new_sl < current_trailing if current_trailing else True
+
+                if not sl_is_better:
+                    continue  # Já tem trailing melhor aplicado
+
+                # Buscar SL atual da exchange para comparar
+                algo_orders = await executor.get_open_algo_orders(symbol)
+                current_sl_price = None
+                for order in algo_orders:
+                    if (order.get("type") or "").upper() == "STOP_MARKET":
+                        current_sl_price = float(order.get("stopPrice", 0) or order.get("triggerPrice", 0) or 0)
+                        break
+
+                # Só mover se o novo SL é melhor que o SL atual na exchange
+                if current_sl_price:
+                    if side == "LONG" and new_sl <= current_sl_price:
+                        continue
+                    if side == "SHORT" and new_sl >= current_sl_price:
+                        continue
+
+                # Aplicar trailing stop
+                logger.info(
+                    f"[TRAILING STOP] {symbol} ({side}): lucro {profit_pct:.1f}% atingiu nível → "
+                    f"SL movendo de ${current_sl_price or 0:.4f} para ${new_sl:.4f} "
+                    f"(garante {best_lock_pct:.1f}% de lucro)"
+                )
+
+                success = await self._move_stop_loss(executor, symbol, side, position_amt, new_sl)
+                if success:
+                    self._trailing_sl_applied[symbol] = new_sl
+                    results["sl_trailed"] += 1
+                    logger.info(f"[TRAILING STOP] {symbol}: SL trailing aplicado em ${new_sl:.4f}")
+                else:
+                    results["errors"].append(f"Trailing {symbol}: failed to move SL")
+
+        except Exception as e:
+            logger.exception(f"[TRAILING STOP] Erro geral: {e}")
+            results["errors"].append(f"General: {e}")
+
+        if results["sl_trailed"] > 0:
+            logger.info(f"[TRAILING STOP] {results['sl_trailed']} stops ajustados de {results['checked']} posições")
+
+        return results
+
     def _evaluate_reversal(self, side: str, trend: str, macd_hist: float, rsi: float,
                            pnl: float, entry_price: float = 0, current_price: float = 0) -> tuple:
         """
@@ -223,23 +341,23 @@ class PositionMonitor:
         rsi_against = False
 
         if side == "LONG":
-            if "strong_bearish" in trend:
+            if "bearish" in trend:
                 trend_against = True
                 against_details.append(f"trend={trend}")
             if macd_hist < 0:
                 macd_against = True
                 against_details.append(f"MACD={macd_hist:.4f}")
-            if rsi < 35:
+            if rsi < 40:
                 rsi_against = True
                 against_details.append(f"RSI={rsi:.0f}")
         else:  # SHORT
-            if "strong_bullish" in trend:
+            if "bullish" in trend:
                 trend_against = True
                 against_details.append(f"trend={trend}")
             if macd_hist > 0:
                 macd_against = True
                 against_details.append(f"MACD={macd_hist:.4f}")
-            if rsi > 65:
+            if rsi > 60:
                 rsi_against = True
                 against_details.append(f"RSI={rsi:.0f}")
 
