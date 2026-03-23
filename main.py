@@ -349,7 +349,10 @@ async def main():
                                 # Verificar saúde (SL ativo, circuit breaker)
                                 await monitor.check_all_positions(exec_monitor)
 
-                                # Reavaliar posições (análise técnica) - CADA ciclo
+                                # Trailing stop: proteger lucros progressivamente (CADA ciclo)
+                                await monitor.apply_trailing_stop(exec_monitor)
+
+                                # Reavaliar posições (análise técnica) - respeita min_time_open
                                 await monitor.reevaluate_positions(exec_monitor, agent)
                             else:
                                 # Paper mode: reavaliar posições paper
