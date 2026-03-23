@@ -289,20 +289,42 @@ class AgnoTradingAgent:
             # has_confluence = True se modelo prevê sucesso E probabilidade > threshold
             has_confluence = prediction == 1 and probability >= ml_threshold
 
-            # ML só bloqueia sinais se ml_required=True E acurácia OPERACIONAL >= 60%
-            # Usa acurácia operacional (baseada em prob >= threshold) ao invés de classe,
-            # para refletir a decisão real que o sistema toma ao bloquear/passar sinais.
+            # ML bloqueia sinais se ml_required=True E acurácia >= 60%
+            # Prioridade: acurácia operacional (se amostras suficientes), senão classe
             MIN_ACCURACY_TO_BLOCK = 60.0
+            MIN_SAMPLES_OPERATIONAL = 20  # Mínimo de amostras para operacional ser confiável
             if ml_required:
                 accuracies = self._get_model_accuracies()
-                # Acurácia operacional (preferida) — mede decisão real de bloqueio
-                ml_acc = accuracies.get("ml_accuracy")  # já retorna operacional com fallback para classe
                 ml_class_acc = accuracies.get("ml_class_accuracy")
                 ml_op_acc = accuracies.get("ml_operational_accuracy")
 
+                # Decidir qual acurácia usar:
+                # - Operacional preferida, mas só se tiver amostras suficientes
+                # - Com poucas amostras operacionais, usar classe (mais estável)
+                from src.trading.signal_tracker import get_system_accuracy_report
+                try:
+                    report = get_system_accuracy_report()
+                    op_total = report.get("ml_operational", {}).get("pass_total", 0) + report.get("ml_operational", {}).get("block_total", 0)
+                except Exception:
+                    op_total = 0
+
+                if ml_op_acc is not None and op_total >= MIN_SAMPLES_OPERATIONAL:
+                    ml_acc = ml_op_acc
+                    acc_source = "operacional"
+                elif ml_class_acc is not None:
+                    ml_acc = ml_class_acc
+                    acc_source = "classe"
+                else:
+                    ml_acc = None
+                    acc_source = "indisponível"
+
+                logger.info(
+                    f"[ML] Usando acurácia {acc_source}={ml_acc}% "
+                    f"(classe={ml_class_acc}%, operacional={ml_op_acc}%, amostras_op={op_total})"
+                )
+
                 # Verificar se modelo está "viciado" (predizendo quase tudo
-                # como mesma classe). Um modelo que prediz >85% SKIP ou >85%
-                # EXECUTE não aprendeu nada útil — está apenas chutando.
+                # como mesma classe — >85% mesma saída = modelo chutando)
                 ml_is_biased = self._check_ml_prediction_bias()
 
                 if ml_is_biased:
@@ -316,14 +338,17 @@ class AgnoTradingAgent:
                     if skip_signal:
                         logger.info(
                             f"[ML BLOCK] pred={prediction}, prob={probability:.1%} (threshold={ml_threshold:.1%}) "
-                            f"| acc_operacional={ml_op_acc}%, acc_classe={ml_class_acc}%"
+                            f"| acc_{acc_source}={ml_acc:.1f}%"
+                        )
+                    else:
+                        logger.info(
+                            f"[ML PASS] pred={prediction}, prob={probability:.1%} — acc_{acc_source}={ml_acc:.1f}%"
                         )
                 else:
                     skip_signal = False
                     logger.info(
-                        f"[ML] Acurácia operacional={ml_acc}% < {MIN_ACCURACY_TO_BLOCK}% — "
-                        f"ML não tem relevância para bloquear sinal "
-                        f"(classe={ml_class_acc}%, operacional={ml_op_acc}%)"
+                        f"[ML] Acurácia {acc_source}={ml_acc}% < {MIN_ACCURACY_TO_BLOCK}% — "
+                        f"ML não tem relevância para bloquear sinal"
                     )
             else:
                 skip_signal = False

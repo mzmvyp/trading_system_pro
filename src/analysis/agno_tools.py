@@ -1954,10 +1954,11 @@ def validate_risk_and_position(
 
         # Circuit Breaker 4: Verificar limite diário de trades
         daily_trades = _get_daily_trades_count()
-        if daily_trades >= 3:  # Máximo 3 trades por dia (reduzido de 5 - overtrading detectado)
+        max_daily = settings.max_daily_trades
+        if daily_trades >= max_daily:
             return {
                 "can_execute": False,
-                "reason": f"Limite diário de trades atingido: {daily_trades} (máximo 3)",
+                "reason": f"Limite diário de trades atingido: {daily_trades} (máximo {max_daily})",
                 "risk_level": "medium"
             }
 
