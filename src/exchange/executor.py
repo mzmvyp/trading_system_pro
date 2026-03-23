@@ -639,20 +639,32 @@ class BinanceFuturesExecutor:
                     "error": f"Ja existe posicao aberta para {symbol}: {existing_position['side']} {abs(existing_position['position_amt'])}"
                 }
 
-            # 2a. Verificar LIMITE de posições simultâneas
+            # 2a. GUARDA DIRECIONAL: máximo 2 posições na mesma direção
+            # Evita stop em massa quando mercado reverte contra posições correlacionadas
             all_positions = await self.get_all_positions()
-            open_count = len(all_positions) if all_positions else 0
-            max_positions = settings.max_open_positions
-            if open_count >= max_positions:
-                symbols_open = [p.get("symbol", "?") for p in (all_positions or [])]
-                logger.warning(
-                    f"[MAX POSICOES] Limite de {max_positions} posições atingido. "
-                    f"Abertas: {symbols_open}. Sinal {symbol} REJEITADO."
-                )
-                return {
-                    "success": False,
-                    "error": f"Limite de {max_positions} posições simultâneas atingido ({open_count} abertas: {', '.join(symbols_open)})"
-                }
+            if all_positions:
+                signal_side = signal.get("signal", "").upper()
+                # Na Binance, side SHORT = positionAmt negativo, LONG = positivo
+                if signal_side == "SELL":
+                    same_dir = [p for p in all_positions if float(p.get("positionAmt", p.get("position_amt", 0))) < 0]
+                elif signal_side == "BUY":
+                    same_dir = [p for p in all_positions if float(p.get("positionAmt", p.get("position_amt", 0))) > 0]
+                else:
+                    same_dir = []
+                max_same_direction = 2
+                if len(same_dir) >= max_same_direction:
+                    dir_label = "SHORT" if signal_side == "SELL" else "LONG"
+                    same_symbols = [p.get("symbol", "?") for p in same_dir]
+                    logger.warning(
+                        f"[GUARDA DIRECIONAL] {dir_label} {symbol} BLOQUEADO: já existem {len(same_dir)} "
+                        f"{dir_label}s abertos ({', '.join(same_symbols)}). "
+                        f"Máximo {max_same_direction} na mesma direção para evitar stop em massa."
+                    )
+                    return {
+                        "success": False,
+                        "error": f"Guarda direcional: já existem {len(same_dir)} {dir_label}s abertos "
+                                 f"({', '.join(same_symbols)}). Máximo {max_same_direction} na mesma direção."
+                    }
 
             # 2b. Cancelar TODAS as ordens pendentes (regulares + algo SL/TP) antes de abrir nova posição
             # Evita acúmulo/duplicação de ordens; get_open_orders só retorna regulares, então sempre cancelar

@@ -116,13 +116,15 @@ class AgnoTradingAgent:
     def _get_model_accuracies(self) -> Dict[str, Optional[float]]:
         """
         Retorna acurácia atual do ML e LSTM (cache de 30 min).
-        Modelos com acurácia < 60% não devem bloquear sinais.
+        Modelos com acurácia < 60% não devem votar/bloquear sinais.
 
-        Usa acurácia OPERACIONAL do ML (baseada em prob >= 0.65 + pred == 1)
-        ao invés da acurácia por classe, para refletir a decisão real de bloqueio.
+        Usa acurácia do MODELO TREINADO (model_info_simple.json / bilstm_model_info.json)
+        como fonte primária. A acurácia operacional do log de votos é mantida apenas
+        para comparação/log, mas NÃO é usada para decidir se o modelo pode votar.
 
         Returns:
-            Dict com 'ml_accuracy', 'ml_class_accuracy', 'lstm_accuracy' (percentual ou None)
+            Dict com 'ml_accuracy', 'ml_trained_accuracy', 'lstm_accuracy',
+            'lstm_trained_accuracy' (percentual ou None)
         """
         now = datetime.now(timezone.utc)
         cache_ttl = timedelta(minutes=30)
@@ -135,44 +137,91 @@ class AgnoTradingAgent:
             return AgnoTradingAgent._model_accuracy_cache
 
         try:
-            from src.trading.signal_tracker import get_system_accuracy_report
-            report = get_system_accuracy_report()
+            import json as _json
 
-            # Acurácia OPERACIONAL (prob >= 0.65 + pred == 1 vs outcome) — métrica correta para bloqueio
-            ml_op = report.get("ml_operational", {})
-            ml_op_acc = ml_op.get("accuracy_pct")
+            # === FONTE PRIMÁRIA: acurácia do modelo treinado (mesma que o dashboard mostra) ===
+            ml_trained_acc = None
+            lstm_trained_acc = None
 
-            # Acurácia por classe (prediction vs outcome) — métrica original (mantida para comparação)
-            ml_class_acc = report.get("ml", {}).get("accuracy_pct")
+            # ML: ler de model_info_simple.json
+            ml_info_path = os.path.join("ml_models", "model_info_simple.json")
+            if os.path.exists(ml_info_path):
+                try:
+                    with open(ml_info_path, "r") as f:
+                        ml_info = _json.load(f)
+                    ml_trained_acc_raw = ml_info.get("best_accuracy")
+                    if ml_trained_acc_raw is not None:
+                        # best_accuracy é armazenado como fração (0.628) — converter para percentual
+                        ml_trained_acc = ml_trained_acc_raw * 100 if ml_trained_acc_raw <= 1.0 else ml_trained_acc_raw
+                except Exception as e:
+                    logger.warning(f"[ACCURACY] Erro ao ler ML model_info: {e}")
 
-            # Usar acurácia operacional se disponível, senão fallback para classe
-            ml_acc = ml_op_acc if ml_op_acc is not None else ml_class_acc
+            # LSTM: ler de bilstm_model_info.json
+            lstm_info_path = os.path.join("ml_models", "bilstm_model_info.json")
+            if os.path.exists(lstm_info_path):
+                try:
+                    with open(lstm_info_path, "r") as f:
+                        lstm_info = _json.load(f)
+                    lstm_test_acc_raw = lstm_info.get("results", {}).get("test", {}).get("accuracy")
+                    if lstm_test_acc_raw is not None:
+                        lstm_trained_acc = lstm_test_acc_raw * 100 if lstm_test_acc_raw <= 1.0 else lstm_test_acc_raw
+                except Exception as e:
+                    logger.warning(f"[ACCURACY] Erro ao ler LSTM model_info: {e}")
 
-            lstm_acc = report.get("lstm", {}).get("accuracy_pct")
+            # Também ler do validador carregado em memória (fallback)
+            if lstm_trained_acc is None and self.lstm_sequence_validator is not None:
+                try:
+                    mi = self.lstm_sequence_validator.model_info
+                    lstm_test_acc_raw = mi.get("results", {}).get("test", {}).get("accuracy")
+                    if lstm_test_acc_raw is not None:
+                        lstm_trained_acc = lstm_test_acc_raw * 100 if lstm_test_acc_raw <= 1.0 else lstm_test_acc_raw
+                except Exception:
+                    pass
+
+            # === FONTE SECUNDÁRIA (apenas para log): acurácia operacional do log de votos ===
+            ml_op_acc = None
+            ml_class_acc = None
+            lstm_log_acc = None
+            try:
+                from src.trading.signal_tracker import get_system_accuracy_report
+                report = get_system_accuracy_report()
+                ml_op = report.get("ml_operational", {})
+                ml_op_acc = ml_op.get("accuracy_pct")
+                ml_class_acc = report.get("ml", {}).get("accuracy_pct")
+                lstm_log_acc = report.get("lstm", {}).get("accuracy_pct")
+            except Exception:
+                pass
+
+            # === Decisão: usar acurácia do modelo treinado ===
+            ml_acc = ml_trained_acc
+            lstm_acc = lstm_trained_acc
+
             result = {
                 "ml_accuracy": ml_acc,
-                "ml_class_accuracy": ml_class_acc,
+                "ml_trained_accuracy": ml_trained_acc,
                 "ml_operational_accuracy": ml_op_acc,
+                "ml_class_accuracy": ml_class_acc,
                 "lstm_accuracy": lstm_acc,
+                "lstm_trained_accuracy": lstm_trained_acc,
+                "lstm_operational_accuracy": lstm_log_acc,
             }
             AgnoTradingAgent._model_accuracy_cache = result
             AgnoTradingAgent._model_accuracy_updated = now
 
-            # Log detalhado para comparar as duas métricas
-            ml_pass_acc = ml_op.get("pass_accuracy_pct")
-            ml_block_acc = ml_op.get("block_accuracy_pct")
-            ml_str = f"ML class={ml_class_acc}" if ml_class_acc is None else f"ML class={ml_class_acc:.1f}%"
-            ml_op_str = f"ML operational={ml_op_acc}" if ml_op_acc is None else f"ML operational={ml_op_acc:.1f}%"
-            ml_pass_str = f"pass_winrate={ml_pass_acc}" if ml_pass_acc is None else f"pass_winrate={ml_pass_acc:.1f}%"
-            ml_block_str = f"block_correct={ml_block_acc}" if ml_block_acc is None else f"block_correct={ml_block_acc:.1f}%"
-            lstm_str = f"LSTM={lstm_acc}" if lstm_acc is None else f"LSTM={lstm_acc:.1f}%"
+            # Log detalhado
+            ml_str = f"ML trained={ml_trained_acc:.1f}%" if ml_trained_acc is not None else "ML trained=N/A"
+            ml_op_str = f"ML op_log={ml_op_acc:.1f}%" if ml_op_acc is not None else "ML op_log=N/A"
+            lstm_str = f"LSTM trained={lstm_trained_acc:.1f}%" if lstm_trained_acc is not None else "LSTM trained=N/A"
+            lstm_log_str = f"LSTM op_log={lstm_log_acc:.1f}%" if lstm_log_acc is not None else "LSTM op_log=N/A"
             logger.info(
-                f"[ACCURACY] {ml_str} | {ml_op_str} ({ml_pass_str}, {ml_block_str}) | {lstm_str}"
+                f"[ACCURACY] {ml_str} | {ml_op_str} | {lstm_str} | {lstm_log_str}"
             )
             return result
         except Exception as e:
             logger.warning(f"[ACCURACY] Erro ao obter acurácias: {e}")
-            return {"ml_accuracy": None, "ml_class_accuracy": None, "ml_operational_accuracy": None, "lstm_accuracy": None}
+            return {"ml_accuracy": None, "ml_trained_accuracy": None, "ml_operational_accuracy": None,
+                    "ml_class_accuracy": None, "lstm_accuracy": None, "lstm_trained_accuracy": None,
+                    "lstm_operational_accuracy": None}
 
     def _check_ml_prediction_bias(self) -> bool:
         """
@@ -290,37 +339,20 @@ class AgnoTradingAgent:
             has_confluence = prediction == 1 and probability >= ml_threshold
 
             # ML bloqueia sinais se ml_required=True E acurácia >= 60%
-            # Prioridade: acurácia operacional (se amostras suficientes), senão classe
+            # Usa acurácia do modelo treinado (mesma do dashboard)
             MIN_ACCURACY_TO_BLOCK = 60.0
-            MIN_SAMPLES_OPERATIONAL = 20  # Mínimo de amostras para operacional ser confiável
             if ml_required:
                 accuracies = self._get_model_accuracies()
-                ml_class_acc = accuracies.get("ml_class_accuracy")
+                ml_trained_acc = accuracies.get("ml_trained_accuracy")
                 ml_op_acc = accuracies.get("ml_operational_accuracy")
 
-                # Decidir qual acurácia usar:
-                # - Operacional preferida, mas só se tiver amostras suficientes
-                # - Com poucas amostras operacionais, usar classe (mais estável)
-                from src.trading.signal_tracker import get_system_accuracy_report
-                try:
-                    report = get_system_accuracy_report()
-                    op_total = report.get("ml_operational", {}).get("pass_total", 0) + report.get("ml_operational", {}).get("block_total", 0)
-                except Exception:
-                    op_total = 0
-
-                if ml_op_acc is not None and op_total >= MIN_SAMPLES_OPERATIONAL:
-                    ml_acc = ml_op_acc
-                    acc_source = "operacional"
-                elif ml_class_acc is not None:
-                    ml_acc = ml_class_acc
-                    acc_source = "classe"
-                else:
-                    ml_acc = None
-                    acc_source = "indisponível"
+                # Usar acurácia do modelo treinado (fonte primária)
+                ml_acc = ml_trained_acc
+                acc_source = "modelo_treinado" if ml_trained_acc is not None else "indisponível"
 
                 logger.info(
                     f"[ML] Usando acurácia {acc_source}={ml_acc}% "
-                    f"(classe={ml_class_acc}%, operacional={ml_op_acc}%, amostras_op={op_total})"
+                    f"(modelo_treinado={ml_trained_acc}%, operacional_log={ml_op_acc}%)"
                 )
 
                 # Verificar se modelo está "viciado" (predizendo quase tudo
@@ -1240,54 +1272,93 @@ Responda APENAS com JSON:
                         f"prob={ml_prob:.1%}, predicao={ml_opinion}"
                     )
                 else:
-                    # Obter tendência dinâmica para filtro
+                    # FILTRO DE REGIME BTC: Bloqueia shorts em mercado bullish e longs em bearish
+                    # Previne stop em massa quando todas as posições vão contra a tendência macro
+                    btc_regime_blocked = False
                     try:
-                        trend_data = await get_trend(symbol)
+                        from src.analysis.market_regime_filter import MarketRegimeFilter
+                        regime_filter = MarketRegimeFilter()
+                        regime_result = await regime_filter.analyze_btc_regime()
+                        regime = regime_result.get("regime", "NEUTRAL")
+                        regime_conf = regime_result.get("confidence", 0)
+                        sig_type = agno_signal.get("signal", "").upper()
+                        allowed, regime_msg = regime_filter.should_allow_signal(sig_type)
+                        btc_data = regime_result.get("btc_data", {})
+                        btc_price_change = btc_data.get("price_change_24h", 0)
+                        logger.info(
+                            f"[BTC REGIME] {regime} (conf={regime_conf:.0%}, BTC 24h={btc_price_change:+.1f}%) "
+                            f"| {sig_type} {symbol}: {regime_msg}"
+                        )
+                        if not allowed:
+                            logger.warning(
+                                f"[BTC REGIME BLOCK] {sig_type} {symbol} BLOQUEADO: {regime_msg}. "
+                                f"BTC em {regime} — evita stop em massa de posições contra tendência macro."
+                            )
+                            btc_regime_blocked = True
                     except Exception as e:
-                        logger.warning(f"[TREND] Erro ao obter tendência: {e}")
-                        trend_data = None
-                    validation = validate_risk_and_position(agno_signal, symbol, _trend_data=trend_data)
-                    if validation.get("can_execute"):
-                        logger.info(f"[AGNO] Risco/posição OK. Executando sinal {agno_signal.get('signal')} para {symbol}")
-                        position_size = validation.get("recommended_position_size", validation.get("position_size"))
+                        logger.warning(f"[BTC REGIME] Erro ao analisar regime BTC: {e} — permitindo sinal")
 
-                        # VERIFICAR MODO DE TRADING: paper ou real
-                        if settings.trading_mode == "real":
-                            # MODO REAL: Executar na Binance Futures
-                            # IMPORTANTE: Passar position_size=None para que o executor calcule
-                            # baseado no saldo REAL disponível na Binance
-                            from src.exchange.executor import BinanceFuturesExecutor
-                            executor = BinanceFuturesExecutor()
-                            execution_result = await executor.execute_signal(agno_signal, position_size=None)
-                            if execution_result.get("success"):
-                                self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
-                                logger.info(f"[AGNO REAL] Trade REAL executado: {execution_result.get('message', '')}")
-                            else:
-                                self._mark_signal_executed(agno_signal, "real", False, execution_result.get("error", ""))
-                                logger.warning(f"[AGNO REAL] Falha ao executar trade REAL: {execution_result.get('error', '')}")
-                        else:
-                            # MODO PAPER: Simulação
-                            execution_result = execute_paper_trade(agno_signal, position_size)
-                            if execution_result.get("success"):
-                                self._mark_signal_executed(agno_signal, "paper", True, execution_result.get("message", ""))
-                                logger.info(f"[AGNO PAPER] Trade PAPER executado: {execution_result.get('message', '')}")
-                            else:
-                                self._mark_signal_executed(agno_signal, "paper", False, execution_result.get("error", ""))
-                                logger.warning(f"[AGNO PAPER] Falha ao executar trade PAPER: {execution_result.get('error', '')}")
-                    else:
-                        reason = validation.get("reason", "Desconhecido")
-                        logger.info(f"[AGNO] Sinal nao executado (risco/posição): {reason}")
-                        # Guardar motivo no ficheiro do sinal para análise no dashboard
+                    if btc_regime_blocked:
+                        # Sinal bloqueado pelo regime BTC — salvar motivo
                         filepath = agno_signal.get("_signal_file")
                         if filepath and os.path.exists(filepath):
                             try:
                                 with open(filepath, "r", encoding="utf-8") as f:
                                     saved = json.load(f)
-                                saved["non_execution_reason"] = reason
+                                saved["non_execution_reason"] = f"BTC regime block: {regime} — {sig_type} contra tendência macro"
                                 with open(filepath, "w", encoding="utf-8") as f:
                                     json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
                             except Exception:
                                 pass
+                    else:
+                        # Obter tendência dinâmica para filtro
+                        try:
+                            trend_data = await get_trend(symbol)
+                        except Exception as e:
+                            logger.warning(f"[TREND] Erro ao obter tendência: {e}")
+                            trend_data = None
+                        validation = validate_risk_and_position(agno_signal, symbol, _trend_data=trend_data)
+                        if validation.get("can_execute"):
+                            logger.info(f"[AGNO] Risco/posição OK. Executando sinal {agno_signal.get('signal')} para {symbol}")
+                            position_size = validation.get("recommended_position_size", validation.get("position_size"))
+
+                            # VERIFICAR MODO DE TRADING: paper ou real
+                            if settings.trading_mode == "real":
+                                # MODO REAL: Executar na Binance Futures
+                                # IMPORTANTE: Passar position_size=None para que o executor calcule
+                                # baseado no saldo REAL disponível na Binance
+                                from src.exchange.executor import BinanceFuturesExecutor
+                                executor = BinanceFuturesExecutor()
+                                execution_result = await executor.execute_signal(agno_signal, position_size=None)
+                                if execution_result.get("success"):
+                                    self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
+                                    logger.info(f"[AGNO REAL] Trade REAL executado: {execution_result.get('message', '')}")
+                                else:
+                                    self._mark_signal_executed(agno_signal, "real", False, execution_result.get("error", ""))
+                                    logger.warning(f"[AGNO REAL] Falha ao executar trade REAL: {execution_result.get('error', '')}")
+                            else:
+                                # MODO PAPER: Simulação
+                                execution_result = execute_paper_trade(agno_signal, position_size)
+                                if execution_result.get("success"):
+                                    self._mark_signal_executed(agno_signal, "paper", True, execution_result.get("message", ""))
+                                    logger.info(f"[AGNO PAPER] Trade PAPER executado: {execution_result.get('message', '')}")
+                                else:
+                                    self._mark_signal_executed(agno_signal, "paper", False, execution_result.get("error", ""))
+                                    logger.warning(f"[AGNO PAPER] Falha ao executar trade PAPER: {execution_result.get('error', '')}")
+                        else:
+                            reason = validation.get("reason", "Desconhecido")
+                            logger.info(f"[AGNO] Sinal nao executado (risco/posição): {reason}")
+                            # Guardar motivo no ficheiro do sinal para análise no dashboard
+                            filepath = agno_signal.get("_signal_file")
+                            if filepath and os.path.exists(filepath):
+                                try:
+                                    with open(filepath, "r", encoding="utf-8") as f:
+                                        saved = json.load(f)
+                                    saved["non_execution_reason"] = reason
+                                    with open(filepath, "w", encoding="utf-8") as f:
+                                        json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
+                                except Exception:
+                                    pass
 
             # === NOTIFICAÇÃO POR EMAIL: Sinal gerado ===
             if agno_signal.get("signal") in ["BUY", "SELL"]:
