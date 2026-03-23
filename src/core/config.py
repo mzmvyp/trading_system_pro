@@ -37,7 +37,7 @@ class Settings(BaseSettings):
 
     # Configurações de Risk Management
     # CORRIGIDO: Valores mais conservadores para proteger o capital
-    max_risk_per_trade: float = 0.02  # Máximo 2% de risco por trade (reduzido de 5%)
+    max_risk_per_trade: float = 1  # Máximo 2% de risco por trade (reduzido de 5%)
     max_drawdown: float = 0.15  # Máximo 15% de drawdown (reduzido de 40%)
     max_exposure: float = 0.50  # Máximo 50% de exposição total (reduzido de 80%)
     max_daily_trades: int = 3  # Máximo 3 trades por dia (reduzido de 5)
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     # Porcentagem do capital a arriscar por trade
     # CORRIGIDO: Reduzido de 5% para 2% - mais conservador
     # Exemplo: 2% significa que se o stop loss for atingido, voce perde 2% do capital
-    risk_percent_per_trade: float = 2.0  # 2% do capital arriscado por trade (reduzido de 5%)
+    risk_percent_per_trade: float = 10.0 # 2% do capital arriscado por trade (reduzido de 5%)
 
     # Como calcular o tamanho da posicao:
     # 1. Risco em $ = capital * (risk_percent_per_trade / 100)
@@ -69,7 +69,7 @@ class Settings(BaseSettings):
 
     # Configurações de Confiança
     # UNIFICADO: Sempre usar escala 0-10
-    min_confidence_0_10: int = 6  # Mínimo 6/10 para executar sinais (testar fluxo; 7-8 mais restritivo)
+    min_confidence_0_10: int = 7  # Mínimo 6/10 para executar sinais (testar fluxo; 7-8 mais restritivo)
     # DEPRECATED: min_confidence_0_5 removido - sempre usar escala 0-10
 
     # Configurações de Intervalo de Análise
@@ -113,8 +113,8 @@ class Settings(BaseSettings):
     # REAVALIAÇÃO DE SINAIS ATIVOS
     # ========================================
     reevaluation_enabled: bool = True
-    reevaluation_interval_hours: float = 2.0  # Reavaliar a cada 2h (era 30 min — muito agressivo)
-    reevaluation_min_time_open_hours: float = 2.0  # Só reavaliar após 2h aberta (era 15 min)
+    reevaluation_interval_hours: float = 4.0  # Reavaliar a cada 2h (era 30 min — muito agressivo)
+    reevaluation_min_time_open_hours: float = 4.0  # Só reavaliar após 2h aberta (era 15 min)
     reevaluation_min_confidence: int = 7  # Confiança mínima para agir na reavaliação
 
     # ========================================
@@ -124,7 +124,7 @@ class Settings(BaseSettings):
     ml_validation_enabled: bool = True
     # CORRIGIDO: Threshold aumentado de 0.5 para 0.65 para filtrar sinais fracos
     # 0.5 = basicamente aleatório, 0.65 = mais confiável
-    ml_validation_threshold: float = 0.65
+    ml_validation_threshold: float = 0.6
     # Se True, só executa sinais que passam na validação ML
     # Se False, apenas loga a validação mas executa de qualquer forma
     ml_validation_required: bool = True
