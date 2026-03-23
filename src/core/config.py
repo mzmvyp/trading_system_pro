@@ -36,12 +36,12 @@ class Settings(BaseSettings):
     trading_symbol: str = "BTCUSDT"
 
     # Configurações de Risk Management
-    # CORRIGIDO: Valores mais conservadores para proteger o capital
-    max_risk_per_trade: float = 1  # Máximo 2% de risco por trade (reduzido de 5%)
-    max_drawdown: float = 0.15  # Máximo 15% de drawdown (reduzido de 40%)
-    max_exposure: float = 0.50  # Máximo 50% de exposição total (reduzido de 80%)
-    max_daily_trades: int = 3  # Máximo 3 trades por dia (reduzido de 5)
-    base_risk_percentage: float = 0.01  # 1% base de risco (reduzido de 2%)
+    max_risk_per_trade: float = 0.05  # Máximo 5% de risco por trade
+    max_drawdown: float = 0.15  # Máximo 15% de drawdown
+    max_exposure: float = 0.50  # Máximo 50% de exposição total
+    max_daily_trades: int = 5  # Máximo 5 trades por dia
+    base_risk_percentage: float = 0.01  # 1% base de risco
+    max_open_positions: int = 3  # Máximo 3 posições simultâneas (protege contra stopout em massa)
 
     # ========================================
     # GESTAO DE CAPITAL E RISCO POR TRADE
@@ -50,9 +50,9 @@ class Settings(BaseSettings):
     initial_capital: float = 10000.0  # Capital inicial em USDT
 
     # Porcentagem do capital a arriscar por trade
-    # CORRIGIDO: Reduzido de 5% para 2% - mais conservador
-    # Exemplo: 2% significa que se o stop loss for atingido, voce perde 2% do capital
-    risk_percent_per_trade: float = 10.0 # 2% do capital arriscado por trade (reduzido de 5%)
+    # 5% = se o stop loss for atingido, perde 5% do capital
+    # Com max_open_positions=3, risco máximo total = 15% do capital
+    risk_percent_per_trade: float = 5.0  # 5% do capital arriscado por trade
 
     # Como calcular o tamanho da posicao:
     # 1. Risco em $ = capital * (risk_percent_per_trade / 100)

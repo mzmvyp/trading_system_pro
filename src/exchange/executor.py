@@ -631,12 +631,27 @@ class BinanceFuturesExecutor:
             total_balance = balance.get("total_balance", available)
             logger.info(f"[SALDO] Total: ${total_balance:.2f} | Disponivel: ${available:.2f} USDT")
 
-            # 2. Verificar se já existe posição
+            # 2. Verificar se já existe posição para este símbolo
             existing_position = await self.get_position(symbol)
             if existing_position and "position_amt" in existing_position:
                 return {
                     "success": False,
                     "error": f"Ja existe posicao aberta para {symbol}: {existing_position['side']} {abs(existing_position['position_amt'])}"
+                }
+
+            # 2a. Verificar LIMITE de posições simultâneas
+            all_positions = await self.get_all_positions()
+            open_count = len(all_positions) if all_positions else 0
+            max_positions = settings.max_open_positions
+            if open_count >= max_positions:
+                symbols_open = [p.get("symbol", "?") for p in (all_positions or [])]
+                logger.warning(
+                    f"[MAX POSICOES] Limite de {max_positions} posições atingido. "
+                    f"Abertas: {symbols_open}. Sinal {symbol} REJEITADO."
+                )
+                return {
+                    "success": False,
+                    "error": f"Limite de {max_positions} posições simultâneas atingido ({open_count} abertas: {', '.join(symbols_open)})"
                 }
 
             # 2b. Cancelar TODAS as ordens pendentes (regulares + algo SL/TP) antes de abrir nova posição
