@@ -51,7 +51,6 @@ class Settings(BaseSettings):
 
     # Porcentagem do capital a arriscar por trade
     # 5% = se o stop loss for atingido, perde 5% do capital
-    # Com max_open_positions=3, risco máximo total = 15% do capital
     risk_percent_per_trade: float = 5.0  # 5% do capital arriscado por trade
 
     # Como calcular o tamanho da posicao:

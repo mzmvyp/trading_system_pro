@@ -639,23 +639,9 @@ class BinanceFuturesExecutor:
                     "error": f"Ja existe posicao aberta para {symbol}: {existing_position['side']} {abs(existing_position['position_amt'])}"
                 }
 
-            # 2a. Verificar LIMITE de posições simultâneas
-            all_positions = await self.get_all_positions()
-            open_count = len(all_positions) if all_positions else 0
-            max_positions = settings.max_open_positions
-            if open_count >= max_positions:
-                symbols_open = [p.get("symbol", "?") for p in (all_positions or [])]
-                logger.warning(
-                    f"[MAX POSICOES] Limite de {max_positions} posições atingido. "
-                    f"Abertas: {symbols_open}. Sinal {symbol} REJEITADO."
-                )
-                return {
-                    "success": False,
-                    "error": f"Limite de {max_positions} posições simultâneas atingido ({open_count} abertas: {', '.join(symbols_open)})"
-                }
-
-            # 2a2. GUARDA DIRECIONAL: máximo 2 posições na mesma direção
+            # 2a. GUARDA DIRECIONAL: máximo 2 posições na mesma direção
             # Evita stop em massa quando mercado reverte contra posições correlacionadas
+            all_positions = await self.get_all_positions()
             if all_positions:
                 signal_side = signal.get("signal", "").upper()
                 # Na Binance, side SHORT = positionAmt negativo, LONG = positivo
