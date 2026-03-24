@@ -50,120 +50,126 @@ class MarketRegimeFilter:
             }
 
         try:
-            if client is None:
+            owns_client = client is None
+            if owns_client:
                 from src.exchange.client import BinanceClient
                 client = BinanceClient()
+                await client.__aenter__()
 
-            klines_1h = await client.get_klines("BTCUSDT", "1h", limit=100)
-            klines_4h = await client.get_klines("BTCUSDT", "4h", limit=50)
+            try:
+                klines_1h = await client.get_klines("BTCUSDT", "1h", limit=100)
+                klines_4h = await client.get_klines("BTCUSDT", "4h", limit=50)
 
-            if klines_1h is None or len(klines_1h) < 50:
-                return {"regime": "NEUTRAL", "confidence": 0}
+                if klines_1h is None or len(klines_1h) < 50:
+                    return {"regime": "NEUTRAL", "confidence": 0}
 
-            close_1h = klines_1h["close"].values.astype(float)
-            high_1h = klines_1h["high"].values.astype(float)
-            low_1h = klines_1h["low"].values.astype(float)
-            current_price = float(close_1h[-1])
+                close_1h = klines_1h["close"].values.astype(float)
+                high_1h = klines_1h["high"].values.astype(float)
+                low_1h = klines_1h["low"].values.astype(float)
+                current_price = float(close_1h[-1])
 
-            # Calculate indicators
-            ema_20_1h = self._ema(close_1h, 20)
-            ema_50_1h = self._ema(close_1h, 50)
+                # Calculate indicators
+                ema_20_1h = self._ema(close_1h, 20)
+                ema_50_1h = self._ema(close_1h, 50)
 
-            close_4h = klines_4h["close"].values.astype(float) if klines_4h is not None and len(klines_4h) > 20 else close_1h
-            ema_20_4h = self._ema(close_4h, 20)
-            ema_50_4h = self._ema(close_4h, 50)
+                close_4h = klines_4h["close"].values.astype(float) if klines_4h is not None and len(klines_4h) > 20 else close_1h
+                ema_20_4h = self._ema(close_4h, 20)
+                ema_50_4h = self._ema(close_4h, 50)
 
-            adx_1h = self._adx(high_1h, low_1h, close_1h)
-            rsi_1h = self._rsi(close_1h)
-            rsi_4h = self._rsi(close_4h)
+                adx_1h = self._adx(high_1h, low_1h, close_1h)
+                rsi_1h = self._rsi(close_1h)
+                rsi_4h = self._rsi(close_4h)
 
-            # MACD
-            ema12 = self._ema(close_1h, 12)
-            ema26 = self._ema(close_1h, 26)
-            (ema12 - ema26) - self._ema(np.array([ema12 - ema26][-1:] if len(close_1h) < 50 else [0]), 9)
-            macd_bullish = (ema12 - ema26) > 0
+                # MACD
+                ema12 = self._ema(close_1h, 12)
+                ema26 = self._ema(close_1h, 26)
+                (ema12 - ema26) - self._ema(np.array([ema12 - ema26][-1:] if len(close_1h) < 50 else [0]), 9)
+                macd_bullish = (ema12 - ema26) > 0
 
-            # 24h price change approximation
-            price_change_24h = ((current_price - float(close_1h[-24])) / float(close_1h[-24]) * 100) if len(close_1h) >= 24 else 0
+                # 24h price change approximation
+                price_change_24h = ((current_price - float(close_1h[-24])) / float(close_1h[-24]) * 100) if len(close_1h) >= 24 else 0
 
-            # Scoring
-            bullish_score, bearish_score, total_weight = 0, 0, 0
+                # Scoring
+                bullish_score, bearish_score, total_weight = 0, 0, 0
 
-            checks = [
-                (current_price > ema_20_1h, 3),
-                (current_price > ema_50_1h, 3),
-                (ema_20_1h > ema_50_1h, 4),
-                (current_price > ema_20_4h, 3),
-                (ema_20_4h > ema_50_4h, 4),
-            ]
+                checks = [
+                    (current_price > ema_20_1h, 3),
+                    (current_price > ema_50_1h, 3),
+                    (ema_20_1h > ema_50_1h, 4),
+                    (current_price > ema_20_4h, 3),
+                    (ema_20_4h > ema_50_4h, 4),
+                ]
 
-            for check, weight in checks:
-                if check:
-                    bullish_score += weight
+                for check, weight in checks:
+                    if check:
+                        bullish_score += weight
+                    else:
+                        bearish_score += weight
+                    total_weight += weight
+
+                # Price change
+                if price_change_24h > 2:
+                    bullish_score += 2
+                elif price_change_24h < -2:
+                    bearish_score += 2
+                total_weight += 2
+
+                # MACD
+                if macd_bullish:
+                    bullish_score += 2
                 else:
-                    bearish_score += weight
-                total_weight += weight
+                    bearish_score += 2
+                total_weight += 2
 
-            # Price change
-            if price_change_24h > 2:
-                bullish_score += 2
-            elif price_change_24h < -2:
-                bearish_score += 2
-            total_weight += 2
+                # RSI
+                avg_rsi = (rsi_1h + rsi_4h) / 2
+                if avg_rsi > 55:
+                    bullish_score += 2
+                elif avg_rsi < 45:
+                    bearish_score += 2
+                total_weight += 2
 
-            # MACD
-            if macd_bullish:
-                bullish_score += 2
-            else:
-                bearish_score += 2
-            total_weight += 2
+                # Net score
+                net_score = (bullish_score - bearish_score) / total_weight if total_weight > 0 else 0
+                trend_strength = min(adx_1h / 50, 1.0)
 
-            # RSI
-            avg_rsi = (rsi_1h + rsi_4h) / 2
-            if avg_rsi > 55:
-                bullish_score += 2
-            elif avg_rsi < 45:
-                bearish_score += 2
-            total_weight += 2
+                if net_score > 0.6:
+                    regime = MarketRegime.STRONG_BULLISH
+                    confidence = min(0.9, 0.7 + net_score * 0.3)
+                elif net_score > 0.3:
+                    regime = MarketRegime.BULLISH
+                    confidence = min(0.8, 0.5 + net_score * 0.4)
+                elif net_score < -0.6:
+                    regime = MarketRegime.STRONG_BEARISH
+                    confidence = min(0.9, 0.7 + abs(net_score) * 0.3)
+                elif net_score < -0.3:
+                    regime = MarketRegime.BEARISH
+                    confidence = min(0.8, 0.5 + abs(net_score) * 0.4)
+                else:
+                    regime = MarketRegime.NEUTRAL
+                    confidence = 0.5
 
-            # Net score
-            net_score = (bullish_score - bearish_score) / total_weight if total_weight > 0 else 0
-            trend_strength = min(adx_1h / 50, 1.0)
+                if regime != MarketRegime.NEUTRAL:
+                    confidence *= (0.7 + 0.3 * trend_strength)
 
-            if net_score > 0.6:
-                regime = MarketRegime.STRONG_BULLISH
-                confidence = min(0.9, 0.7 + net_score * 0.3)
-            elif net_score > 0.3:
-                regime = MarketRegime.BULLISH
-                confidence = min(0.8, 0.5 + net_score * 0.4)
-            elif net_score < -0.6:
-                regime = MarketRegime.STRONG_BEARISH
-                confidence = min(0.9, 0.7 + abs(net_score) * 0.3)
-            elif net_score < -0.3:
-                regime = MarketRegime.BEARISH
-                confidence = min(0.8, 0.5 + abs(net_score) * 0.4)
-            else:
-                regime = MarketRegime.NEUTRAL
-                confidence = 0.5
+                self.current_regime = regime
+                self.regime_confidence = confidence
+                self.last_analysis_time = datetime.now(timezone.utc)
+                self.btc_data = {
+                    "current_price": current_price,
+                    "price_change_24h": price_change_24h,
+                    "net_score": net_score,
+                    "adx": adx_1h,
+                }
 
-            if regime != MarketRegime.NEUTRAL:
-                confidence *= (0.7 + 0.3 * trend_strength)
-
-            self.current_regime = regime
-            self.regime_confidence = confidence
-            self.last_analysis_time = datetime.now(timezone.utc)
-            self.btc_data = {
-                "current_price": current_price,
-                "price_change_24h": price_change_24h,
-                "net_score": net_score,
-                "adx": adx_1h,
-            }
-
-            return {
-                "regime": regime.value,
-                "confidence": confidence,
-                "btc_data": self.btc_data,
-            }
+                return {
+                    "regime": regime.value,
+                    "confidence": confidence,
+                    "btc_data": self.btc_data,
+                }
+            finally:
+                if owns_client:
+                    await client.__aexit__(None, None, None)
 
         except Exception as e:
             logger.error(f"BTC regime analysis error: {e}")
