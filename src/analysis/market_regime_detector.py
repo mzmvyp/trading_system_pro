@@ -32,45 +32,51 @@ class MarketRegimeDetectorFutures:
     async def detect_regime(self, symbol: str = "BTCUSDT", client=None) -> Dict:
         """Detect current market regime using multiple data sources."""
         try:
-            if client is None:
+            owns_client = client is None
+            if owns_client:
                 from src.exchange.client import BinanceClient
                 client = BinanceClient()
+                await client.__aenter__()
 
-            df_15m = await client.get_klines(symbol, interval="15m", limit=200)
-            df_1h = await client.get_klines(symbol, interval="1h", limit=200)
-            df_4h = await client.get_klines(symbol, interval="4h", limit=100)
-
-            if df_1h is None or len(df_1h) < 50:
-                return self._get_default_regime()
-
-            trend = self._analyze_trend(df_1h, df_4h)
-            volatility = self._analyze_volatility(df_15m if df_15m is not None else df_1h)
-            momentum = self._analyze_momentum(
-                df_15m if df_15m is not None else df_1h, df_1h
-            )
-
-            # Funding rate
-            funding = {"bias": "NEUTRAL", "rate": 0.0, "confidence": 0.0}
             try:
-                rate = await client.get_funding_rate(symbol)
-                if rate is not None:
-                    if rate > 0.0002:
-                        funding = {"bias": "OVERBOUGHT", "rate": rate, "confidence": min(abs(rate) * 1000, 1.0)}
-                    elif rate < -0.0002:
-                        funding = {"bias": "OVERSOLD", "rate": rate, "confidence": min(abs(rate) * 1000, 1.0)}
-            except Exception:
-                pass
+                df_15m = await client.get_klines(symbol, interval="15m", limit=200)
+                df_1h = await client.get_klines(symbol, interval="1h", limit=200)
+                df_4h = await client.get_klines(symbol, interval="4h", limit=100)
 
-            # Open interest
-            oi = {"trend": "NEUTRAL", "change": 0.0, "confidence": 0.0}
-            try:
-                oi_data = await client.get_open_interest(symbol)
-                if oi_data:
-                    oi = oi_data
-            except Exception:
-                pass
+                if df_1h is None or len(df_1h) < 50:
+                    return self._get_default_regime()
 
-            return self._combine_analyses(trend, volatility, momentum, funding, oi)
+                trend = self._analyze_trend(df_1h, df_4h)
+                volatility = self._analyze_volatility(df_15m if df_15m is not None else df_1h)
+                momentum = self._analyze_momentum(
+                    df_15m if df_15m is not None else df_1h, df_1h
+                )
+
+                # Funding rate
+                funding = {"bias": "NEUTRAL", "rate": 0.0, "confidence": 0.0}
+                try:
+                    rate = await client.get_funding_rate(symbol)
+                    if rate is not None:
+                        if rate > 0.0002:
+                            funding = {"bias": "OVERBOUGHT", "rate": rate, "confidence": min(abs(rate) * 1000, 1.0)}
+                        elif rate < -0.0002:
+                            funding = {"bias": "OVERSOLD", "rate": rate, "confidence": min(abs(rate) * 1000, 1.0)}
+                except Exception:
+                    pass
+
+                # Open interest
+                oi = {"trend": "NEUTRAL", "change": 0.0, "confidence": 0.0}
+                try:
+                    oi_data = await client.get_open_interest(symbol)
+                    if oi_data:
+                        oi = oi_data
+                except Exception:
+                    pass
+
+                return self._combine_analyses(trend, volatility, momentum, funding, oi)
+            finally:
+                if owns_client:
+                    await client.__aexit__(None, None, None)
 
         except Exception as e:
             logger.error(f"Regime detection error: {e}")
