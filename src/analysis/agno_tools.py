@@ -1719,7 +1719,7 @@ def _calculate_current_drawdown() -> float:
     MODIFICADO: Sistema em modo P&L - calcula drawdown baseado em P&L acumulado.
     """
     try:
-        from real_paper_trading import real_paper_trading
+        from src.trading.paper_trading import real_paper_trading
         summary = real_paper_trading.get_portfolio_summary()
         # Em modo P&L, drawdown é baseado em P&L negativo acumulado
         # Se P&L total for negativo, isso representa um drawdown
@@ -1750,7 +1750,7 @@ def _get_daily_trades_count() -> int:
     CORRIGIDO: Usa real_paper_trading ao invés de paper_trading.
     """
     try:
-        from real_paper_trading import real_paper_trading
+        from src.trading.paper_trading import real_paper_trading
         today = datetime.now(timezone.utc).date()
         trades = real_paper_trading.get_trade_history()
         daily_trades = [t for t in trades if datetime.fromisoformat(t['timestamp']).date() == today]
@@ -2091,7 +2091,7 @@ def execute_paper_trade(
             logger.error(f"[PAPER TRADE BLOCK] SL=${sl}, TP1=${tp1}, TP2=${tp2} — Todos devem ser > 0")
             return {"success": False, "error": f"SL/TP obrigatórios: SL=${sl}, TP1=${tp1}, TP2=${tp2}"}
 
-        from real_paper_trading import real_paper_trading
+        from src.trading.paper_trading import real_paper_trading
 
         # Executar trade usando o sistema REAL
         result = real_paper_trading.execute_trade(signal, position_size)
