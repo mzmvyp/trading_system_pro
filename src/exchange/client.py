@@ -36,8 +36,16 @@ class BinanceClient:
             await self.session.close()
             logger.debug("HTTP session closed")
 
+    async def _ensure_session(self):
+        """Garante que a sessão HTTP existe (lazy init para uso sem async with)"""
+        if self.session is None:
+            self.session = aiohttp.ClientSession(timeout=self.timeout)
+            logger.debug("HTTP session created (lazy init)")
+
     async def _request_with_protection(self, url: str, params: dict) -> dict:
         """Make API request with rate limiting and circuit breaker"""
+        await self._ensure_session()
+
         async def make_request():
             async with binance_rate_limiter:
                 async with self.session.get(url, params=params) as response:
