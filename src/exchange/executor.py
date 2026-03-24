@@ -327,12 +327,26 @@ class BinanceFuturesExecutor:
                     elif filter["filterType"] == "MIN_NOTIONAL":
                         min_notional = float(filter.get("notional", 0))
 
+                # Extrair leverage brackets (máximo permitido pela Binance para este par)
+                # Binance retorna leverageBrackets ou pode ser consultado via /fapi/v1/leverageBracket
+                # No exchangeInfo, o campo é "requiredMarginPercent" ou podemos inferir de "brackets"
+                # Fallback seguro: usar limites conservadores por tipo de ativo
+                max_leverage = 125  # Default máximo Binance
+                # Binance Futures exchangeInfo não retém max leverage diretamente,
+                # mas podemos inferir de "maintMarginPercent" se disponível
+                maint_margin_pct = float(sym.get("maintMarginPercent", 0))
+                if maint_margin_pct > 0:
+                    # maintMarginPercent indica margem mínima, inverso ~= max leverage teórico
+                    inferred_max = int(100 / maint_margin_pct)
+                    max_leverage = min(max_leverage, inferred_max)
+
                 return {
                     "symbol": symbol,
                     "quantity_precision": quantity_precision,
                     "price_precision": price_precision,
                     "min_qty": min_qty,
-                    "min_notional": min_notional
+                    "min_notional": min_notional,
+                    "max_leverage": max_leverage
                 }
 
         return {"error": f"Simbolo {symbol} nao encontrado"}
@@ -439,16 +453,39 @@ class BinanceFuturesExecutor:
         symbol: str,
         side: str,  # Lado oposto da posição
         quantity: float,
-        stop_price: float
+        stop_price: float,
+        entry_price: float = None
     ) -> Dict[str, Any]:
         """
         Coloca Stop Loss via Algo Order API (/fapi/v1/algoOrder).
         Binance exige endpoint de Algo para STOP_MARKET (erro -4120 no endpoint antigo).
+        Inclui validação para evitar erro -2021 'Order would immediately trigger'.
         """
         symbol_info = await self.get_symbol_info(symbol)
         if symbol_info:
             quantity = self._round_quantity(quantity, symbol_info.get("quantity_precision", 3))
             stop_price = self._round_price(stop_price, symbol_info.get("price_precision", 2))
+
+        # Validação: SL não pode disparar imediatamente
+        # Para SELL SL (posição LONG): stop_price deve ser ABAIXO do entry
+        # Para BUY SL (posição SHORT): stop_price deve ser ACIMA do entry
+        if entry_price and entry_price > 0:
+            if side == "SELL" and stop_price >= entry_price:
+                # SL de posição LONG está acima do entry — dispararia imediatamente
+                corrected_sl = entry_price * 0.985  # 1.5% abaixo do entry
+                logger.warning(
+                    f"[SL FIX] {symbol} SL SELL ${stop_price:.4f} >= entry ${entry_price:.4f} "
+                    f"(dispararia imediatamente). Corrigido para ${corrected_sl:.4f}"
+                )
+                stop_price = self._round_price(corrected_sl, symbol_info.get("price_precision", 2)) if symbol_info else round(corrected_sl, 2)
+            elif side == "BUY" and stop_price <= entry_price:
+                # SL de posição SHORT está abaixo do entry — dispararia imediatamente
+                corrected_sl = entry_price * 1.015  # 1.5% acima do entry
+                logger.warning(
+                    f"[SL FIX] {symbol} SL BUY ${stop_price:.4f} <= entry ${entry_price:.4f} "
+                    f"(dispararia imediatamente). Corrigido para ${corrected_sl:.4f}"
+                )
+                stop_price = self._round_price(corrected_sl, symbol_info.get("price_precision", 2)) if symbol_info else round(corrected_sl, 2)
 
         params = {
             "algoType": "CONDITIONAL",
@@ -755,12 +792,15 @@ class BinanceFuturesExecutor:
 
             if desired_margin > 0:
                 calculated_leverage = int(position_value / desired_margin)
-                # Cap de segurança: limite da Binance Futures (varia por par, 125x max)
-                calculated_leverage = max(1, min(calculated_leverage, 125))
+                # Cap de segurança: usar limite real do par (via exchangeInfo) ao invés de 125x fixo
+                symbol_max_leverage = symbol_info.get("max_leverage", 20) if symbol_info else 20
+                # Limite adicional de segurança: nunca passar de 50x independente do que Binance permite
+                safe_max_leverage = min(symbol_max_leverage, 50)
+                calculated_leverage = max(1, min(calculated_leverage, safe_max_leverage))
             else:
                 calculated_leverage = self.default_leverage
 
-            logger.info(f"[ALAVANCAGEM] Valor posicao: ${position_value:.2f} / Margem: ${desired_margin:.2f} = {calculated_leverage}x")
+            logger.info(f"[ALAVANCAGEM] Valor posicao: ${position_value:.2f} / Margem: ${desired_margin:.2f} = {calculated_leverage}x (max_par={symbol_info.get('max_leverage', '?') if symbol_info else '?'})")
 
             leverage_result = await self.set_leverage(symbol, calculated_leverage)
             if "error" in leverage_result:
@@ -789,8 +829,8 @@ class BinanceFuturesExecutor:
             def _order_id(r: dict) -> Optional[Any]:
                 return r.get("orderId")
 
-            # 9. Colocar Stop Loss
-            sl_order = await self.place_stop_loss(symbol, close_side, position_size, stop_loss)
+            # 9. Colocar Stop Loss (com entry_price para validação anti-trigger)
+            sl_order = await self.place_stop_loss(symbol, close_side, position_size, stop_loss, entry_price=entry_price)
             if "error" in sl_order:
                 logger.error(f"Erro ao colocar Stop Loss: {sl_order}")
             else:

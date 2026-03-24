@@ -1053,9 +1053,11 @@ Responda APENAS com JSON:
                 total_all = total_for + total_against
                 combined_score = total_for / max(total_all, 1)
 
-                # Mínimo: 4 votos a favor (técnicos + LLM) E score >= 0.55
-                MIN_VOTES_FOR = 4
+                # Mínimo de votos a favor com regra adaptativa:
+                # Se score >= 80% (forte concordância), aceitar com 3 votos
+                # Caso contrário, exigir 4 votos
                 MIN_COMBINED_SCORE = 0.55
+                MIN_VOTES_FOR = 3 if combined_score >= 0.80 else 4
 
                 agno_signal["confluence_score"] = round(combined_score, 3)
                 agno_signal["confluence_details"] = confluence["details"]
