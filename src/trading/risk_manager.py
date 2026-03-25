@@ -62,7 +62,8 @@ def _calculate_total_exposure() -> float:
             for p in positions.values()
             if p.get("status") == "OPEN"
         )
-        capital = state.get("capital", state.get("initial_capital", 10000.0))
+        from src.core.config import settings as _cfg
+        capital = state.get("capital", state.get("initial_capital", _cfg.initial_capital))
         if capital <= 0:
             return 0.0
         return total_value / capital
@@ -96,7 +97,12 @@ def validate_risk_and_position(
     """
     try:
         if account_balance is None:
-            account_balance = 10000.0
+            # Tentar buscar saldo real da Binance
+            try:
+                from src.core.config import settings as _settings
+                account_balance = _settings.initial_capital
+            except Exception:
+                account_balance = 300.0  # Fallback conservador
 
         if signal.get('signal') == 'HOLD' or signal.get('signal') == 'NO_SIGNAL':
             return {
@@ -287,19 +293,29 @@ def validate_risk_and_position(
 
         # Sem limite diario de trades - filtros de qualidade ja controlam
 
+        # Calcular position size baseado no capital REAL e risco configurado
+        # Formula: risk_amount = capital * risk_percent
+        #          position_size = risk_amount / stop_distance
+        # Se stop bater, perde exatamente risk_percent do capital
+        from src.core.config import settings as _cfg
+        risk_percent = _cfg.risk_percent_per_trade / 100.0
+
         if stop_loss:
             risk_per_unit = abs(entry_price - stop_loss)
             if risk_per_unit > 0:
-                position_size = 100.0 / risk_per_unit
+                risk_amount = account_balance * risk_percent
+                position_size = risk_amount / risk_per_unit
             else:
-                position_size = 1.0
+                position_size = 0.0
         else:
-            position_size = 1.0
+            position_size = 0.0
 
         position_value = position_size * entry_price
         max_risk_amount = abs(entry_price - stop_loss) * position_size if stop_loss else 0
+        implied_leverage = position_value / account_balance if account_balance > 0 else 0
 
-        logger.info(f"[P&L MODE] Tamanho posição: {position_size:.6f} unidades, Valor: ${position_value:.2f}, Risco: ${max_risk_amount:.2f}")
+        logger.info(f"[POSITION SIZING] Capital: ${account_balance:.2f} | Risco: {_cfg.risk_percent_per_trade}% (${max_risk_amount:.2f})")
+        logger.info(f"[POSITION SIZING] Tamanho: {position_size:.6f} unidades | Valor: ${position_value:.2f} | Alavancagem: {implied_leverage:.1f}x")
 
         daily_trades = _get_daily_trades_count()
         return {

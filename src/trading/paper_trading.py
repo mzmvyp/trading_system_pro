@@ -56,7 +56,7 @@ except ImportError:
         pass
 
 class RealPaperTradingSystem:
-    def __init__(self, initial_balance: float = 10000.0):
+    def __init__(self, initial_balance: float = 180.0):
         """
         Sistema de paper trading REAL que simula execução completa.
         """
@@ -292,21 +292,20 @@ class RealPaperTradingSystem:
 
             if position_size is None:
                 if stop_loss and stop_loss != entry_price:
-                    # Calcular risco em $ baseado na configuracao
+                    # Usar capital configurado (deve refletir saldo real)
                     capital = settings.initial_capital
-                    risk_percent = settings.risk_percent_per_trade / 100.0  # Converter para decimal
-                    risk_amount = capital * risk_percent  # $ que estamos dispostos a perder
+                    risk_percent = settings.risk_percent_per_trade / 100.0
+                    risk_amount = capital * risk_percent
 
                     # Distancia do stop loss em $
                     stop_distance = abs(entry_price - stop_loss)
 
-                    # Tamanho da posicao (em unidades do ativo)
-                    # Se o preco cair/subir stop_distance, perderemos risk_amount
+                    # position_size = risk_amount / stop_distance
+                    # Se stop bater, perde exatamente risk_amount (X% do capital)
                     position_size = risk_amount / stop_distance
 
-                    # Calcular valor total da posicao e alavancagem implicita
                     position_value_calc = position_size * entry_price
-                    implied_leverage = position_value_calc / capital
+                    implied_leverage = position_value_calc / capital if capital > 0 else 0
 
                     logger.info(f"[POSICAO CALCULADA] Capital: ${capital:.2f} | Risco: {settings.risk_percent_per_trade}% (${risk_amount:.2f})")
                     logger.info(f"[POSICAO CALCULADA] Entry: ${entry_price:.2f} | Stop: ${stop_loss:.2f} | Distancia: ${stop_distance:.2f}")
@@ -314,7 +313,7 @@ class RealPaperTradingSystem:
                 else:
                     # Fallback: usar 1% do capital se nao tiver stop loss definido
                     capital = settings.initial_capital
-                    position_value_fallback = capital * 0.01  # 1% do capital
+                    position_value_fallback = capital * 0.01
                     position_size = position_value_fallback / entry_price
                     logger.warning(f"[POSICAO FALLBACK] Sem stop loss valido, usando 1% do capital: {position_size:.6f} unidades")
 

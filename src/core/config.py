@@ -46,8 +46,9 @@ class Settings(BaseSettings):
     # ========================================
     # GESTAO DE CAPITAL E RISCO POR TRADE
     # ========================================
-    # Capital inicial para paper trading (usado para calcular tamanho de posicao)
-    initial_capital: float = 10000.0  # Capital inicial em USDT
+    # Capital disponivel para trading (DEVE refletir saldo real na Binance)
+    # IMPORTANTE: Atualizar este valor quando o saldo mudar significativamente
+    initial_capital: float = 180.0  # Capital atual em USDT
 
     # Porcentagem do capital a arriscar por trade
     # 5% = se o stop loss for atingido, perde 5% do capital
@@ -56,15 +57,15 @@ class Settings(BaseSettings):
     # Como calcular o tamanho da posicao:
     # 1. Risco em $ = capital * (risk_percent_per_trade / 100)
     # 2. Distancia do stop = |entry_price - stop_loss|
-    # 3. Risco por unidade = distancia do stop
-    # 4. Tamanho da posicao (unidades) = Risco em $ / Risco por unidade
-    # 5. Valor total da posicao = tamanho * entry_price
+    # 3. Tamanho da posicao (unidades) = Risco em $ / Distancia do stop
+    # 4. Valor total da posicao = tamanho * entry_price
     #
-    # Exemplo com capital = $10,000, risco = 5%, entry = $100,000, stop = $98,000:
-    # - Risco em $ = $10,000 * 0.05 = $500
-    # - Distancia do stop = $2,000 (2%)
-    # - Tamanho = $500 / $2,000 = 0.25 BTC
-    # - Valor total = 0.25 * $100,000 = $25,000 (alavancagem ~2.5x)
+    # Exemplo com capital = $180, risco = 5%, entry = $100, stop = $98:
+    # - Risco em $ = $180 * 0.05 = $9
+    # - Distancia do stop = $2 (2%)
+    # - Tamanho = $9 / $2 = 4.5 unidades
+    # - Valor total = 4.5 * $100 = $450 (alavancagem ~2.5x)
+    # - Se stop bater, perde exatamente $9 (5% do capital)
 
     # Configurações de Confiança
     # UNIFICADO: Sempre usar escala 0-10
