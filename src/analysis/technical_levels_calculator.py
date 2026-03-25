@@ -12,9 +12,9 @@ logger = get_logger(__name__)
 
 # Margem minima de seguranca: SL nao pode ser mais perto que 0.3% do entry
 MIN_SL_DISTANCE_PCT = 0.3
-# SL maximo: alinhado com o limite de risco de 3% no validator
-# Antes era 8% - gerava stops enormes que eram bloqueados depois (desperdício)
-MAX_SL_DISTANCE_PCT = 3.0
+# SL maximo tecnico: se nenhum nivel tecnico estiver a menos de 15%, provavelmente nao ha setup
+# O tamanho da posição é ajustado automaticamente para compensar stop largo
+MAX_SL_DISTANCE_PCT = 15.0
 # Minimo risk:reward aceitavel
 MIN_RISK_REWARD = 2.0
 
@@ -332,12 +332,8 @@ def _find_buy_sl(
 
         return sl_candidate, f"abaixo_{s['source']}"
 
-    # Fallback: usar ATR se nenhum suporte valido encontrado (capped ao MAX_SL_DISTANCE_PCT)
+    # Fallback: usar ATR se nenhum suporte valido encontrado
     sl_atr = entry - (atr * _sl_atr_multiplier(op_type))
-    min_sl = entry * (1 - MAX_SL_DISTANCE_PCT / 100)
-    if sl_atr < min_sl:
-        sl_atr = min_sl
-        logger.info(f"[BUY SL] ATR fallback capped de ${sl_atr:.2f} para ${min_sl:.2f} (max {MAX_SL_DISTANCE_PCT}%)")
     return sl_atr, "ATR_fallback"
 
 
@@ -393,12 +389,8 @@ def _find_sell_sl(
 
         return sl_candidate, f"acima_{r['source']}"
 
-    # Fallback ATR (capped ao MAX_SL_DISTANCE_PCT)
+    # Fallback ATR
     sl_atr = entry + (atr * _sl_atr_multiplier(op_type))
-    max_sl = entry * (1 + MAX_SL_DISTANCE_PCT / 100)
-    if sl_atr > max_sl:
-        sl_atr = max_sl
-        logger.info(f"[SELL SL] ATR fallback capped de ${sl_atr:.2f} para ${max_sl:.2f} (max {MAX_SL_DISTANCE_PCT}%)")
     return sl_atr, "ATR_fallback"
 
 
