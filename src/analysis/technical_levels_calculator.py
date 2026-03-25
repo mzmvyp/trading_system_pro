@@ -12,8 +12,9 @@ logger = get_logger(__name__)
 
 # Margem minima de seguranca: SL nao pode ser mais perto que 0.3% do entry
 MIN_SL_DISTANCE_PCT = 0.3
-# SL maximo: se nenhum nivel tecnico estiver a menos de 8%, algo esta errado
-MAX_SL_DISTANCE_PCT = 8.0
+# SL maximo tecnico: se nenhum nivel tecnico estiver a menos de 15%, provavelmente nao ha setup
+# O tamanho da posição é ajustado automaticamente para compensar stop largo
+MAX_SL_DISTANCE_PCT = 15.0
 # Minimo risk:reward aceitavel
 MIN_RISK_REWARD = 2.0
 

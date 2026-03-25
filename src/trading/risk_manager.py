@@ -275,15 +275,17 @@ def validate_risk_and_position(
         risk_per_trade = abs(entry_price - stop_loss)
         risk_percentage = (risk_per_trade / entry_price) * 100
 
-        max_risk_per_trade = 3.0  # Distancia maxima do SL em % do entry
-        if risk_percentage > max_risk_per_trade:
+        # Stop largo NÃO bloqueia - ajusta tamanho da posição
+        # Só bloqueia se stop absurdo (> 20%) = provavelmente bug
+        if risk_percentage > 20.0:
             return {
                 "can_execute": False,
-                "reason": f"Risco muito alto: {risk_percentage:.2f}% (máximo {max_risk_per_trade}%)",
+                "reason": f"Stop loss provavelmente inválido: {risk_percentage:.2f}% de distância (> 20%)",
                 "risk_level": "high"
             }
-        elif risk_percentage > 3.0:
-            logger.warning(f"[RISCO] Risco elevado ({risk_percentage:.2f}%), reduzindo tamanho de posição")
+
+        if risk_percentage > 5.0:
+            logger.info(f"[RISCO] Stop largo ({risk_percentage:.2f}%) - posição será reduzida proporcionalmente")
 
         current_drawdown = _calculate_current_drawdown()
         max_drawdown_allowed = 0.40

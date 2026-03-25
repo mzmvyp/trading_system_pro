@@ -1946,22 +1946,22 @@ def validate_risk_and_position(
                 "risk_level": "high"
             }
 
-        # Calcular risco
+        # Calcular distância do stop
         risk_per_trade = abs(entry_price - stop_loss)
         risk_percentage = (risk_per_trade / entry_price) * 100
 
-        # Circuit Breaker 1: Risco máximo por trade
-        # CORRIGIDO: Voltando para 3% máximo - 5% era muito arriscado
-        # Dados mostram que trades com SL > 3% têm win rate muito baixo
-        max_risk_per_trade = 3.0  # Máximo 3% de risco por trade
-        if risk_percentage > max_risk_per_trade:
+        # Stop largo NÃO é motivo para bloquear - apenas ajustar tamanho da posição
+        # Quanto maior o stop, menor a posição, mantendo o risco em $ controlado
+        # Só bloqueia se stop for absurdo (> 20%) - provavelmente bug
+        if risk_percentage > 20.0:
             return {
                 "can_execute": False,
-                "reason": f"Risco muito alto: {risk_percentage:.2f}% (máximo {max_risk_per_trade}%)",
+                "reason": f"Stop loss provavelmente inválido: {risk_percentage:.2f}% de distância (> 20%)",
                 "risk_level": "high"
             }
-        elif risk_percentage > 2.5:
-            logger.warning(f"[RISCO] Risco elevado ({risk_percentage:.2f}%), reduzindo tamanho de posição")
+
+        if risk_percentage > 5.0:
+            logger.info(f"[RISCO] Stop largo ({risk_percentage:.2f}%) - posição será reduzida proporcionalmente")
 
         # Circuit Breaker 2: Verificar drawdown atual
         # MODIFICADO: Para paper trading, permitir drawdown maior (40%) para não bloquear recuperação
@@ -1991,24 +1991,52 @@ def validate_risk_and_position(
                 "risk_level": "medium"
             }
 
-        # MODIFICADO: Tamanho de posição fixo baseado em unidades (não em capital)
-        # Sistema foca apenas em P&L, não em capital
-        # Usar tamanho padrão de 1 unidade ou calcular baseado em stop loss para ter P&L significativo
-        if stop_loss:
-            # Calcular tamanho para que o risco seja $100 (valor fixo para P&L tracking)
-            risk_per_unit = abs(entry_price - stop_loss)
-            if risk_per_unit > 0:
-                position_size = 100.0 / risk_per_unit  # $100 de risco por trade
-            else:
-                position_size = 1.0  # Fallback: 1 unidade
+        # POSITION SIZING baseado na fórmula:
+        # 1. risco_em_$ = capital * (risk_percent / 100)
+        # 2. distancia_stop_% = |entry - stop| / entry
+        # 3. tamanho_posicao = risco_em_$ / distancia_stop_%
+        # 4. alavancagem = tamanho_posicao / capital
+        #
+        # Capital OBRIGATÓRIO da API da Binance (saldo real)
+        # Sem saldo real = NÃO abre posição
+        capital = None
+        try:
+            from src.exchange.executor import BinanceFuturesExecutor
+            _executor = BinanceFuturesExecutor()
+            import asyncio
+            _balance = asyncio.get_event_loop().run_until_complete(_executor.get_balance())
+            if "error" not in _balance:
+                capital = _balance.get("available_balance", 0)
+                logger.info(f"[CAPITAL] Saldo real da Binance: ${capital:.2f}")
+        except Exception as e:
+            logger.error(f"[CAPITAL] Falha ao obter saldo da Binance: {e}")
+
+        if not capital or capital <= 0:
+            return {
+                "can_execute": False,
+                "reason": "Não foi possível obter saldo real da Binance. Sem saldo confirmado, não abre posição.",
+                "risk_level": "high"
+            }
+
+        risk_pct = settings.risk_percent_per_trade  # ex: 5%
+        risk_amount = capital * (risk_pct / 100)  # ex: $100 * 5% = $5
+
+        stop_distance_pct = risk_percentage / 100  # já calculado acima como %
+        if stop_distance_pct > 0:
+            position_value = risk_amount / stop_distance_pct  # ex: $3.60 / 0.02 = $180
+            position_size = position_value / entry_price  # em unidades
         else:
-            position_size = 1.0  # 1 unidade padrão
+            position_size = 1.0
+            position_value = entry_price
 
-        # Calcular P&L potencial
-        position_value = position_size * entry_price
-        max_risk_amount = abs(entry_price - stop_loss) * position_size if stop_loss else 0
+        leverage = position_value / capital if capital > 0 else 0
+        max_risk_amount = risk_amount  # sempre = capital * risk%
 
-        logger.info(f"[P&L MODE] Tamanho posição: {position_size:.6f} unidades, Valor: ${position_value:.2f}, Risco: ${max_risk_amount:.2f}")
+        logger.info(
+            f"[POSITION SIZE] Capital=${capital:.2f}, Risco={risk_pct}%=${risk_amount:.2f}, "
+            f"Stop={risk_percentage:.2f}%, Posição=${position_value:.2f}, "
+            f"Unidades={position_size:.6f}, Alavancagem={leverage:.1f}x"
+        )
 
         return {
             "can_execute": True,
