@@ -1996,9 +1996,24 @@ def validate_risk_and_position(
         # 2. distancia_stop_% = |entry - stop| / entry
         # 3. tamanho_posicao = risco_em_$ / distancia_stop_%
         # 4. alavancagem = tamanho_posicao / capital
-        capital = settings.initial_capital
-        risk_pct = settings.risk_percent_per_trade  # ex: 2%
-        risk_amount = capital * (risk_pct / 100)  # ex: $180 * 2% = $3.60
+        #
+        # Capital vem da API da Binance (saldo real), NÃO de valor fixo
+        capital = settings.initial_capital  # fallback
+        try:
+            from src.exchange.executor import BinanceFuturesExecutor
+            _executor = BinanceFuturesExecutor()
+            import asyncio
+            _balance = asyncio.get_event_loop().run_until_complete(_executor.get_balance())
+            if "error" not in _balance:
+                capital = _balance.get("available_balance", capital)
+                logger.info(f"[CAPITAL] Saldo real da Binance: ${capital:.2f}")
+            else:
+                logger.warning(f"[CAPITAL] Erro API Binance, usando fallback: ${capital:.2f}")
+        except Exception as e:
+            logger.warning(f"[CAPITAL] Não conseguiu saldo da API ({e}), usando config: ${capital:.2f}")
+
+        risk_pct = settings.risk_percent_per_trade  # ex: 5%
+        risk_amount = capital * (risk_pct / 100)  # ex: $100 * 5% = $5
 
         stop_distance_pct = risk_percentage / 100  # já calculado acima como %
         if stop_distance_pct > 0:
