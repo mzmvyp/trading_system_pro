@@ -1773,7 +1773,8 @@ def validate_risk_and_position(
         # MODIFICADO: Não precisamos mais de account_balance (sistema em modo P&L)
         # Usar valor padrão apenas para cálculos internos, mas não será usado
         if account_balance is None:
-            account_balance = 10000.0  # Valor padrão (não usado no modo P&L)
+            from src.core.config import settings
+            account_balance = settings.initial_capital
 
         if signal.get('signal') == 'HOLD' or signal.get('signal') == 'NO_SIGNAL':
             return {

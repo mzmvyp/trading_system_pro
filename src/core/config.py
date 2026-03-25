@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     trading_symbol: str = "BTCUSDT"
 
     # Configurações de Risk Management
-    max_risk_per_trade: float = 0.05  # Máximo 5% de risco por trade
+    max_risk_per_trade: float = 0.02  # Máximo 2% de risco por trade
     max_drawdown: float = 0.15  # Máximo 15% de drawdown
     max_exposure: float = 0.50  # Máximo 50% de exposição total
     max_daily_trades: int = 5  # Máximo 5 trades por dia
@@ -46,25 +46,26 @@ class Settings(BaseSettings):
     # ========================================
     # GESTAO DE CAPITAL E RISCO POR TRADE
     # ========================================
-    # Capital inicial para paper trading (usado para calcular tamanho de posicao)
-    initial_capital: float = 10000.0  # Capital inicial em USDT
+    # Capital disponivel para trading (DEVE refletir saldo real na Binance)
+    # IMPORTANTE: Atualizar este valor quando o saldo mudar significativamente
+    initial_capital: float = 180.0  # Capital atual em USDT
 
     # Porcentagem do capital a arriscar por trade
     # 5% = se o stop loss for atingido, perde 5% do capital
-    risk_percent_per_trade: float = 5.0  # 5% do capital arriscado por trade
+    risk_percent_per_trade: float = 2.0  # 2% do capital arriscado por trade
 
     # Como calcular o tamanho da posicao:
     # 1. Risco em $ = capital * (risk_percent_per_trade / 100)
     # 2. Distancia do stop = |entry_price - stop_loss|
-    # 3. Risco por unidade = distancia do stop
-    # 4. Tamanho da posicao (unidades) = Risco em $ / Risco por unidade
-    # 5. Valor total da posicao = tamanho * entry_price
+    # 3. Tamanho da posicao (unidades) = Risco em $ / Distancia do stop
+    # 4. Valor total da posicao = tamanho * entry_price
     #
-    # Exemplo com capital = $10,000, risco = 5%, entry = $100,000, stop = $98,000:
-    # - Risco em $ = $10,000 * 0.05 = $500
-    # - Distancia do stop = $2,000 (2%)
-    # - Tamanho = $500 / $2,000 = 0.25 BTC
-    # - Valor total = 0.25 * $100,000 = $25,000 (alavancagem ~2.5x)
+    # Exemplo com capital = $180, risco = 2%, entry = $100, stop = $98:
+    # - Risco em $ = $180 * 0.02 = $3.60
+    # - Distancia do stop = $2 (2%)
+    # - Tamanho = $3.60 / $2 = 1.8 unidades
+    # - Valor total = 1.8 * $100 = $180 (alavancagem ~1x)
+    # - Se stop bater, perde exatamente $3.60 (2% do capital)
 
     # Configurações de Confiança
     # UNIFICADO: Sempre usar escala 0-10
@@ -112,9 +113,21 @@ class Settings(BaseSettings):
     # REAVALIAÇÃO DE SINAIS ATIVOS
     # ========================================
     reevaluation_enabled: bool = True
-    reevaluation_interval_hours: float = 4.0  # Reavaliar a cada 2h (era 30 min — muito agressivo)
-    reevaluation_min_time_open_hours: float = 4.0  # Só reavaliar após 2h aberta (era 15 min)
+    reevaluation_interval_hours: float = 1.0  # Reavaliar a cada 1h
+    reevaluation_min_time_open_hours: float = 1.0  # Primeira reavaliação após 1h aberta
     reevaluation_min_confidence: int = 7  # Confiança mínima para agir na reavaliação
+    reevaluation_require_tp1_hit: bool = False  # Se True, só reavalia após TP1 ser atingido
+
+    # ========================================
+    # PROTEÇÃO AUTOMÁTICA DE LUCRO
+    # ========================================
+    # Move stop para breakeven quando lucro atinge X%
+    auto_breakeven_enabled: bool = True
+    auto_breakeven_trigger_pct: float = 1.5  # Ativa breakeven com 1.5% de lucro
+    # Trailing stop automático quando lucro atinge X%
+    auto_trailing_stop_enabled: bool = True
+    auto_trailing_stop_trigger_pct: float = 2.5  # Ativa trailing com 2.5% de lucro
+    auto_trailing_stop_distance_pct: float = 1.0  # Distância do trailing: 1% abaixo do máximo
 
     # ========================================
     # VALIDAÇÃO ML - MODELO DE CONFLUÊNCIA

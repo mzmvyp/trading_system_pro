@@ -221,7 +221,8 @@ class SimpleSignalValidator:
             # Avaliar melhor modelo
             self._evaluate_best_model(X_test, y_test)
 
-        # Salvar info
+        # Salvar info (incluindo best_accuracy e best_f1 para o dashboard)
+        best_results = results.get(self.best_model_name, {}) if self.best_model_name else {}
         self.model_info = {
             "training_date": datetime.now().isoformat(),
             "feature_columns": self.feature_columns,
@@ -229,6 +230,8 @@ class SimpleSignalValidator:
             "train_samples": len(X_train),
             "test_samples": len(X_test) if X_test is not None else 0,
             "best_model": self.best_model_name,
+            "best_accuracy": best_results.get("test_accuracy", 0),
+            "best_f1": best_results.get("test_f1", 0),
             "results": results
         }
 
