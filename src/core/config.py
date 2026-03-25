@@ -102,6 +102,27 @@ class Settings(BaseSettings):
     top_movers_min_volume_usdt: float = 50_000_000  # Volume mínimo 50M USDT (filtrar liquidez)
 
     # ========================================
+    # BLACKLIST DE TOKENS (ilíquidos/consistentemente perdedores)
+    # ========================================
+    # Tokens que devem ser ignorados mesmo que apareçam como top movers
+    # Identificados pela análise de 2000+ trades (Win Rate < 30% ou ilíquidos)
+    token_blacklist: list = [
+        "JCTUSDT",     # Ilíquido - preço manipulado (entry $20 → $0.003)
+        "BRUSDT",      # SL > 20% - volatilidade extrema
+        "SIRENUSDT",   # SL > 22% - volatilidade extrema
+        "LYNUSDT",     # 0% Win Rate - consistentemente perdedor
+        "UAIUSDT",     # 16.7% Win Rate - consistentemente perdedor
+    ]
+
+    # ========================================
+    # FILTRO DE SELL (SHORT) - Mais restritivo
+    # ========================================
+    # Dados mostram SELL com 46% WR vs BUY com 67% WR
+    # Shorts precisam de confiança maior para compensar menor acerto
+    sell_min_confidence: int = 8  # Mínimo 8/10 para SELL (vs 7 para BUY)
+    sell_require_strong_trend: bool = True  # SELL só em tendência forte de baixa
+
+    # ========================================
     # TIMEOUT POR TIPO DE OPERAÇÃO
     # ========================================
     timeout_scalp_hours: float = 0.5        # 30 minutos

@@ -111,6 +111,25 @@ def validate_risk_and_position(
                 "risk_level": "low"
             }
 
+        # Check blacklist de tokens
+        from src.core.config import settings as _cfg
+        if symbol in _cfg.token_blacklist:
+            return {
+                "can_execute": False,
+                "reason": f"{symbol} está na blacklist (ilíquido ou consistentemente perdedor)",
+                "risk_level": "high"
+            }
+
+        # Check SELL precisa de confiança maior
+        sig_type = signal.get("signal", "").upper()
+        sig_conf = signal.get("confidence", 0)
+        if sig_type == "SELL" and sig_conf < _cfg.sell_min_confidence:
+            return {
+                "can_execute": False,
+                "reason": f"SELL requer confiança mínima {_cfg.sell_min_confidence}/10 (recebido {sig_conf}/10)",
+                "risk_level": "medium"
+            }
+
         # Check cooldown pós-stop (evita whipsaw)
         if _check_sl_cooldown(symbol):
             remaining = _sl_cooldown_hours - (datetime.now(timezone.utc) - _sl_cooldown_registry[symbol]).total_seconds() / 3600
@@ -224,10 +243,9 @@ def validate_risk_and_position(
 
         from src.core.config import settings
 
-        # Normalize confidence to 0-10 scale
-        if confidence > 0 and confidence <= 5:
-            confidence = confidence * 2
-            logger.warning(f"[CONFIANCA] Convertendo escala 0-5 para 0-10: {signal.get('confidence')} -> {confidence}")
+        # CORRIGIDO: Não converter confiança automaticamente.
+        # O prompt do DeepSeek já pede escala 1-10 explicitamente.
+        # A conversão anterior dobrava confiança 4 para 8, causando falsos positivos.
 
         if confidence < 1 or confidence > 10:
             return {
