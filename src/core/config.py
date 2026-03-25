@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     trading_symbol: str = "BTCUSDT"
 
     # Configurações de Risk Management
-    max_risk_per_trade: float = 0.05  # Máximo 5% de risco por trade
+    max_risk_per_trade: float = 0.02  # Máximo 2% de risco por trade
     max_drawdown: float = 0.15  # Máximo 15% de drawdown
     max_exposure: float = 0.50  # Máximo 50% de exposição total
     max_daily_trades: int = 5  # Máximo 5 trades por dia
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
 
     # Porcentagem do capital a arriscar por trade
     # 5% = se o stop loss for atingido, perde 5% do capital
-    risk_percent_per_trade: float = 5.0  # 5% do capital arriscado por trade
+    risk_percent_per_trade: float = 2.0  # 2% do capital arriscado por trade
 
     # Como calcular o tamanho da posicao:
     # 1. Risco em $ = capital * (risk_percent_per_trade / 100)
@@ -60,12 +60,12 @@ class Settings(BaseSettings):
     # 3. Tamanho da posicao (unidades) = Risco em $ / Distancia do stop
     # 4. Valor total da posicao = tamanho * entry_price
     #
-    # Exemplo com capital = $180, risco = 5%, entry = $100, stop = $98:
-    # - Risco em $ = $180 * 0.05 = $9
+    # Exemplo com capital = $180, risco = 2%, entry = $100, stop = $98:
+    # - Risco em $ = $180 * 0.02 = $3.60
     # - Distancia do stop = $2 (2%)
-    # - Tamanho = $9 / $2 = 4.5 unidades
-    # - Valor total = 4.5 * $100 = $450 (alavancagem ~2.5x)
-    # - Se stop bater, perde exatamente $9 (5% do capital)
+    # - Tamanho = $3.60 / $2 = 1.8 unidades
+    # - Valor total = 1.8 * $100 = $180 (alavancagem ~1x)
+    # - Se stop bater, perde exatamente $3.60 (2% do capital)
 
     # Configurações de Confiança
     # UNIFICADO: Sempre usar escala 0-10

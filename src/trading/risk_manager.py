@@ -257,7 +257,7 @@ def validate_risk_and_position(
         risk_per_trade = abs(entry_price - stop_loss)
         risk_percentage = (risk_per_trade / entry_price) * 100
 
-        max_risk_per_trade = 5.0
+        max_risk_per_trade = 3.0  # Distancia maxima do SL em % do entry
         if risk_percentage > max_risk_per_trade:
             return {
                 "can_execute": False,
