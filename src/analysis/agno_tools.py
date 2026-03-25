@@ -1997,20 +1997,26 @@ def validate_risk_and_position(
         # 3. tamanho_posicao = risco_em_$ / distancia_stop_%
         # 4. alavancagem = tamanho_posicao / capital
         #
-        # Capital vem da API da Binance (saldo real), NÃO de valor fixo
-        capital = settings.initial_capital  # fallback
+        # Capital OBRIGATÓRIO da API da Binance (saldo real)
+        # Sem saldo real = NÃO abre posição
+        capital = None
         try:
             from src.exchange.executor import BinanceFuturesExecutor
             _executor = BinanceFuturesExecutor()
             import asyncio
             _balance = asyncio.get_event_loop().run_until_complete(_executor.get_balance())
             if "error" not in _balance:
-                capital = _balance.get("available_balance", capital)
+                capital = _balance.get("available_balance", 0)
                 logger.info(f"[CAPITAL] Saldo real da Binance: ${capital:.2f}")
-            else:
-                logger.warning(f"[CAPITAL] Erro API Binance, usando fallback: ${capital:.2f}")
         except Exception as e:
-            logger.warning(f"[CAPITAL] Não conseguiu saldo da API ({e}), usando config: ${capital:.2f}")
+            logger.error(f"[CAPITAL] Falha ao obter saldo da Binance: {e}")
+
+        if not capital or capital <= 0:
+            return {
+                "can_execute": False,
+                "reason": "Não foi possível obter saldo real da Binance. Sem saldo confirmado, não abre posição.",
+                "risk_level": "high"
+            }
 
         risk_pct = settings.risk_percent_per_trade  # ex: 5%
         risk_amount = capital * (risk_pct / 100)  # ex: $100 * 5% = $5
