@@ -1811,6 +1811,34 @@ def validate_risk_and_position(
             pass
 
         # ========================================
+        # BLACKLIST DE TOKENS ILÍQUIDOS/PERDEDORES
+        # ========================================
+        from src.core.config import settings as _cfg
+        if symbol in _cfg.token_blacklist:
+            logger.warning(f"[BLACKLIST] {symbol} está na blacklist — sinal ignorado")
+            return {
+                "can_execute": False,
+                "reason": f"{symbol} está na blacklist (ilíquido ou consistentemente perdedor)",
+                "risk_level": "high"
+            }
+
+        # ========================================
+        # FILTRO DE SELL MAIS RESTRITIVO
+        # Dados mostram SELL com 46% WR vs BUY com 67% WR
+        # Shorts precisam de confiança maior
+        # ========================================
+        signal_type_check = signal.get("signal", "").upper()
+        confidence_check = signal.get("confidence", 0)
+        if signal_type_check == "SELL" and confidence_check < _cfg.sell_min_confidence:
+            logger.warning(f"[SELL FILTER] SELL {symbol} bloqueado: confiança {confidence_check}/10 < mínimo {_cfg.sell_min_confidence}/10 para shorts")
+            return {
+                "can_execute": False,
+                "reason": f"SELL requer confiança mínima {_cfg.sell_min_confidence}/10 (recebido {confidence_check}/10). "
+                          f"Shorts têm win rate menor, precisam de sinal mais forte.",
+                "risk_level": "medium"
+            }
+
+        # ========================================
         # FILTRO DE TENDÊNCIA DINÂMICO (EMA 50/200 no 4h)
         # Bloqueia sinais contra a tendência dominante.
         # Se adapta automaticamente: quando mercado virar bullish,
@@ -1923,16 +1951,16 @@ def validate_risk_and_position(
         risk_percentage = (risk_per_trade / entry_price) * 100
 
         # Circuit Breaker 1: Risco máximo por trade
-        # MODIFICADO: Aumentado para 5% para permitir mais flexibilidade em moedas menores
-        max_risk_per_trade = 5.0  # Máximo 5% de risco por trade (era 3%)
+        # CORRIGIDO: Voltando para 3% máximo - 5% era muito arriscado
+        # Dados mostram que trades com SL > 3% têm win rate muito baixo
+        max_risk_per_trade = 3.0  # Máximo 3% de risco por trade
         if risk_percentage > max_risk_per_trade:
             return {
                 "can_execute": False,
                 "reason": f"Risco muito alto: {risk_percentage:.2f}% (máximo {max_risk_per_trade}%)",
                 "risk_level": "high"
             }
-        elif risk_percentage > 3.0:
-            # Risco entre 3% e 5%: permitir mas reduzir tamanho da posição
+        elif risk_percentage > 2.5:
             logger.warning(f"[RISCO] Risco elevado ({risk_percentage:.2f}%), reduzindo tamanho de posição")
 
         # Circuit Breaker 2: Verificar drawdown atual
