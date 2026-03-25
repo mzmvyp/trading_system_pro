@@ -1292,6 +1292,77 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                     logger.error(f"[TP1] Erro ao verificar TP1 para {position_key}: {e}")
 
             # ============================================
+            # 3b. PROTEÇÃO AUTOMÁTICA DE LUCRO (sem DeepSeek)
+            # ============================================
+            # Move stop para breakeven ou trailing baseado em regras fixas
+            # Não depende de position_manager nem de DeepSeek
+            try:
+                current_price = await self._get_current_price(symbol)
+                if current_price > 0:
+                    pnl_pct = self._calculate_pnl_percent(position, current_price)
+                    entry_price = position.get("entry_price", 0)
+                    current_stop = position.get("stop_loss", 0)
+                    signal_type = position.get("signal", "BUY")
+
+                    # A) AUTO BREAKEVEN: Mover stop para entry quando lucro >= trigger
+                    if settings.auto_breakeven_enabled and pnl_pct >= settings.auto_breakeven_trigger_pct:
+                        # Verificar se stop ainda está abaixo do entry (para BUY) ou acima (para SELL)
+                        should_move = False
+                        if signal_type == "BUY" and current_stop < entry_price:
+                            should_move = True
+                        elif signal_type == "SELL" and current_stop > entry_price:
+                            should_move = True
+
+                        if should_move:
+                            logger.warning(f"[AUTO BREAKEVEN] {position_key}: P&L={pnl_pct:.2f}% >= {settings.auto_breakeven_trigger_pct}% - Movendo stop para breakeven (${entry_price:.4f})")
+                            if auto_execute:
+                                be_result = await self._execute_adjust_stop(position, entry_price)
+                                results.append({
+                                    "position_key": position_key,
+                                    "action": "AUTO_BREAKEVEN",
+                                    "executed": be_result.get("executed", False),
+                                    "pnl_percent": pnl_pct,
+                                    "new_stop": entry_price
+                                })
+                                continue
+
+                    # B) AUTO TRAILING STOP: Trail stop quando lucro >= trigger
+                    if settings.auto_trailing_stop_enabled and pnl_pct >= settings.auto_trailing_stop_trigger_pct:
+                        trail_distance = entry_price * (settings.auto_trailing_stop_distance_pct / 100)
+
+                        if signal_type == "BUY":
+                            new_trailing_stop = current_price - trail_distance
+                            # Só move se novo stop é melhor que o atual
+                            if new_trailing_stop > current_stop:
+                                logger.warning(f"[AUTO TRAILING] {position_key}: P&L={pnl_pct:.2f}% - Trailing stop: ${current_stop:.4f} -> ${new_trailing_stop:.4f}")
+                                if auto_execute:
+                                    trail_result = await self._execute_adjust_stop(position, new_trailing_stop)
+                                    results.append({
+                                        "position_key": position_key,
+                                        "action": "AUTO_TRAILING_STOP",
+                                        "executed": trail_result.get("executed", False),
+                                        "pnl_percent": pnl_pct,
+                                        "new_stop": new_trailing_stop
+                                    })
+                                    continue
+                        else:  # SELL
+                            new_trailing_stop = current_price + trail_distance
+                            if new_trailing_stop < current_stop:
+                                logger.warning(f"[AUTO TRAILING] {position_key}: P&L={pnl_pct:.2f}% - Trailing stop: ${current_stop:.4f} -> ${new_trailing_stop:.4f}")
+                                if auto_execute:
+                                    trail_result = await self._execute_adjust_stop(position, new_trailing_stop)
+                                    results.append({
+                                        "position_key": position_key,
+                                        "action": "AUTO_TRAILING_STOP",
+                                        "executed": trail_result.get("executed", False),
+                                        "pnl_percent": pnl_pct,
+                                        "new_stop": new_trailing_stop
+                                    })
+                                    continue
+            except Exception as e:
+                logger.warning(f"[AUTO PROTECT] Erro na protecao automatica de {position_key}: {e}")
+
+            # ============================================
             # 4. REAVALIACAO VIA DEEPSEEK (normal)
             # ============================================
             # Verificar se deve reavaliar (reavaliacao normal via DeepSeek)

@@ -113,9 +113,21 @@ class Settings(BaseSettings):
     # REAVALIAÇÃO DE SINAIS ATIVOS
     # ========================================
     reevaluation_enabled: bool = True
-    reevaluation_interval_hours: float = 4.0  # Reavaliar a cada 2h (era 30 min — muito agressivo)
-    reevaluation_min_time_open_hours: float = 4.0  # Só reavaliar após 2h aberta (era 15 min)
+    reevaluation_interval_hours: float = 1.0  # Reavaliar a cada 1h
+    reevaluation_min_time_open_hours: float = 1.0  # Primeira reavaliação após 1h aberta
     reevaluation_min_confidence: int = 7  # Confiança mínima para agir na reavaliação
+    reevaluation_require_tp1_hit: bool = False  # Se True, só reavalia após TP1 ser atingido
+
+    # ========================================
+    # PROTEÇÃO AUTOMÁTICA DE LUCRO
+    # ========================================
+    # Move stop para breakeven quando lucro atinge X%
+    auto_breakeven_enabled: bool = True
+    auto_breakeven_trigger_pct: float = 1.5  # Ativa breakeven com 1.5% de lucro
+    # Trailing stop automático quando lucro atinge X%
+    auto_trailing_stop_enabled: bool = True
+    auto_trailing_stop_trigger_pct: float = 2.5  # Ativa trailing com 2.5% de lucro
+    auto_trailing_stop_distance_pct: float = 1.0  # Distância do trailing: 1% abaixo do máximo
 
     # ========================================
     # VALIDAÇÃO ML - MODELO DE CONFLUÊNCIA
