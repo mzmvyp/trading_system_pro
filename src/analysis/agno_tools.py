@@ -1991,24 +1991,31 @@ def validate_risk_and_position(
                 "risk_level": "medium"
             }
 
-        # MODIFICADO: Tamanho de posição fixo baseado em unidades (não em capital)
-        # Sistema foca apenas em P&L, não em capital
-        # Usar tamanho padrão de 1 unidade ou calcular baseado em stop loss para ter P&L significativo
-        if stop_loss:
-            # Calcular tamanho para que o risco seja $100 (valor fixo para P&L tracking)
-            risk_per_unit = abs(entry_price - stop_loss)
-            if risk_per_unit > 0:
-                position_size = 100.0 / risk_per_unit  # $100 de risco por trade
-            else:
-                position_size = 1.0  # Fallback: 1 unidade
+        # POSITION SIZING baseado na fórmula:
+        # 1. risco_em_$ = capital * (risk_percent / 100)
+        # 2. distancia_stop_% = |entry - stop| / entry
+        # 3. tamanho_posicao = risco_em_$ / distancia_stop_%
+        # 4. alavancagem = tamanho_posicao / capital
+        capital = settings.initial_capital
+        risk_pct = settings.risk_percent_per_trade  # ex: 2%
+        risk_amount = capital * (risk_pct / 100)  # ex: $180 * 2% = $3.60
+
+        stop_distance_pct = risk_percentage / 100  # já calculado acima como %
+        if stop_distance_pct > 0:
+            position_value = risk_amount / stop_distance_pct  # ex: $3.60 / 0.02 = $180
+            position_size = position_value / entry_price  # em unidades
         else:
-            position_size = 1.0  # 1 unidade padrão
+            position_size = 1.0
+            position_value = entry_price
 
-        # Calcular P&L potencial
-        position_value = position_size * entry_price
-        max_risk_amount = abs(entry_price - stop_loss) * position_size if stop_loss else 0
+        leverage = position_value / capital if capital > 0 else 0
+        max_risk_amount = risk_amount  # sempre = capital * risk%
 
-        logger.info(f"[P&L MODE] Tamanho posição: {position_size:.6f} unidades, Valor: ${position_value:.2f}, Risco: ${max_risk_amount:.2f}")
+        logger.info(
+            f"[POSITION SIZE] Capital=${capital:.2f}, Risco={risk_pct}%=${risk_amount:.2f}, "
+            f"Stop={risk_percentage:.2f}%, Posição=${position_value:.2f}, "
+            f"Unidades={position_size:.6f}, Alavancagem={leverage:.1f}x"
+        )
 
         return {
             "can_execute": True,
