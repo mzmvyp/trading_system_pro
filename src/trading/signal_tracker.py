@@ -303,18 +303,18 @@ def _add_model_attribution(result: Dict, signal: Dict) -> None:
     else:
         result["ml_correct"] = None
 
-    # ML OPERACIONAL: mede acurácia sob a regra real de bloqueio (prob >= threshold E pred == 1)
-    # Isso resolve o desalinhamento entre "acurácia por classe" e "decisão de bloqueio"
+    # ML OPERACIONAL: mede acurácia do voto ML (prob >= 0.6 = a favor, < 0.4 = contra)
+    # ML agora é voto no sistema de confluência, não veto
     ml_prob = signal.get("ml_probability")
-    ML_OPERATIONAL_THRESHOLD = 0.65
     if ml_pred is not None and ml_prob is not None:
-        ml_would_pass = (int(ml_pred) == 1) and (ml_prob >= ML_OPERATIONAL_THRESHOLD)
-        if ml_would_pass:
-            # ML deixou passar — acertou se foi winner
+        if ml_prob >= 0.6 and int(ml_pred) == 1:
+            # ML votou a favor — acertou se foi winner
             result["ml_operational_correct"] = is_winner
-        else:
-            # ML bloqueou — acertou se foi loser
+        elif ml_prob < 0.4 or int(ml_pred) == 0:
+            # ML votou contra — acertou se foi loser
             result["ml_operational_correct"] = not is_winner
+        else:
+            result["ml_operational_correct"] = None  # neutro
     else:
         result["ml_operational_correct"] = None
 

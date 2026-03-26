@@ -541,6 +541,10 @@ class BinanceFuturesExecutor:
 
     async def _get_algo_orders(self, symbol: str) -> List[Dict]:
         """Lista ordens algo (SL/TP) ativas para um símbolo."""
+        result = await self._request("GET", "/fapi/v1/openAlgoOrders", {"symbol": symbol}, signed=True)
+        if isinstance(result, list):
+            return result
+        # Fallback ao endpoint antigo
         result = await self._request("GET", "/fapi/v1/allAlgoOrders", {"symbol": symbol, "limit": 100}, signed=True)
         if isinstance(result, list):
             return [o for o in result if o.get("algoStatus") == "NEW"]
@@ -794,8 +798,8 @@ class BinanceFuturesExecutor:
                 calculated_leverage = int(position_value / desired_margin)
                 # Cap de segurança: usar limite real do par (via exchangeInfo) ao invés de 125x fixo
                 symbol_max_leverage = symbol_info.get("max_leverage", 20) if symbol_info else 20
-                # Limite adicional de segurança: nunca passar de 50x independente do que Binance permite
-                safe_max_leverage = min(symbol_max_leverage, 50)
+                # Limite de segurança: max 5x para evitar liquidações com alavancagem alta
+                safe_max_leverage = min(symbol_max_leverage, 5)
                 calculated_leverage = max(1, min(calculated_leverage, safe_max_leverage))
             else:
                 calculated_leverage = self.default_leverage
@@ -827,7 +831,8 @@ class BinanceFuturesExecutor:
             close_side = "SELL" if signal_type == "BUY" else "BUY"
 
             def _order_id(r: dict) -> Optional[Any]:
-                return r.get("orderId")
+                """Extrai ID da ordem: algoId para ordens algo (SL/TP), orderId para regulares."""
+                return r.get("algoId") or r.get("orderId")
 
             # 9. Colocar Stop Loss (com entry_price para validação anti-trigger)
             # CRÍTICO: Se SL falhar, FECHAR posição imediatamente — NÃO operar sem stop
@@ -950,17 +955,30 @@ class BinanceFuturesExecutor:
             return []
         return result
 
-    async def get_open_algo_orders(self, symbol: str) -> List[Dict[str, Any]]:
-        """Obtém ordens algo (SL/TP) ativas para um símbolo, em formato compatível com get_open_orders (campo type)."""
-        raw = await self._request("GET", "/fapi/v1/allAlgoOrders", {"symbol": symbol, "limit": 100}, signed=True)
+    async def get_open_algo_orders(self, symbol: str = None) -> List[Dict[str, Any]]:
+        """
+        Obtém ordens algo (SL/TP) ativas, em formato compatível com get_open_orders.
+        Usa /fapi/v1/openAlgoOrders (retorna apenas ordens com status NEW).
+        Se symbol=None, retorna todas as ordens algo abertas (peso 40).
+        """
+        params = {}
+        if symbol:
+            params["symbol"] = symbol
+
+        raw = await self._request("GET", "/fapi/v1/openAlgoOrders", params, signed=True)
         if not isinstance(raw, list):
-            return []
+            # Fallback: tentar endpoint antigo se o novo falhar
+            if symbol:
+                raw = await self._request("GET", "/fapi/v1/allAlgoOrders", {"symbol": symbol, "limit": 100}, signed=True)
+                if not isinstance(raw, list):
+                    return []
+                raw = [o for o in raw if o.get("algoStatus") == "NEW"]
+            else:
+                return []
         out = []
         for o in raw:
-            if o.get("algoStatus") != "NEW":
-                continue
             out.append({
-                "symbol": o.get("symbol", symbol),
+                "symbol": o.get("symbol", symbol or ""),
                 "type": o.get("orderType", ""),  # STOP_MARKET, TAKE_PROFIT_MARKET, etc.
                 "side": o.get("side", ""),
                 "origQty": o.get("quantity", 0),

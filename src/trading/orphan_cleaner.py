@@ -72,11 +72,16 @@ class OrphanOrderCleaner:
                 logger.error(f"[LIMPEZA] Erro ao obter ordens: {all_orders.get('error')}")
                 return {"success": False, "error": all_orders.get("error")}
 
-            for sym in settings.top_crypto_pairs:
-                algo_orders = await executor.get_open_algo_orders(sym)
-                all_orders.extend(algo_orders)
+            # Obter TODAS as ordens algo abertas de uma vez (sem filtro de símbolo)
+            # Isso inclui top movers dinâmicos como RIVERUSDT que não estão em top_crypto_pairs
+            algo_orders = await executor.get_open_algo_orders()  # sem símbolo = todas
+            all_orders.extend(algo_orders)
 
-            logger.info(f"[LIMPEZA] Ordens abertas: {len(all_orders)}")
+            n_regular = len(all_orders) - len(algo_orders)
+            n_algo = len(algo_orders)
+            logger.info(f"[LIMPEZA] Ordens abertas: {len(all_orders)} (regulares={n_regular}, algo SL/TP={n_algo})")
+            if n_algo == 0 and len(symbols_with_position) > 0:
+                logger.warning(f"[LIMPEZA] ⚠ NENHUMA ordem algo (SL/TP) encontrada com {len(symbols_with_position)} posicoes abertas!")
 
             # 3. Identificar ordens órfãs (ordens de símbolos sem posição)
             #    E ordens EXCESSIVAS (mais de 3 ordens para o mesmo símbolo com posição)
