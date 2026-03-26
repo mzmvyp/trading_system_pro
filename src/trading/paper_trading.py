@@ -6,6 +6,7 @@ Monitora preços, executa stop loss/take profit automaticamente
 import asyncio
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -529,6 +530,151 @@ class RealPaperTradingSystem:
                             continue
                     except Exception as e:
                         logger.warning(f"Erro ao verificar timeout para {position_key}: {e}")
+
+                    # REAVALIAÇÃO TÉCNICA DE POSIÇÃO ABERTA
+                    # Após tempo mínimo, analisa indicadores técnicos pra decidir:
+                    # - Indicadores CONTRA o trade + em prejuízo → FECHAR
+                    # - Em lucro mas estagnando → MOVER SL para breakeven
+                    # - Indicadores a favor → manter
+                    try:
+                        _reeval_entry_time = datetime.fromisoformat(position.get("timestamp", datetime.now(timezone.utc).isoformat()))
+                        _reeval_minutes = (datetime.now(timezone.utc) - _reeval_entry_time).total_seconds() / 60
+                        _reeval_op_type = position.get("operation_type", "SWING_TRADE")
+
+                        # Tempo mínimo antes de reavaliar
+                        _reeval_check_minutes = {
+                            "SCALP": 10,
+                            "DAY_TRADE": 60,
+                            "SWING_TRADE": 120,
+                            "POSITION_TRADE": 480,
+                        }
+                        _min_minutes = _reeval_check_minutes.get(_reeval_op_type, 120)
+
+                        # Cooldown entre reavaliações (não reavaliar a cada 5s)
+                        _last_reeval = position.get("_last_reeval_ts", 0)
+                        _reeval_cooldown = 300  # 5 minutos entre reavaliações
+
+                        if (_reeval_minutes >= _min_minutes
+                            and not position.get("tp1_partial_closed", False)
+                            and (time.time() - _last_reeval) >= _reeval_cooldown):
+
+                            position["_last_reeval_ts"] = time.time()
+
+                            # Buscar indicadores técnicos atuais (1h klines)
+                            from src.exchange.client import BinanceClient
+                            from src.analysis.indicators import TechnicalIndicators
+                            _client = BinanceClient()
+                            _klines = await _client.get_klines(clean_symbol, "1h", limit=50)
+
+                            if _klines is not None and len(_klines) > 0:
+                                import pandas as pd
+                                _df = pd.DataFrame(_klines, columns=[
+                                    "open_time", "open", "high", "low", "close", "volume",
+                                    "close_time", "quote_volume", "trades", "taker_buy_base",
+                                    "taker_buy_quote", "ignore"
+                                ])
+                                for _col in ["open", "high", "low", "close", "volume"]:
+                                    _df[_col] = _df[_col].astype(float)
+
+                                _rsi_series = TechnicalIndicators.calculate_rsi(_df)
+                                _rsi = _rsi_series.iloc[-1] if len(_rsi_series) > 0 else 50
+
+                                _ema_fast = _df["close"].ewm(span=12).mean().iloc[-1]
+                                _ema_slow = _df["close"].ewm(span=26).mean().iloc[-1]
+                                _macd = _ema_fast - _ema_slow
+                                _macd_signal = (_df["close"].ewm(span=12).mean() - _df["close"].ewm(span=26).mean()).ewm(span=9).mean().iloc[-1]
+                                _macd_hist = _macd - _macd_signal
+
+                                # Contar sinais contra o trade
+                                _against = 0
+                                _details = []
+
+                                if signal_type == "BUY":
+                                    if _rsi < 40:
+                                        _against += 1
+                                        _details.append(f"RSI={_rsi:.0f}<40")
+                                    if _macd_hist < 0:
+                                        _against += 1
+                                        _details.append(f"MACD_hist={_macd_hist:.4f}<0")
+                                    if _ema_fast < _ema_slow:
+                                        _against += 1
+                                        _details.append(f"EMA12<EMA26")
+                                else:  # SELL
+                                    if _rsi > 60:
+                                        _against += 1
+                                        _details.append(f"RSI={_rsi:.0f}>60")
+                                    if _macd_hist > 0:
+                                        _against += 1
+                                        _details.append(f"MACD_hist={_macd_hist:.4f}>0")
+                                    if _ema_fast > _ema_slow:
+                                        _against += 1
+                                        _details.append(f"EMA12>EMA26")
+
+                                _details_str = ", ".join(_details) if _details else "nenhum"
+
+                                # DECISÃO baseada em análise técnica
+                                if _against >= 3 and pnl_percent < 0:
+                                    # 3/3 indicadores contra + em prejuízo → FECHAR
+                                    logger.warning(
+                                        f"[REEVAL FECHAR] {clean_symbol} {signal_type}: "
+                                        f"3/3 indicadores contra ({_details_str}) + PnL={pnl_percent:.2f}% — "
+                                        f"fechando antes que piore"
+                                    )
+                                    await self._close_position_auto(position_key, current_price, "REEVAL_CONTRA")
+                                    continue
+
+                                elif _against >= 2 and pnl_percent > 0.3:
+                                    # 2+ indicadores contra mas em lucro → mover SL para breakeven
+                                    if not position.get("_sl_moved_to_breakeven"):
+                                        if signal_type == "BUY":
+                                            new_sl = entry_price * 1.001  # breakeven + 0.1%
+                                        else:
+                                            new_sl = entry_price * 0.999
+                                        old_sl = position.get("stop_loss", 0)
+                                        # Só mover se for melhor que o SL atual
+                                        if (signal_type == "BUY" and new_sl > old_sl) or \
+                                           (signal_type == "SELL" and new_sl < old_sl):
+                                            position["stop_loss"] = new_sl
+                                            position["_sl_moved_to_breakeven"] = True
+                                            logger.warning(
+                                                f"[REEVAL BREAKEVEN] {clean_symbol} {signal_type}: "
+                                                f"{_against}/3 contra ({_details_str}) + PnL={pnl_percent:.2f}% — "
+                                                f"SL movido para breakeven ${new_sl:.4f}"
+                                            )
+                                            self._save_state()
+
+                                elif _against >= 2 and pnl_percent < -0.5:
+                                    # 2/3 contra + perdendo > 0.5% → apertar SL (50% entre entry e SL)
+                                    old_sl = position.get("stop_loss", 0)
+                                    if old_sl:
+                                        if signal_type == "BUY":
+                                            new_sl = entry_price - abs(entry_price - old_sl) * 0.5
+                                            if new_sl > old_sl:
+                                                position["stop_loss"] = new_sl
+                                                logger.info(
+                                                    f"[REEVAL TIGHTEN] {clean_symbol}: "
+                                                    f"SL apertado ${old_sl:.4f} → ${new_sl:.4f} "
+                                                    f"({_against}/3 contra, PnL={pnl_percent:.2f}%)"
+                                                )
+                                                self._save_state()
+                                        else:
+                                            new_sl = entry_price + abs(old_sl - entry_price) * 0.5
+                                            if new_sl < old_sl:
+                                                position["stop_loss"] = new_sl
+                                                logger.info(
+                                                    f"[REEVAL TIGHTEN] {clean_symbol}: "
+                                                    f"SL apertado ${old_sl:.4f} → ${new_sl:.4f} "
+                                                    f"({_against}/3 contra, PnL={pnl_percent:.2f}%)"
+                                                )
+                                                self._save_state()
+                                else:
+                                    logger.debug(
+                                        f"[REEVAL OK] {clean_symbol}: {_against}/3 contra, "
+                                        f"PnL={pnl_percent:.2f}% — mantendo posição"
+                                    )
+
+                    except Exception as e:
+                        logger.debug(f"Erro na reavaliação técnica de {position_key}: {e}")
 
                     # Trailing stop: ajustar SL dinamicamente após TP1
                     if position.get("trailing_stop_active"):

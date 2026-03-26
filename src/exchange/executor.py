@@ -830,9 +830,19 @@ class BinanceFuturesExecutor:
                 return r.get("orderId")
 
             # 9. Colocar Stop Loss (com entry_price para validação anti-trigger)
+            # CRÍTICO: Se SL falhar, FECHAR posição imediatamente — NÃO operar sem stop
             sl_order = await self.place_stop_loss(symbol, close_side, position_size, stop_loss, entry_price=entry_price)
             if "error" in sl_order:
-                logger.error(f"Erro ao colocar Stop Loss: {sl_order}")
+                logger.error(f"[CRITICAL] Stop Loss FALHOU para {symbol}: {sl_order}")
+                logger.error(f"[CRITICAL] Fechando posição {symbol} — NÃO operar sem stop loss!")
+                try:
+                    await self.close_position(symbol)
+                except Exception as close_err:
+                    logger.error(f"[CRITICAL] Falha ao fechar posição sem SL: {close_err}")
+                return {
+                    "success": False,
+                    "error": f"Stop Loss falhou ({sl_order.get('error', 'unknown')}). Posição fechada por segurança."
+                }
             else:
                 logger.info(f"[STOP LOSS] Colocado: ID {_order_id(sl_order)}")
 
@@ -985,6 +995,7 @@ class BinanceFuturesExecutor:
                     "side": "LONG" if float(pos["positionAmt"]) > 0 else "SHORT",
                     "position_amt": float(pos["positionAmt"]),
                     "entry_price": float(pos["entryPrice"]),
+                    "mark_price": float(pos.get("markPrice", 0)),
                     "unrealized_pnl": float(pos["unRealizedProfit"]),
                     "leverage": int(pos["leverage"]),
                     "liquidation_price": float(pos["liquidationPrice"])

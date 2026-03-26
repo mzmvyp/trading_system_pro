@@ -1853,7 +1853,7 @@ def validate_risk_and_position(
             trend_desc = _trend_data.get("description", "")
 
             if signal_type == "BUY" and not allow_long:
-                logger.warning(f"[TREND FILTER] BLOQUEADO BUY {symbol}: {trend_desc}")
+                logger.warning(f"╔══ [BLOQUEADO] BUY {symbol} — Trend filter: {trend_desc}")
                 return {
                     "can_execute": False,
                     "reason": f"Sinal BUY bloqueado pelo filtro de tendencia: {trend_desc}. "
@@ -1863,7 +1863,7 @@ def validate_risk_and_position(
                 }
 
             if signal_type == "SELL" and not allow_short:
-                logger.warning(f"[TREND FILTER] BLOQUEADO SELL {symbol}: {trend_desc}")
+                logger.warning(f"╔══ [BLOQUEADO] SELL {symbol} — Trend filter: {trend_desc}")
                 return {
                     "can_execute": False,
                     "reason": f"Sinal SELL bloqueado pelo filtro de tendencia: {trend_desc}. "
