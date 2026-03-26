@@ -20,6 +20,12 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier  # noqa: E402
 from sklearn.linear_model import LogisticRegression  # noqa: E402
+
+try:
+    import xgboost as xgb
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
 from sklearn.metrics import (  # noqa: E402
     accuracy_score,
     classification_report,
@@ -160,6 +166,16 @@ class SimpleSignalValidator:
             )
         }
 
+        if XGBOOST_AVAILABLE:
+            self.models['XGBoost'] = xgb.XGBClassifier(
+                objective='binary:logistic',
+                tree_method='hist',
+                eval_metric='logloss',
+                n_estimators=200, max_depth=4, learning_rate=0.1,
+                subsample=0.8, colsample_bytree=0.8,
+                random_state=42, n_jobs=-1, verbosity=0,
+            )
+
         results = {}
         best_score = -1
 
@@ -171,8 +187,8 @@ class SimpleSignalValidator:
 
         for name, model in self.models.items():
             try:
-                # Treinar (GradientBoosting não suporta class_weight)
-                if name == "GradientBoosting":
+                # Treinar (GradientBoosting/XGBoost não suportam class_weight direto)
+                if name in ("GradientBoosting", "XGBoost"):
                     model.fit(X_train, y_train, sample_weight=sample_weights)
                 else:
                     model.fit(X_train, y_train)

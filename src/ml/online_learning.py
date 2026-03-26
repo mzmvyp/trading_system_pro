@@ -30,6 +30,12 @@ from sklearn.utils.class_weight import compute_sample_weight
 # Sklearn
 from sklearn.preprocessing import StandardScaler
 
+try:
+    import xgboost as xgb
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
+
 # Configuracoes
 CONFIG = {
     "model_dir": "ml_models",
@@ -395,6 +401,16 @@ class OnlineLearningManager:
                 ),
             }
 
+            if XGBOOST_AVAILABLE:
+                models_to_train["XGBoost"] = xgb.XGBClassifier(
+                    objective="binary:logistic",
+                    tree_method="hist",
+                    eval_metric="logloss",
+                    n_estimators=200, max_depth=4, learning_rate=0.1,
+                    subsample=0.8, colsample_bytree=0.8,
+                    random_state=42, n_jobs=-1, verbosity=0,
+                )
+
             best_model = None
             best_model_name = None
             best_f1 = -1
@@ -410,7 +426,7 @@ class OnlineLearningManager:
 
             for name, model in models_to_train.items():
                 try:
-                    if name == "GradientBoosting":
+                    if name in ("GradientBoosting", "XGBoost"):
                         model.fit(X_train_scaled, y_train, sample_weight=sample_weights)
                     else:
                         model.fit(X_train_scaled, y_train)
