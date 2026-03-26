@@ -862,7 +862,18 @@ Responda APENAS com JSON:
                             deepseek_signal["block_reason"] = f"SL/TP inválidos: SL=${ds_sl}, TP1=${ds_tp1}, TP2=${ds_tp2}"
 
                     if deepseek_signal.get("signal") in ["BUY", "SELL"]:
-                        validation = validate_risk_and_position(deepseek_signal, symbol, _trend_data=trend_data)
+                        # Obter capital real da Binance (async)
+                        _ds_capital = None
+                        try:
+                            from src.exchange.executor import BinanceFuturesExecutor
+                            _ds_executor = BinanceFuturesExecutor()
+                            _ds_balance = await _ds_executor.get_balance()
+                            if "error" not in _ds_balance:
+                                _ds_capital = _ds_balance.get("available_balance", 0)
+                        except Exception as e:
+                            logger.error(f"[CAPITAL] Falha ao obter saldo da Binance: {e}")
+
+                        validation = validate_risk_and_position(deepseek_signal, symbol, _trend_data=trend_data, _capital=_ds_capital)
                         if validation.get("can_execute"):
                             logger.info(f"[DEEPSEEK] Executando sinal {deepseek_signal.get('signal')} para {symbol}")
                             position_size = validation.get("recommended_position_size", validation.get("position_size"))
@@ -1274,93 +1285,63 @@ Responda APENAS com JSON:
                         f"prob={ml_prob:.1%}, predicao={ml_opinion}"
                     )
                 else:
-                    # FILTRO DE REGIME BTC: Bloqueia shorts em mercado bullish e longs em bearish
-                    # Previne stop em massa quando todas as posições vão contra a tendência macro
-                    btc_regime_blocked = False
+                    # Obter tendência dinâmica para filtro
                     try:
-                        from src.analysis.market_regime_filter import MarketRegimeFilter
-                        regime_filter = MarketRegimeFilter()
-                        regime_result = await regime_filter.analyze_btc_regime()
-                        regime = regime_result.get("regime", "NEUTRAL")
-                        regime_conf = regime_result.get("confidence", 0)
-                        sig_type = agno_signal.get("signal", "").upper()
-                        allowed, regime_msg = regime_filter.should_allow_signal(sig_type)
-                        btc_data = regime_result.get("btc_data", {})
-                        btc_price_change = btc_data.get("price_change_24h", 0)
-                        logger.info(
-                            f"[BTC REGIME] {regime} (conf={regime_conf:.0%}, BTC 24h={btc_price_change:+.1f}%) "
-                            f"| {sig_type} {symbol}: {regime_msg}"
-                        )
-                        if not allowed:
-                            logger.warning(
-                                f"[BTC REGIME BLOCK] {sig_type} {symbol} BLOQUEADO: {regime_msg}. "
-                                f"BTC em {regime} — evita stop em massa de posições contra tendência macro."
-                            )
-                            btc_regime_blocked = True
+                        trend_data = await get_trend(symbol)
                     except Exception as e:
-                        logger.warning(f"[BTC REGIME] Erro ao analisar regime BTC: {e} — permitindo sinal")
+                        logger.warning(f"[TREND] Erro ao obter tendência: {e}")
+                        trend_data = None
 
-                    if btc_regime_blocked:
-                        # Sinal bloqueado pelo regime BTC — salvar motivo
+                    # Obter capital real da Binance (async) ANTES de chamar validate
+                    _capital_value = None
+                    try:
+                        from src.exchange.executor import BinanceFuturesExecutor
+                        _cap_executor = BinanceFuturesExecutor()
+                        _cap_balance = await _cap_executor.get_balance()
+                        if "error" not in _cap_balance:
+                            _capital_value = _cap_balance.get("available_balance", 0)
+                    except Exception as e:
+                        logger.error(f"[CAPITAL] Falha ao obter saldo da Binance: {e}")
+
+                    validation = validate_risk_and_position(agno_signal, symbol, _trend_data=trend_data, _capital=_capital_value)
+                    if validation.get("can_execute"):
+                        logger.info(f"[AGNO] Risco/posição OK. Executando sinal {agno_signal.get('signal')} para {symbol}")
+                        position_size = validation.get("recommended_position_size", validation.get("position_size"))
+
+                        # VERIFICAR MODO DE TRADING: paper ou real
+                        if settings.trading_mode == "real":
+                            # MODO REAL: Executar na Binance Futures
+                            from src.exchange.executor import BinanceFuturesExecutor
+                            executor = BinanceFuturesExecutor()
+                            execution_result = await executor.execute_signal(agno_signal, position_size=None)
+                            if execution_result.get("success"):
+                                self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
+                                logger.info(f"[AGNO REAL] Trade REAL executado: {execution_result.get('message', '')}")
+                            else:
+                                self._mark_signal_executed(agno_signal, "real", False, execution_result.get("error", ""))
+                                logger.warning(f"[AGNO REAL] Falha ao executar trade REAL: {execution_result.get('error', '')}")
+                        else:
+                            # MODO PAPER: Simulação
+                            execution_result = execute_paper_trade(agno_signal, position_size)
+                            if execution_result.get("success"):
+                                self._mark_signal_executed(agno_signal, "paper", True, execution_result.get("message", ""))
+                                logger.info(f"[AGNO PAPER] Trade PAPER executado: {execution_result.get('message', '')}")
+                            else:
+                                self._mark_signal_executed(agno_signal, "paper", False, execution_result.get("error", ""))
+                                logger.warning(f"[AGNO PAPER] Falha ao executar trade PAPER: {execution_result.get('error', '')}")
+                    else:
+                        reason = validation.get("reason", "Desconhecido")
+                        logger.info(f"[AGNO] Sinal nao executado (risco/posição): {reason}")
                         filepath = agno_signal.get("_signal_file")
                         if filepath and os.path.exists(filepath):
                             try:
                                 with open(filepath, "r", encoding="utf-8") as f:
                                     saved = json.load(f)
-                                saved["non_execution_reason"] = f"BTC regime block: {regime} — {sig_type} contra tendência macro"
+                                saved["non_execution_reason"] = reason
                                 with open(filepath, "w", encoding="utf-8") as f:
                                     json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
                             except Exception:
                                 pass
-                    else:
-                        # Obter tendência dinâmica para filtro
-                        try:
-                            trend_data = await get_trend(symbol)
-                        except Exception as e:
-                            logger.warning(f"[TREND] Erro ao obter tendência: {e}")
-                            trend_data = None
-                        validation = validate_risk_and_position(agno_signal, symbol, _trend_data=trend_data)
-                        if validation.get("can_execute"):
-                            logger.info(f"[AGNO] Risco/posição OK. Executando sinal {agno_signal.get('signal')} para {symbol}")
-                            position_size = validation.get("recommended_position_size", validation.get("position_size"))
-
-                            # VERIFICAR MODO DE TRADING: paper ou real
-                            if settings.trading_mode == "real":
-                                # MODO REAL: Executar na Binance Futures
-                                # IMPORTANTE: Passar position_size=None para que o executor calcule
-                                # baseado no saldo REAL disponível na Binance
-                                from src.exchange.executor import BinanceFuturesExecutor
-                                executor = BinanceFuturesExecutor()
-                                execution_result = await executor.execute_signal(agno_signal, position_size=None)
-                                if execution_result.get("success"):
-                                    self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
-                                    logger.info(f"[AGNO REAL] Trade REAL executado: {execution_result.get('message', '')}")
-                                else:
-                                    self._mark_signal_executed(agno_signal, "real", False, execution_result.get("error", ""))
-                                    logger.warning(f"[AGNO REAL] Falha ao executar trade REAL: {execution_result.get('error', '')}")
-                            else:
-                                # MODO PAPER: Simulação
-                                execution_result = execute_paper_trade(agno_signal, position_size)
-                                if execution_result.get("success"):
-                                    self._mark_signal_executed(agno_signal, "paper", True, execution_result.get("message", ""))
-                                    logger.info(f"[AGNO PAPER] Trade PAPER executado: {execution_result.get('message', '')}")
-                                else:
-                                    self._mark_signal_executed(agno_signal, "paper", False, execution_result.get("error", ""))
-                                    logger.warning(f"[AGNO PAPER] Falha ao executar trade PAPER: {execution_result.get('error', '')}")
-                        else:
-                            reason = validation.get("reason", "Desconhecido")
-                            logger.info(f"[AGNO] Sinal nao executado (risco/posição): {reason}")
-                            # Guardar motivo no ficheiro do sinal para análise no dashboard
-                            filepath = agno_signal.get("_signal_file")
-                            if filepath and os.path.exists(filepath):
-                                try:
-                                    with open(filepath, "r", encoding="utf-8") as f:
-                                        saved = json.load(f)
-                                    saved["non_execution_reason"] = reason
-                                    with open(filepath, "w", encoding="utf-8") as f:
-                                        json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
-                                except Exception:
-                                    pass
 
             # === NOTIFICAÇÃO POR EMAIL: Sinal gerado ===
             if agno_signal.get("signal") in ["BUY", "SELL"]:

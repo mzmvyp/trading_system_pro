@@ -1762,7 +1762,8 @@ def validate_risk_and_position(
     signal: Dict[str, Any],
     symbol: str,
     account_balance: float = None,
-    _trend_data: Dict[str, Any] = None
+    _trend_data: Dict[str, Any] = None,
+    _capital: float = None
 ) -> Dict[str, Any]:
     """
     Valida risco e calcula tamanho de posição apropriado com circuit breakers.
@@ -1999,17 +2000,8 @@ def validate_risk_and_position(
         #
         # Capital OBRIGATÓRIO da API da Binance (saldo real)
         # Sem saldo real = NÃO abre posição
-        capital = None
-        try:
-            from src.exchange.executor import BinanceFuturesExecutor
-            _executor = BinanceFuturesExecutor()
-            import asyncio
-            _balance = asyncio.get_event_loop().run_until_complete(_executor.get_balance())
-            if "error" not in _balance:
-                capital = _balance.get("available_balance", 0)
-                logger.info(f"[CAPITAL] Saldo real da Binance: ${capital:.2f}")
-        except Exception as e:
-            logger.error(f"[CAPITAL] Falha ao obter saldo da Binance: {e}")
+        # NOTA: capital é passado pelo caller (async) via _capital param
+        capital = _capital
 
         if not capital or capital <= 0:
             return {
@@ -2017,6 +2009,7 @@ def validate_risk_and_position(
                 "reason": "Não foi possível obter saldo real da Binance. Sem saldo confirmado, não abre posição.",
                 "risk_level": "high"
             }
+        logger.info(f"[CAPITAL] Saldo real da Binance: ${capital:.2f}")
 
         risk_pct = settings.risk_percent_per_trade  # ex: 5%
         risk_amount = capital * (risk_pct / 100)  # ex: $100 * 5% = $5

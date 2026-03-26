@@ -119,7 +119,7 @@ class Settings(BaseSettings):
     # ========================================
     # Dados mostram SELL com 46% WR vs BUY com 67% WR
     # Shorts precisam de confiança maior para compensar menor acerto
-    sell_min_confidence: int = 8  # Mínimo 8/10 para SELL (vs 7 para BUY)
+    sell_min_confidence: int = 7  # Mesmo mínimo que BUY (7/10)
     sell_require_strong_trend: bool = True  # SELL só em tendência forte de baixa
 
     # ========================================
