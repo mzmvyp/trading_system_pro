@@ -460,9 +460,15 @@ class AgnoTradingAgent:
             votes_against += 1
             details.append(f"RSI contra SELL ({rsi:.1f} < {rsi_oversold})")
 
-        # 2. MACD histogram direction
+        # 2. MACD histogram direction (zona morta para valores insignificantes)
         macd_hist = indicators.get("macd", {}).get("histogram", 0)
-        if (is_buy and macd_hist > 0) or (not is_buy and macd_hist < 0):
+        # Zona morta: MACD muito próximo de zero = neutro (não vota)
+        # Threshold relativo ao preço do ativo (0.01% do preço)
+        _price = indicators.get("close", indicators.get("price", 1))
+        _macd_deadzone = abs(_price) * 0.0001 if _price else 0.0001
+        if abs(macd_hist) < _macd_deadzone:
+            details.append(f"MACD neutro ({macd_hist:.6f}, zona morta)")
+        elif (is_buy and macd_hist > 0) or (not is_buy and macd_hist < 0):
             votes_for += 1
             details.append(f"MACD aligned ({macd_hist:.4f})")
         elif (is_buy and macd_hist < 0) or (not is_buy and macd_hist > 0):
@@ -1287,9 +1293,9 @@ Responda APENAS com JSON:
                 if validation.get("can_execute"):
                     _pos_size = validation.get("recommended_position_size", validation.get("position_size", "?"))
                     _leverage = validation.get("implied_leverage", "?")
-                    logger.warning(
-                        f"╔══ [APROVADO] {agno_signal.get('signal')} {symbol} — "
-                        f"Executando! Pos=${_pos_size}, Leverage={_leverage}x"
+                    logger.info(
+                        f"[ENVIANDO] {agno_signal.get('signal')} {symbol} — "
+                        f"Pos=${_pos_size}, Leverage={_leverage}x — verificando exchange..."
                     )
                     position_size = validation.get("recommended_position_size", validation.get("position_size"))
 
@@ -1302,10 +1308,16 @@ Responda APENAS com JSON:
                         if execution_result.get("success"):
                             agno_signal["_executed"] = True
                             self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
-                            logger.info(f"[AGNO REAL] Trade REAL executado: {execution_result.get('message', '')}")
+                            logger.warning(
+                                f"╔══ [APROVADO] {agno_signal.get('signal')} {symbol} — "
+                                f"Trade REAL executado! Pos=${_pos_size}, Leverage={_leverage}x"
+                            )
                         else:
                             self._mark_signal_executed(agno_signal, "real", False, execution_result.get("error", ""))
-                            logger.warning(f"[AGNO REAL] Falha ao executar trade REAL: {execution_result.get('error', '')}")
+                            logger.warning(
+                                f"╔══ [BLOQUEADO] {agno_signal.get('signal')} {symbol} — "
+                                f"Exchange rejeitou: {execution_result.get('error', '')}"
+                            )
                     else:
                         # MODO PAPER: Simulação
                         execution_result = execute_paper_trade(agno_signal, position_size)

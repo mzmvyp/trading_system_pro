@@ -175,30 +175,7 @@ def validate_risk_and_position(
                             "risk_level": "high"
                         }
 
-                    # Check 2: GUARDA DIRECIONAL — máximo 2 posições na mesma direção
-                    # Evita cenário de 3+ shorts correlacionados que tomam stop em massa
-                    signal_type = signal.get("signal", "").upper()
-                    if signal_type in ("BUY", "SELL") and open_positions:
-                        max_same_direction = 2  # No máximo 2 posições na mesma direção
-                        same_dir_count = sum(
-                            1 for p in open_positions
-                            if p.get("signal", "").upper() == signal_type
-                        )
-                        if same_dir_count >= max_same_direction:
-                            dir_label = "LONG" if signal_type == "BUY" else "SHORT"
-                            open_symbols = [p.get("symbol", "?") for p in open_positions if p.get("signal", "").upper() == signal_type]
-                            logger.warning(
-                                f"[GUARDA DIRECIONAL] {dir_label} {symbol} BLOQUEADO: já existem {same_dir_count} "
-                                f"{dir_label}s abertos ({', '.join(open_symbols)}). "
-                                f"Máximo {max_same_direction} na mesma direção para evitar stop em massa."
-                            )
-                            return {
-                                "can_execute": False,
-                                "reason": f"Guarda direcional: já existem {same_dir_count} {dir_label}s abertos "
-                                          f"({', '.join(open_symbols)}). Máximo {max_same_direction} na mesma direção "
-                                          f"para evitar stop em massa em ativos correlacionados.",
-                                "risk_level": "high"
-                            }
+                    # Guarda direcional removida — respeitamos apenas max_open_positions
         except Exception as e:
             logger.warning(f"Erro ao verificar posicoes existentes: {e}")
 
