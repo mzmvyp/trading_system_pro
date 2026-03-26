@@ -798,8 +798,8 @@ class BinanceFuturesExecutor:
                 calculated_leverage = int(position_value / desired_margin)
                 # Cap de segurança: usar limite real do par (via exchangeInfo) ao invés de 125x fixo
                 symbol_max_leverage = symbol_info.get("max_leverage", 20) if symbol_info else 20
-                # Limite adicional de segurança: nunca passar de 50x independente do que Binance permite
-                safe_max_leverage = min(symbol_max_leverage, 50)
+                # Limite de segurança: max 5x para evitar liquidações com alavancagem alta
+                safe_max_leverage = min(symbol_max_leverage, 5)
                 calculated_leverage = max(1, min(calculated_leverage, safe_max_leverage))
             else:
                 calculated_leverage = self.default_leverage
@@ -831,7 +831,8 @@ class BinanceFuturesExecutor:
             close_side = "SELL" if signal_type == "BUY" else "BUY"
 
             def _order_id(r: dict) -> Optional[Any]:
-                return r.get("orderId")
+                """Extrai ID da ordem: algoId para ordens algo (SL/TP), orderId para regulares."""
+                return r.get("algoId") or r.get("orderId")
 
             # 9. Colocar Stop Loss (com entry_price para validação anti-trigger)
             # CRÍTICO: Se SL falhar, FECHAR posição imediatamente — NÃO operar sem stop

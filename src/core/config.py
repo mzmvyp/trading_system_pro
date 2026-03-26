@@ -152,16 +152,13 @@ class Settings(BaseSettings):
     auto_trailing_stop_distance_pct: float = 1.0  # Distância do trailing: 1% abaixo do máximo
 
     # ========================================
-    # VALIDAÇÃO ML - MODELO DE CONFLUÊNCIA
+    # VALIDAÇÃO ML - MODELO COMO VOTO (NÃO VETO)
     # ========================================
-    # Habilita validação de sinais usando modelo ML treinado
+    # ML é apenas 1 voto no sistema de confluência (10 votos possíveis)
+    # Nunca bloqueia sozinho — precisa de maioria dos indicadores contra
     ml_validation_enabled: bool = True
-    # CORRIGIDO: Threshold aumentado de 0.5 para 0.65 para filtrar sinais fracos
-    # 0.5 = basicamente aleatório, 0.65 = mais confiável
-    ml_validation_threshold: float = 0.6
-    # Se True, só executa sinais que passam na validação ML
-    # Se False, apenas loga a validação mas executa de qualquer forma
-    ml_validation_required: bool = True
+    ml_validation_threshold: float = 0.6  # prob >= 0.6 = voto a favor, < 0.4 = voto contra
+    ml_validation_required: bool = False  # ML não tem mais poder de veto
 
     # ========================================
     # ONLINE LEARNING - RETREINAMENTO AUTOMÁTICO

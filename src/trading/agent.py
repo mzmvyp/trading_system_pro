@@ -284,20 +284,19 @@ class AgnoTradingAgent:
 
     def _validate_with_ml_model(self, signal: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Valida um sinal usando o modelo ML treinado.
-
-        Args:
-            signal: Sinal gerado pelo DeepSeek/AGNO
+        Consulta o modelo ML para obter voto (NÃO tem poder de veto).
+        ML é apenas mais um voto no sistema de confluência (voto 9 de 9+).
 
         Returns:
-            Dict com resultado da validacao ML
+            Dict com probability, prediction, ml_vote (+1, 0, -1)
         """
-        # Se validador nao disponivel, permitir sinal
+        # Se validador nao disponivel, voto neutro
         if self.ml_validator is None:
             return {
                 "skip_signal": False,
-                "has_confluence": False,
+                "ml_vote": 0,
                 "probability": 0.5,
+                "prediction": 0,
                 "reason": "Validador ML nao disponivel"
             }
 
@@ -328,77 +327,53 @@ class AgnoTradingAgent:
             probability = result.get('probability_success', 0.5)
             prediction = result.get('prediction', 0)
 
-            # Registrar predicao no dashboard (fix: predict_signal nao logava)
+            # Registrar predicao no dashboard
             self.ml_validator._log_prediction(signal, result)
 
-            # Configuracao: threshold de probabilidade para aceitar sinal
-            from src.core.config import settings
-            ml_threshold = getattr(settings, 'ml_validation_threshold', 0.65)
-            ml_required = getattr(settings, 'ml_validation_required', False)
-            # has_confluence = True se modelo prevê sucesso E probabilidade > threshold
-            has_confluence = prediction == 1 and probability >= ml_threshold
+            # ML como VOTO (não veto):
+            # prob >= 0.6 e prediction==1 → voto a favor (+1)
+            # prob < 0.4 ou prediction==0 → voto contra (-1)
+            # entre 0.4 e 0.6 → neutro (0)
+            ml_vote = 0
+            ml_is_biased = self._check_ml_prediction_bias()
 
-            # ML bloqueia sinais se ml_required=True E acurácia >= 60%
-            # Usa acurácia do modelo treinado (mesma do dashboard)
-            MIN_ACCURACY_TO_BLOCK = 60.0
-            if ml_required:
-                accuracies = self._get_model_accuracies()
-                ml_trained_acc = accuracies.get("ml_trained_accuracy")
-                ml_op_acc = accuracies.get("ml_operational_accuracy")
-
-                # Usar acurácia do modelo treinado (fonte primária)
-                ml_acc = ml_trained_acc
-                acc_source = "modelo_treinado" if ml_trained_acc is not None else "indisponível"
-
+            if ml_is_biased:
+                ml_vote = 0  # Modelo viciado = voto neutro
                 logger.info(
-                    f"[ML] Usando acurácia {acc_source}={ml_acc}% "
-                    f"(modelo_treinado={ml_trained_acc}%, operacional_log={ml_op_acc}%)"
+                    f"[ML VOTO] Modelo viciado (>85% mesma classe) — voto NEUTRO "
+                    f"(prob={probability:.1%}, pred={prediction})"
+                )
+            elif prediction == 1 and probability >= 0.6:
+                ml_vote = 1  # Voto a favor
+                logger.info(
+                    f"[ML VOTO] A FAVOR — prob={probability:.1%}, pred={prediction}"
+                )
+            elif prediction == 0 or probability < 0.4:
+                ml_vote = -1  # Voto contra
+                logger.info(
+                    f"[ML VOTO] CONTRA — prob={probability:.1%}, pred={prediction}"
+                )
+            else:
+                ml_vote = 0  # Neutro (zona cinza)
+                logger.info(
+                    f"[ML VOTO] NEUTRO — prob={probability:.1%}, pred={prediction} (zona cinza)"
                 )
 
-                # Verificar se modelo está "viciado" (predizendo quase tudo
-                # como mesma classe — >85% mesma saída = modelo chutando)
-                ml_is_biased = self._check_ml_prediction_bias()
-
-                if ml_is_biased:
-                    skip_signal = False
-                    logger.info(
-                        "[ML] Modelo viciado (>85% mesma classe) — "
-                        "ML não pode bloquear sinais até ser retreinado"
-                    )
-                elif ml_acc is not None and ml_acc >= MIN_ACCURACY_TO_BLOCK:
-                    skip_signal = not has_confluence
-                    if skip_signal:
-                        logger.info(
-                            f"[ML BLOCK] pred={prediction}, prob={probability:.1%} (threshold={ml_threshold:.1%}) "
-                            f"| acc_{acc_source}={ml_acc:.1f}%"
-                        )
-                    else:
-                        logger.info(
-                            f"[ML PASS] pred={prediction}, prob={probability:.1%} — acc_{acc_source}={ml_acc:.1f}%"
-                        )
-                else:
-                    skip_signal = False
-                    logger.info(
-                        f"[ML] Acurácia {acc_source}={ml_acc}% < {MIN_ACCURACY_TO_BLOCK}% — "
-                        f"ML não tem relevância para bloquear sinal"
-                    )
-            else:
-                skip_signal = False
-
             return {
-                "skip_signal": skip_signal,
-                "has_confluence": has_confluence,
+                "skip_signal": False,  # ML NUNCA bloqueia sozinho
+                "ml_vote": ml_vote,
                 "probability": probability,
                 "prediction": prediction,
-                "reason": f"ML prob: {probability:.1%}, threshold: {ml_threshold:.1%}, required: {ml_required}"
+                "reason": f"ML voto={'A FAVOR' if ml_vote > 0 else 'CONTRA' if ml_vote < 0 else 'NEUTRO'} (prob={probability:.1%})"
             }
 
         except Exception as e:
             logger.warning(f"[ML] Erro na validacao ML: {e}")
             return {
                 "skip_signal": False,
-                "has_confluence": False,
+                "ml_vote": 0,
                 "probability": 0.5,
+                "prediction": 0,
                 "reason": f"Erro: {e}"
             }
 
@@ -1059,16 +1034,29 @@ Responda APENAS com JSON:
                     except Exception as e:
                         logger.warning(f"[Bi-LSTM] Erro na predição: {e}")
 
+                # VOTO ML: integrado na confluência como voto 9 (de 10 possíveis)
+                # Votos: 1.RSI 2.MACD 3.EMA/Trend 4.ADX 5.BB 6.Orderbook
+                #        7.MTF 8.CVD 9.ML 10.LSTM + LLM(peso variável)
+                ml_vote = agno_signal.get("ml_vote", 0)
+                if ml_vote > 0:
+                    votes_for += 1
+                    confluence["details"].append(f"ML a favor (prob={ml_prob:.1%})")
+                elif ml_vote < 0:
+                    votes_against += 1
+                    confluence["details"].append(f"ML contra (prob={ml_prob:.1%})")
+                else:
+                    confluence["details"].append(f"ML neutro (prob={ml_prob:.1%})")
+
                 total_for = votes_for + llm_vote_weight + lstm_vote
                 total_against = votes_against
                 total_all = total_for + total_against
                 combined_score = total_for / max(total_all, 1)
 
-                # Mínimo de votos a favor com regra adaptativa:
-                # Se score >= 80% (forte concordância), aceitar com 3 votos
-                # Caso contrário, exigir 4 votos
+                # Sistema de 10 votos (8 técnicos + ML + LSTM + LLM):
+                # Mínimo 5 votos a favor OU score >= 55%
+                # Se score >= 80% (forte concordância), aceitar com 4 votos
                 MIN_COMBINED_SCORE = 0.55
-                MIN_VOTES_FOR = 3 if combined_score >= 0.80 else 4
+                MIN_VOTES_FOR = 4 if combined_score >= 0.80 else 5
 
                 agno_signal["confluence_score"] = round(combined_score, 3)
                 agno_signal["confluence_details"] = confluence["details"]
@@ -1080,6 +1068,7 @@ Responda APENAS com JSON:
                     f"[CONFLUENCE] {llm_signal_dir} {symbol}: "
                     f"score={combined_score:.1%} ({total_for:.0f} for / {total_against} against) "
                     f"| LLM_conf={agno_signal.get('confidence', '?')}/10 (peso={llm_vote_weight}) "
+                    f"| ML={'A FAVOR' if ml_vote > 0 else 'CONTRA' if ml_vote < 0 else 'NEUTRO'} (prob={ml_prob:.1%}) "
                     f"| LSTM={'prob=' + f'{lstm_prob:.1%}' if lstm_vote or lstm_prob != 0.5 else 'N/A'} "
                     f"| thresholds: {confluence['thresholds_source']}"
                 )
@@ -1267,91 +1256,83 @@ Responda APENAS com JSON:
                     except Exception:
                         pass
 
-                # ML em modo OBSERVADOR: registra predicao mas NAO bloqueia sinais
-                ml_opinion = 'SUCESSO' if ml_pred == 1 else 'FALHA'
-                from src.core.config import settings as _settings
-                _ml_thr = getattr(_settings, 'ml_validation_threshold', 0.65)
-                if ml_validation.get("has_confluence"):
-                    logger.info(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML concorda (prob={ml_prob:.1%}, predicao={ml_opinion})")
-                elif ml_pred == 1:
-                    # ML prediz sucesso mas prob < threshold — confiança baixa
-                    logger.info(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML concorda fraco (prob={ml_prob:.1%} < threshold {_ml_thr:.0%}, predicao={ml_opinion})")
-                else:
-                    logger.info(f"[ML OBSERVADOR] {agno_signal.get('signal')} {symbol} - ML discorda (prob={ml_prob:.1%}, predicao={ml_opinion})")
+                # ML como VOTO (não veto): resultado será integrado na confluência
+                ml_vote = ml_validation.get("ml_vote", 0)
+                ml_opinion = 'A FAVOR' if ml_vote > 0 else 'CONTRA' if ml_vote < 0 else 'NEUTRO'
+                agno_signal["ml_vote"] = ml_vote
+                logger.info(
+                    f"[ML VOTO] {agno_signal.get('signal')} {symbol} — "
+                    f"ML vota {ml_opinion} (prob={ml_prob:.1%})"
+                )
 
-                if ml_validation.get("skip_signal"):
+                # ML nunca bloqueia sozinho — sempre segue para confluência + risco
+                # Obter tendência dinâmica para filtro
+                try:
+                    trend_data = await get_trend(symbol)
+                except Exception as e:
+                    logger.warning(f"[TREND] Erro ao obter tendência: {e}")
+                    trend_data = None
+
+                # Obter capital real da Binance (async) ANTES de chamar validate
+                _capital_value = None
+                try:
+                    from src.exchange.executor import BinanceFuturesExecutor
+                    _cap_executor = BinanceFuturesExecutor()
+                    _cap_balance = await _cap_executor.get_balance()
+                    if "error" not in _cap_balance:
+                        _capital_value = _cap_balance.get("available_balance", 0)
+                except Exception as e:
+                    logger.error(f"[CAPITAL] Falha ao obter saldo da Binance: {e}")
+
+                validation = validate_risk_and_position(agno_signal, symbol, _trend_data=trend_data, _capital=_capital_value)
+                if validation.get("can_execute"):
+                    _pos_size = validation.get("recommended_position_size", validation.get("position_size", "?"))
+                    _leverage = validation.get("implied_leverage", "?")
                     logger.warning(
-                        f"╔══ [BLOQUEADO] {agno_signal.get('signal')} {symbol} — ML bloqueou "
-                        f"(prob={ml_prob:.1%}, predicao={ml_opinion})"
+                        f"╔══ [APROVADO] {agno_signal.get('signal')} {symbol} — "
+                        f"Executando! Pos=${_pos_size}, Leverage={_leverage}x"
                     )
-                else:
-                    # Obter tendência dinâmica para filtro
-                    try:
-                        trend_data = await get_trend(symbol)
-                    except Exception as e:
-                        logger.warning(f"[TREND] Erro ao obter tendência: {e}")
-                        trend_data = None
+                    position_size = validation.get("recommended_position_size", validation.get("position_size"))
 
-                    # Obter capital real da Binance (async) ANTES de chamar validate
-                    _capital_value = None
-                    try:
+                    # VERIFICAR MODO DE TRADING: paper ou real
+                    if settings.trading_mode == "real":
+                        # MODO REAL: Executar na Binance Futures
                         from src.exchange.executor import BinanceFuturesExecutor
-                        _cap_executor = BinanceFuturesExecutor()
-                        _cap_balance = await _cap_executor.get_balance()
-                        if "error" not in _cap_balance:
-                            _capital_value = _cap_balance.get("available_balance", 0)
-                    except Exception as e:
-                        logger.error(f"[CAPITAL] Falha ao obter saldo da Binance: {e}")
-
-                    validation = validate_risk_and_position(agno_signal, symbol, _trend_data=trend_data, _capital=_capital_value)
-                    if validation.get("can_execute"):
-                        _pos_size = validation.get("recommended_position_size", validation.get("position_size", "?"))
-                        _leverage = validation.get("implied_leverage", "?")
-                        logger.warning(
-                            f"╔══ [APROVADO] {agno_signal.get('signal')} {symbol} — "
-                            f"Executando! Pos=${_pos_size}, Leverage={_leverage}x"
-                        )
-                        position_size = validation.get("recommended_position_size", validation.get("position_size"))
-
-                        # VERIFICAR MODO DE TRADING: paper ou real
-                        if settings.trading_mode == "real":
-                            # MODO REAL: Executar na Binance Futures
-                            from src.exchange.executor import BinanceFuturesExecutor
-                            executor = BinanceFuturesExecutor()
-                            execution_result = await executor.execute_signal(agno_signal, position_size=None)
-                            if execution_result.get("success"):
-                                agno_signal["_executed"] = True
-                                self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
-                                logger.info(f"[AGNO REAL] Trade REAL executado: {execution_result.get('message', '')}")
-                            else:
-                                self._mark_signal_executed(agno_signal, "real", False, execution_result.get("error", ""))
-                                logger.warning(f"[AGNO REAL] Falha ao executar trade REAL: {execution_result.get('error', '')}")
+                        executor = BinanceFuturesExecutor()
+                        execution_result = await executor.execute_signal(agno_signal, position_size=None)
+                        if execution_result.get("success"):
+                            agno_signal["_executed"] = True
+                            self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
+                            logger.info(f"[AGNO REAL] Trade REAL executado: {execution_result.get('message', '')}")
                         else:
-                            # MODO PAPER: Simulação
-                            execution_result = execute_paper_trade(agno_signal, position_size)
-                            if execution_result.get("success"):
-                                agno_signal["_executed"] = True
-                                self._mark_signal_executed(agno_signal, "paper", True, execution_result.get("message", ""))
-                                logger.info(f"[AGNO PAPER] Trade PAPER executado: {execution_result.get('message', '')}")
-                            else:
-                                self._mark_signal_executed(agno_signal, "paper", False, execution_result.get("error", ""))
-                                logger.warning(f"[AGNO PAPER] Falha ao executar trade PAPER: {execution_result.get('error', '')}")
+                            self._mark_signal_executed(agno_signal, "real", False, execution_result.get("error", ""))
+                            logger.warning(f"[AGNO REAL] Falha ao executar trade REAL: {execution_result.get('error', '')}")
                     else:
-                        reason = validation.get("reason", "Desconhecido")
-                        logger.warning(
-                            f"╔══ [BLOQUEADO] {agno_signal.get('signal')} {symbol} — "
-                            f"Risco/posição: {reason}"
-                        )
-                        filepath = agno_signal.get("_signal_file")
-                        if filepath and os.path.exists(filepath):
-                            try:
-                                with open(filepath, "r", encoding="utf-8") as f:
-                                    saved = json.load(f)
-                                saved["non_execution_reason"] = reason
-                                with open(filepath, "w", encoding="utf-8") as f:
-                                    json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
-                            except Exception:
-                                pass
+                        # MODO PAPER: Simulação
+                        execution_result = execute_paper_trade(agno_signal, position_size)
+                        if execution_result.get("success"):
+                            agno_signal["_executed"] = True
+                            self._mark_signal_executed(agno_signal, "paper", True, execution_result.get("message", ""))
+                            logger.info(f"[AGNO PAPER] Trade PAPER executado: {execution_result.get('message', '')}")
+                        else:
+                            self._mark_signal_executed(agno_signal, "paper", False, execution_result.get("error", ""))
+                            logger.warning(f"[AGNO PAPER] Falha ao executar trade PAPER: {execution_result.get('error', '')}")
+                else:
+                    reason = validation.get("reason", "Desconhecido")
+                    logger.warning(
+                        f"╔══ [BLOQUEADO] {agno_signal.get('signal')} {symbol} — "
+                        f"Risco/posição: {reason}"
+                    )
+                    filepath = agno_signal.get("_signal_file")
+                    if filepath and os.path.exists(filepath):
+                        try:
+                            with open(filepath, "r", encoding="utf-8") as f:
+                                saved = json.load(f)
+                            saved["non_execution_reason"] = reason
+                            with open(filepath, "w", encoding="utf-8") as f:
+                                json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
+                        except Exception:
+                            pass
 
             # === NOTIFICAÇÃO POR EMAIL: Sinal gerado ===
             if agno_signal.get("signal") in ["BUY", "SELL"]:

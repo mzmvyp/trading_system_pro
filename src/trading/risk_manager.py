@@ -158,6 +158,23 @@ def validate_risk_and_position(
                                 "risk_level": "medium"
                             }
 
+                    # Check 1b: LIMITE TOTAL — máximo 3 posições simultâneas
+                    from src.core.config import settings as _cfg_risk
+                    max_positions = getattr(_cfg_risk, 'max_open_positions', 3)
+                    if len(open_positions) >= max_positions:
+                        open_symbols = [p.get("symbol", "?") for p in open_positions]
+                        logger.warning(
+                            f"[MAX POSICOES] {symbol} BLOQUEADO: já existem {len(open_positions)} "
+                            f"posições abertas ({', '.join(open_symbols)}). "
+                            f"Máximo {max_positions} posições simultâneas."
+                        )
+                        return {
+                            "can_execute": False,
+                            "reason": f"Limite de posições: {len(open_positions)}/{max_positions} "
+                                      f"({', '.join(open_symbols)}). Feche alguma antes.",
+                            "risk_level": "high"
+                        }
+
                     # Check 2: GUARDA DIRECIONAL — máximo 2 posições na mesma direção
                     # Evita cenário de 3+ shorts correlacionados que tomam stop em massa
                     signal_type = signal.get("signal", "").upper()
