@@ -845,10 +845,10 @@ Responda APENAS com JSON:
                         if trend_data:
                             ds_dir = deepseek_signal.get("signal")
                             if ds_dir == "BUY" and not trend_data.get("allow_long", True):
-                                logger.warning(f"[TREND BLOCK] DEEPSEEK BUY {symbol} BLOQUEADO: tendência de baixa no 4h")
+                                logger.warning(f"╔══ [BLOQUEADO] DEEPSEEK BUY {symbol} — Tendência de baixa no 4h")
                                 deepseek_signal["signal"] = "NO_SIGNAL"
                             elif ds_dir == "SELL" and not trend_data.get("allow_short", True):
-                                logger.warning(f"[TREND BLOCK] DEEPSEEK SELL {symbol} BLOQUEADO: tendência de alta no 4h")
+                                logger.warning(f"╔══ [BLOQUEADO] DEEPSEEK SELL {symbol} — Tendência de alta no 4h")
                                 deepseek_signal["signal"] = "NO_SIGNAL"
 
                     # Validar SL/TP1/TP2 obrigatórios antes de executar
@@ -1094,7 +1094,7 @@ Responda APENAS com JSON:
                         f"votos={total_for:.0f} (mín {MIN_VOTES_FOR}). "
                         f"Votos: [{details_str}]"
                     )
-                    logger.warning(f"[CONFLUENCE BLOCK] {llm_signal_dir} {symbol} BLOQUEADO: {motivo_confl}")
+                    logger.warning(f"╔══ [BLOQUEADO] {llm_signal_dir} {symbol} — Confluência: {motivo_confl}")
                     agno_signal["signal"] = "NO_SIGNAL"
                     agno_signal["block_reason"] = f"Confluência: {motivo_confl}"
 
@@ -1281,8 +1281,8 @@ Responda APENAS com JSON:
 
                 if ml_validation.get("skip_signal"):
                     logger.warning(
-                        f"[ML BLOCK] {agno_signal.get('signal')} {symbol} BLOQUEADO (ml_required=True): "
-                        f"prob={ml_prob:.1%}, predicao={ml_opinion}"
+                        f"╔══ [BLOQUEADO] {agno_signal.get('signal')} {symbol} — ML bloqueou "
+                        f"(prob={ml_prob:.1%}, predicao={ml_opinion})"
                     )
                 else:
                     # Obter tendência dinâmica para filtro
@@ -1305,7 +1305,12 @@ Responda APENAS com JSON:
 
                     validation = validate_risk_and_position(agno_signal, symbol, _trend_data=trend_data, _capital=_capital_value)
                     if validation.get("can_execute"):
-                        logger.info(f"[AGNO] Risco/posição OK. Executando sinal {agno_signal.get('signal')} para {symbol}")
+                        _pos_size = validation.get("recommended_position_size", validation.get("position_size", "?"))
+                        _leverage = validation.get("implied_leverage", "?")
+                        logger.warning(
+                            f"╔══ [APROVADO] {agno_signal.get('signal')} {symbol} — "
+                            f"Executando! Pos=${_pos_size}, Leverage={_leverage}x"
+                        )
                         position_size = validation.get("recommended_position_size", validation.get("position_size"))
 
                         # VERIFICAR MODO DE TRADING: paper ou real
@@ -1315,6 +1320,7 @@ Responda APENAS com JSON:
                             executor = BinanceFuturesExecutor()
                             execution_result = await executor.execute_signal(agno_signal, position_size=None)
                             if execution_result.get("success"):
+                                agno_signal["_executed"] = True
                                 self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
                                 logger.info(f"[AGNO REAL] Trade REAL executado: {execution_result.get('message', '')}")
                             else:
@@ -1324,6 +1330,7 @@ Responda APENAS com JSON:
                             # MODO PAPER: Simulação
                             execution_result = execute_paper_trade(agno_signal, position_size)
                             if execution_result.get("success"):
+                                agno_signal["_executed"] = True
                                 self._mark_signal_executed(agno_signal, "paper", True, execution_result.get("message", ""))
                                 logger.info(f"[AGNO PAPER] Trade PAPER executado: {execution_result.get('message', '')}")
                             else:
@@ -1331,7 +1338,10 @@ Responda APENAS com JSON:
                                 logger.warning(f"[AGNO PAPER] Falha ao executar trade PAPER: {execution_result.get('error', '')}")
                     else:
                         reason = validation.get("reason", "Desconhecido")
-                        logger.info(f"[AGNO] Sinal nao executado (risco/posição): {reason}")
+                        logger.warning(
+                            f"╔══ [BLOQUEADO] {agno_signal.get('signal')} {symbol} — "
+                            f"Risco/posição: {reason}"
+                        )
                         filepath = agno_signal.get("_signal_file")
                         if filepath and os.path.exists(filepath):
                             try:
@@ -2054,9 +2064,18 @@ Responda APENAS com JSON:
         """Loga resumo do sinal"""
         entry = f"${signal['entry_price']:,.2f}" if signal.get('entry_price') else "N/A"
         sl = f"${signal['stop_loss']:,.2f}" if signal.get('stop_loss') else "N/A"
+        sig_type = signal.get('signal', 'N/A')
+        was_executed = signal.get('_executed', False)
+        block_reason = signal.get('block_reason', '')
+        if was_executed:
+            status = "EXECUTADO"
+        elif sig_type == "NO_SIGNAL":
+            status = f"SEM SINAL ({block_reason[:50]})" if block_reason else "SEM SINAL"
+        else:
+            status = f"NAO EXECUTADO ({block_reason[:50]})" if block_reason else "NAO EXECUTADO"
         logger.info(
-            f"[RESULTADO] {signal.get('signal', 'N/A')} | "
-            f"Conf={signal.get('confidence', 0)}/10 | "
+            f"╚══ [RESULTADO] {sig_type} {signal.get('symbol', '')} | "
+            f"{status} | Conf={signal.get('confidence', 0)}/10 | "
             f"Entry={entry} | SL={sl}"
         )
 

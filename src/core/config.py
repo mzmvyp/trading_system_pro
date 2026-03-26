@@ -69,7 +69,8 @@ class Settings(BaseSettings):
 
     # Configurações de Confiança
     # UNIFICADO: Sempre usar escala 0-10
-    min_confidence_0_10: int = 7  # Mínimo 6/10 para executar sinais (testar fluxo; 7-8 mais restritivo)
+    # Mínimo 6/10 — sinais fracos passam mas são filtrados por ML, confluência, LSTM
+    min_confidence_0_10: int = 6
     # DEPRECATED: min_confidence_0_5 removido - sempre usar escala 0-10
 
     # Configurações de Intervalo de Análise
@@ -119,7 +120,7 @@ class Settings(BaseSettings):
     # ========================================
     # Dados mostram SELL com 46% WR vs BUY com 67% WR
     # Shorts precisam de confiança maior para compensar menor acerto
-    sell_min_confidence: int = 7  # Mesmo mínimo que BUY (7/10)
+    sell_min_confidence: int = 6  # Mesmo mínimo que BUY (6/10)
     sell_require_strong_trend: bool = True  # SELL só em tendência forte de baixa
 
     # ========================================

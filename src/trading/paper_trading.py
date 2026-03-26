@@ -530,6 +530,50 @@ class RealPaperTradingSystem:
                     except Exception as e:
                         logger.warning(f"Erro ao verificar timeout para {position_key}: {e}")
 
+                    # MOMENTUM STALL: Se o trade não avançou em direção ao TP1
+                    # após tempo mínimo, e o preço está voltando, fechar antes do SL
+                    # Protege contra trades que "não decolam" (ex: MUSDT pump+dump)
+                    try:
+                        _stall_entry_time = datetime.fromisoformat(position.get("timestamp", datetime.now(timezone.utc).isoformat()))
+                        _stall_minutes = (datetime.now(timezone.utc) - _stall_entry_time).total_seconds() / 60
+                        _stall_op_type = position.get("operation_type", "SWING_TRADE")
+
+                        # Tempo mínimo antes de checar stall (dar tempo pro trade se desenvolver)
+                        _stall_check_minutes = {
+                            "SCALP": 10,
+                            "DAY_TRADE": 60,
+                            "SWING_TRADE": 120,
+                            "POSITION_TRADE": 480,
+                        }
+                        _min_minutes = _stall_check_minutes.get(_stall_op_type, 120)
+
+                        if _stall_minutes >= _min_minutes and not position.get("tp1_partial_closed", False):
+                            tp1_price = position.get("take_profit_1", 0)
+                            if tp1_price and entry_price:
+                                # Calcular progresso em direção ao TP1
+                                total_distance_to_tp1 = abs(tp1_price - entry_price)
+                                if signal_type == "BUY":
+                                    progress_to_tp1 = (current_price - entry_price) / total_distance_to_tp1 if total_distance_to_tp1 > 0 else 0
+                                else:  # SELL
+                                    progress_to_tp1 = (entry_price - current_price) / total_distance_to_tp1 if total_distance_to_tp1 > 0 else 0
+
+                                # Max profit que já atingiu (em % do caminho ao TP1)
+                                max_profit_pct = position.get("max_profit_reached_percent", 0)
+
+                                # STALL: Preço nunca passou de 25% do caminho ao TP1
+                                # E agora está negativo ou voltando (< 10% do caminho)
+                                if progress_to_tp1 < 0.10 and max_profit_pct < 1.0:
+                                    # Preço estagnado ou revertendo, fechar antes do SL
+                                    logger.warning(
+                                        f"[MOMENTUM STALL] {clean_symbol}: aberto há {_stall_minutes:.0f}min, "
+                                        f"progresso ao TP1={progress_to_tp1:.1%}, max_profit={max_profit_pct:.2f}% — "
+                                        f"fechando antes que reverta para SL"
+                                    )
+                                    await self._close_position_auto(position_key, current_price, "MOMENTUM_STALL")
+                                    continue
+                    except Exception as e:
+                        logger.debug(f"Erro ao verificar momentum stall para {position_key}: {e}")
+
                     # Trailing stop: ajustar SL dinamicamente após TP1
                     if position.get("trailing_stop_active"):
                         if signal_type == "BUY":
