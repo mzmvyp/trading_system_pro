@@ -968,6 +968,32 @@ Responda APENAS com JSON:
             llm_signal_dir = agno_signal.get("signal", "NO_SIGNAL")
 
             if llm_signal_dir in ["BUY", "SELL"] and "error" not in analysis_data:
+                # VALIDAÇÃO ML: obter voto ML ANTES da confluência
+                ml_validation = self._validate_with_ml_model(agno_signal)
+                ml_prob = ml_validation.get('probability', 0)
+                ml_pred = ml_validation.get('prediction', 0)
+                ml_vote = ml_validation.get("ml_vote", 0)
+
+                # Salvar probabilidade ML no arquivo do sinal
+                filepath = agno_signal.get("_signal_file")
+                if filepath and os.path.exists(filepath):
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            saved = json.load(f)
+                        saved["ml_probability"] = ml_prob
+                        saved["ml_prediction"] = ml_pred
+                        with open(filepath, "w", encoding="utf-8") as f:
+                            json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
+                    except Exception:
+                        pass
+
+                agno_signal["ml_vote"] = ml_vote
+                ml_opinion = 'A FAVOR' if ml_vote > 0 else 'CONTRA' if ml_vote < 0 else 'NEUTRO'
+                logger.info(
+                    f"[ML VOTO] {agno_signal.get('signal')} {symbol} — "
+                    f"ML vota {ml_opinion} (prob={ml_prob:.1%})"
+                )
+
                 confluence = self._calculate_technical_confluence(
                     {**analysis_data, "symbol": symbol}, llm_signal_dir
                 )
@@ -1237,35 +1263,8 @@ Responda APENAS com JSON:
                 )
 
             if agno_signal.get("signal") in ["BUY", "SELL"]:
-                logger.info(f"[AGNO] Validando {agno_signal.get('signal')} {symbol} (ML -> risco -> execução)...")
-                # VALIDAÇÃO ML: Usar modelo treinado para validar confluência
-                ml_validation = self._validate_with_ml_model(agno_signal)
-                ml_prob = ml_validation.get('probability', 0)
-                ml_pred = ml_validation.get('prediction', 0)
+                logger.info(f"[AGNO] Validando {agno_signal.get('signal')} {symbol} (confluência + risco -> execução)...")
 
-                # Salvar probabilidade ML no arquivo do sinal
-                filepath = agno_signal.get("_signal_file")
-                if filepath and os.path.exists(filepath):
-                    try:
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            saved = json.load(f)
-                        saved["ml_probability"] = ml_prob
-                        saved["ml_prediction"] = ml_pred
-                        with open(filepath, "w", encoding="utf-8") as f:
-                            json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
-                    except Exception:
-                        pass
-
-                # ML como VOTO (não veto): resultado será integrado na confluência
-                ml_vote = ml_validation.get("ml_vote", 0)
-                ml_opinion = 'A FAVOR' if ml_vote > 0 else 'CONTRA' if ml_vote < 0 else 'NEUTRO'
-                agno_signal["ml_vote"] = ml_vote
-                logger.info(
-                    f"[ML VOTO] {agno_signal.get('signal')} {symbol} — "
-                    f"ML vota {ml_opinion} (prob={ml_prob:.1%})"
-                )
-
-                # ML nunca bloqueia sozinho — sempre segue para confluência + risco
                 # Obter tendência dinâmica para filtro
                 try:
                     trend_data = await get_trend(symbol)
