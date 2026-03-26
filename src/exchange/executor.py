@@ -776,24 +776,28 @@ class BinanceFuturesExecutor:
                 }
 
             # 5. Calcular e configurar alavancagem DINAMICA
-            # Conceito: margem isolada = valor do risco (5% do capital)
-            # alavancagem = valor_posicao / margem_desejada
-            # A alavancagem é CONSEQUÊNCIA do cálculo, não um input.
-            # O SL é a proteção real — a margem só precisa cobrir o risco.
+            # Conceito: margem isolada = valor do risco (risk_amount)
+            # A alavancagem é CONSEQUÊNCIA do cálculo: leverage = posicao / margem
+            # O SL é a proteção real — a margem isolada deve ser ≈ risk_amount
+            # Assim, se SL falhar (gap/spike), a perda máxima = margem ≈ risco planejado
             position_value = position_size * entry_price
-            desired_margin = risk_amount * 1.2  # Margem = risco + 20% buffer para taxas/slippage
+            # Buffer de 5% para taxas de abertura/fechamento e slippage do SL
+            desired_margin = risk_amount * 1.05
 
             if desired_margin > 0:
                 calculated_leverage = int(position_value / desired_margin)
-                # Cap de segurança: usar limite real do par (via exchangeInfo) ao invés de 125x fixo
+                # Cap: usar limite do par na Binance (nunca exceder o que a exchange permite)
                 symbol_max_leverage = symbol_info.get("max_leverage", 20) if symbol_info else 20
-                # Limite de segurança: max 5x para evitar liquidações com alavancagem alta
-                safe_max_leverage = min(symbol_max_leverage, 5)
-                calculated_leverage = max(1, min(calculated_leverage, safe_max_leverage))
+                calculated_leverage = max(1, min(calculated_leverage, symbol_max_leverage))
             else:
                 calculated_leverage = self.default_leverage
 
-            logger.info(f"[ALAVANCAGEM] Valor posicao: ${position_value:.2f} / Margem: ${desired_margin:.2f} = {calculated_leverage}x (max_par={symbol_info.get('max_leverage', '?') if symbol_info else '?'})")
+            actual_margin = position_value / calculated_leverage if calculated_leverage > 0 else position_value
+            logger.info(
+                f"[ALAVANCAGEM] Posicao: ${position_value:.2f} | Risco: ${risk_amount:.2f} | "
+                f"Margem: ${actual_margin:.2f} | Leverage: {calculated_leverage}x "
+                f"(max_par={symbol_info.get('max_leverage', '?') if symbol_info else '?'})"
+            )
 
             leverage_result = await self.set_leverage(symbol, calculated_leverage)
             if "error" in leverage_result:
