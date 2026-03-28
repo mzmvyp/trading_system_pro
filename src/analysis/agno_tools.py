@@ -142,32 +142,34 @@ def classify_market_condition(analysis: Dict[str, Any]) -> Dict[str, Any]:
 
         # ===== PARÂMETROS POR TIPO =====
 
+        # TPs reduzidos para alvos realistas em mercado lateral
+        # Antes: TPs muito longe (7-20%) nunca batiam, lucro evaporava
         parameters = {
             "SCALP": {
-                "stop_loss_pct": 0.4,
-                "take_profit_1_pct": 0.6,
-                "take_profit_2_pct": 1.2,
+                "stop_loss_pct": 0.3,
+                "take_profit_1_pct": 0.5,
+                "take_profit_2_pct": 0.8,
                 "max_duration_hours": 0.5,
                 "min_volume_multiplier": 1.5
             },
             "DAY_TRADE": {
-                "stop_loss_pct": 1.2,
-                "take_profit_1_pct": 2.0,
-                "take_profit_2_pct": 3.5,
+                "stop_loss_pct": 1.0,
+                "take_profit_1_pct": 1.2,
+                "take_profit_2_pct": 2.0,
                 "max_duration_hours": 8,
                 "min_volume_multiplier": 1.2
             },
             "SWING_TRADE": {
-                "stop_loss_pct": 2.5,
-                "take_profit_1_pct": 4.0,
-                "take_profit_2_pct": 7.0,
+                "stop_loss_pct": 2.0,
+                "take_profit_1_pct": 2.5,
+                "take_profit_2_pct": 4.0,
                 "max_duration_hours": 168,  # 7 dias
                 "min_volume_multiplier": 1.0
             },
             "POSITION_TRADE": {
-                "stop_loss_pct": 6.0,
-                "take_profit_1_pct": 12.0,
-                "take_profit_2_pct": 20.0,
+                "stop_loss_pct": 4.0,
+                "take_profit_1_pct": 6.0,
+                "take_profit_2_pct": 10.0,
                 "max_duration_hours": 672,  # 28 dias
                 "min_volume_multiplier": 0.8
             }

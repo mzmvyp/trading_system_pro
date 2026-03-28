@@ -223,10 +223,10 @@ def validate_risk_and_position(
             reward_d = abs(tp1_rr - entry_rr)
             if risk_d > 0:
                 rr = reward_d / risk_d
-                if rr < 2.0:
+                if rr < 1.5:
                     return {
                         "can_execute": False,
-                        "reason": f"Risk:Reward inadequado: {rr:.2f}:1 (minimo 2.0:1)",
+                        "reason": f"Risk:Reward inadequado: {rr:.2f}:1 (minimo 1.5:1)",
                         "risk_level": "high",
                         "rr_ratio": rr
                     }
