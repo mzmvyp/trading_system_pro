@@ -937,6 +937,7 @@ class BinanceFuturesExecutor:
                 "message": f"Posicao {signal_type} aberta para {symbol} com SL e TP configurados",
                 "order_id": main_order.get("orderId"),
                 "position_size": position_size,
+                "leverage": calculated_leverage,
                 "entry_price": float(main_order.get("avgPrice", entry_price)),
                 "record_file": str(record_file)
             }
