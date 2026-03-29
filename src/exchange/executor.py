@@ -644,10 +644,10 @@ class BinanceFuturesExecutor:
         logger.warning(f"Take Profit 2: ${take_profit_2:.2f}")
         logger.warning("="*60)
 
-        # PROTEÇÃO: Garantir distância mínima do SL (1.5% do entry)
-        # SL muito apertado → alavancagem absurda → liquidação por ruído
+        # PROTEÇÃO: Garantir distância mínima e MÁXIMA do SL
         sl_distance_pct = abs(entry_price - stop_loss) / entry_price * 100
-        MIN_SL_DISTANCE_PCT = 1.5  # Mínimo 1.5% de distância
+        MIN_SL_DISTANCE_PCT = 1.5  # Mínimo 1.5% — SL muito apertado → alavancagem absurda
+        MAX_SL_DISTANCE_PCT = 8.0  # Máximo 8% — SL muito longe → risco absurdo, R:R ruim
 
         if sl_distance_pct < MIN_SL_DISTANCE_PCT:
             old_sl = stop_loss
@@ -659,8 +659,56 @@ class BinanceFuturesExecutor:
                 f"[SL AJUSTADO] Distância original {sl_distance_pct:.2f}% muito apertada "
                 f"(mín {MIN_SL_DISTANCE_PCT}%). SL: ${old_sl:.4f} → ${stop_loss:.4f}"
             )
-            # Atualizar no sinal para consistência
             signal["stop_loss"] = stop_loss
+        elif sl_distance_pct > MAX_SL_DISTANCE_PCT:
+            old_sl = stop_loss
+            if signal_type == "BUY":
+                stop_loss = entry_price * (1 - MAX_SL_DISTANCE_PCT / 100)
+            else:  # SELL
+                stop_loss = entry_price * (1 + MAX_SL_DISTANCE_PCT / 100)
+            logger.warning(
+                f"[SL AJUSTADO] Distância original {sl_distance_pct:.2f}% muito longe "
+                f"(máx {MAX_SL_DISTANCE_PCT}%). SL: ${old_sl:.6f} → ${stop_loss:.6f}"
+            )
+            signal["stop_loss"] = stop_loss
+
+        # Recalcular após ajuste
+        sl_distance_pct = abs(entry_price - stop_loss) / entry_price * 100
+
+        # PROTEÇÃO: Garantir que TPs fazem sentido com o SL
+        # TP1 deve dar pelo menos 1:1 R:R, TP2 pelo menos 1.5:1
+        sl_abs = abs(entry_price - stop_loss)
+        if signal_type == "BUY":
+            tp1_rr = (take_profit_1 - entry_price) / sl_abs if sl_abs > 0 else 0
+            tp2_rr = (take_profit_2 - entry_price) / sl_abs if sl_abs > 0 else 0
+            if tp1_rr < 1.0:
+                old_tp1 = take_profit_1
+                take_profit_1 = entry_price + sl_abs * 1.5
+                signal["take_profit_1"] = take_profit_1
+                logger.warning(f"[TP1 AJUSTADO] R:R era {tp1_rr:.2f} (mín 1.0). TP1: ${old_tp1:.6f} → ${take_profit_1:.6f}")
+            if tp2_rr < 1.5:
+                old_tp2 = take_profit_2
+                take_profit_2 = entry_price + sl_abs * 2.0
+                signal["take_profit_2"] = take_profit_2
+                logger.warning(f"[TP2 AJUSTADO] R:R era {tp2_rr:.2f} (mín 1.5). TP2: ${old_tp2:.6f} → ${take_profit_2:.6f}")
+        else:  # SELL
+            tp1_rr = (entry_price - take_profit_1) / sl_abs if sl_abs > 0 else 0
+            tp2_rr = (entry_price - take_profit_2) / sl_abs if sl_abs > 0 else 0
+            if tp1_rr < 1.0:
+                old_tp1 = take_profit_1
+                take_profit_1 = entry_price - sl_abs * 1.5
+                signal["take_profit_1"] = take_profit_1
+                logger.warning(f"[TP1 AJUSTADO] R:R era {tp1_rr:.2f} (mín 1.0). TP1: ${old_tp1:.6f} → ${take_profit_1:.6f}")
+            if tp2_rr < 1.5:
+                old_tp2 = take_profit_2
+                take_profit_2 = entry_price - sl_abs * 2.0
+                signal["take_profit_2"] = take_profit_2
+                logger.warning(f"[TP2 AJUSTADO] R:R era {tp2_rr:.2f} (mín 1.5). TP2: ${old_tp2:.6f} → ${take_profit_2:.6f}")
+
+        logger.info(
+            f"[NÍVEIS FINAIS] {symbol} Entry=${entry_price:.6f} SL=${stop_loss:.6f} "
+            f"({sl_distance_pct:.1f}%) TP1=${take_profit_1:.6f} TP2=${take_profit_2:.6f}"
+        )
 
         try:
             # 1. Verificar saldo
@@ -889,6 +937,7 @@ class BinanceFuturesExecutor:
                 "message": f"Posicao {signal_type} aberta para {symbol} com SL e TP configurados",
                 "order_id": main_order.get("orderId"),
                 "position_size": position_size,
+                "leverage": calculated_leverage,
                 "entry_price": float(main_order.get("avgPrice", entry_price)),
                 "record_file": str(record_file)
             }

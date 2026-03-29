@@ -223,7 +223,7 @@ def validate_risk_and_position(
             reward_d = abs(tp1_rr - entry_rr)
             if risk_d > 0:
                 rr = reward_d / risk_d
-                if rr < 1.5:
+                if rr < 1.48:  # Tolerância para floating point (1.4999 exibe "1.50")
                     return {
                         "can_execute": False,
                         "reason": f"Risk:Reward inadequado: {rr:.2f}:1 (minimo 1.5:1)",

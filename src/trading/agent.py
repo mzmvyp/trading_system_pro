@@ -1308,9 +1308,11 @@ Responda APENAS com JSON:
                         if execution_result.get("success"):
                             agno_signal["_executed"] = True
                             self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
+                            _real_leverage = execution_result.get("leverage", _leverage)
+                            _real_pos = execution_result.get("position_size", _pos_size)
                             logger.warning(
                                 f"╔══ [APROVADO] {agno_signal.get('signal')} {symbol} — "
-                                f"Trade REAL executado! Pos=${_pos_size}, Leverage={_leverage}x"
+                                f"Trade REAL executado! Pos=${_real_pos}, Leverage={_real_leverage}x"
                             )
                         else:
                             self._mark_signal_executed(agno_signal, "real", False, execution_result.get("error", ""))

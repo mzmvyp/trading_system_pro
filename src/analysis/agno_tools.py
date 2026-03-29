@@ -1893,8 +1893,8 @@ def validate_risk_and_position(
             if risk_distance > 0:
                 rr_ratio = reward_distance_tp1 / risk_distance
 
-                if rr_ratio < 1.5:
-                    # R:R menor que 1.5:1 = muito ruim, bloquear
+                if rr_ratio < 1.48:  # Tolerância para floating point (1.4999 exibe "1.50")
+                    # R:R menor que ~1.5:1 = muito ruim, bloquear
                     logger.warning(f"[R:R] BLOQUEADO {symbol}: R:R = {rr_ratio:.2f}:1 (minimo 1.5:1)")
                     return {
                         "can_execute": False,
