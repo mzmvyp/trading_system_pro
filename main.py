@@ -274,6 +274,7 @@ async def main():
 
             # Rastrear posições anteriores para detectar fechamentos
             previous_positions = set()
+            previous_positions_info = {}  # {symbol: {"side": "SHORT"/"LONG"}} para cooldown direcional
             _cleanup_cycle = 0  # Contador para limpeza periódica de ordens órfãs
 
             while True:
@@ -286,6 +287,12 @@ async def main():
                             exec_real = BinanceFuturesExecutor()
                             all_pos = await exec_real.get_all_positions()
                             active_positions = [p["symbol"] for p in all_pos if isinstance(p, dict) and "error" not in p and p.get("symbol")]
+                            # Salvar info de direção para cooldown direcional
+                            for p in all_pos:
+                                if isinstance(p, dict) and "error" not in p and p.get("symbol"):
+                                    previous_positions_info[p["symbol"]] = {
+                                        "side": p.get("side", "UNKNOWN")
+                                    }
                         except Exception as e:
                             logger.warning(f"Erro ao obter posições Binance: {e}")
                             active_positions = get_active_positions()
@@ -298,11 +305,18 @@ async def main():
                     if closed_positions:
                         logger.info(f"[POSICAO FECHADA] Detectado fechamento: {closed_positions}")
 
-                        # Registrar cooldown pós-stop para evitar whipsaw
+                        # Registrar cooldowns para evitar whipsaw e reentrada na mesma direção
                         try:
-                            from src.trading.risk_manager import register_sl_hit
+                            from src.trading.risk_manager import register_sl_hit, register_position_closed
                             for sym in closed_positions:
                                 register_sl_hit(sym)
+                                # Cooldown direcional: bloquear mesma direção por 6h
+                                pos_info = previous_positions_info.get(sym, {})
+                                pos_side = pos_info.get("side", "UNKNOWN")
+                                if pos_side in ("SHORT", "LONG"):
+                                    # SHORT = sinal era SELL, LONG = sinal era BUY
+                                    signal_dir = "SELL" if pos_side == "SHORT" else "BUY"
+                                    register_position_closed(sym, signal_dir)
                         except Exception as e:
                             logger.warning(f"Erro ao registrar cooldown: {e}")
 
