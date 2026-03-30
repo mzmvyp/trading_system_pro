@@ -16,7 +16,6 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Set
 
-from src.core.config import settings
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)

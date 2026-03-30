@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
-from src.backtesting.backtest_engine import BacktestEngine, BacktestParams
+from src.backtesting.backtest_engine import BacktestParams
 from src.backtesting.optimization_engine import OptimizationEngine
 from src.core.logger import get_logger
 

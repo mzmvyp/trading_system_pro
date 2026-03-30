@@ -1083,8 +1083,8 @@ with tab4:
     try:
         from src.trading.signal_tracker import (
             evaluate_all_signals,
-            get_performance_summary,
             get_model_validator_metrics,
+            get_performance_summary,
             get_system_accuracy_report,
         )
 

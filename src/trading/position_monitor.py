@@ -106,8 +106,6 @@ class PositionMonitor:
                     # ROI margem com alavancagem alta dispara circuit breaker com variações minúsculas
                     entry_price = pos.get("entry_price", 0)
                     mark_price = pos.get("mark_price", 0)
-                    pnl = pos.get("unrealized_pnl", 0)
-                    leverage = pos.get("leverage", 1)
                     position_amt = abs(pos.get("position_amt", 0))
                     side = pos.get("side", "LONG")
 

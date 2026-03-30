@@ -561,8 +561,8 @@ class RealPaperTradingSystem:
                             position["_last_reeval_ts"] = time.time()
 
                             # Buscar indicadores técnicos atuais (1h klines)
-                            from src.exchange.client import BinanceClient
                             from src.analysis.indicators import TechnicalIndicators
+                            from src.exchange.client import BinanceClient
                             _client = BinanceClient()
                             _klines = await _client.get_klines(clean_symbol, "1h", limit=50)
 
@@ -598,7 +598,7 @@ class RealPaperTradingSystem:
                                         _details.append(f"MACD_hist={_macd_hist:.4f}<0")
                                     if _ema_fast < _ema_slow:
                                         _against += 1
-                                        _details.append(f"EMA12<EMA26")
+                                        _details.append("EMA12<EMA26")
                                 else:  # SELL
                                     if _rsi > 60:
                                         _against += 1
@@ -608,7 +608,7 @@ class RealPaperTradingSystem:
                                         _details.append(f"MACD_hist={_macd_hist:.4f}>0")
                                     if _ema_fast > _ema_slow:
                                         _against += 1
-                                        _details.append(f"EMA12>EMA26")
+                                        _details.append("EMA12>EMA26")
 
                                 _details_str = ", ".join(_details) if _details else "nenhum"
 

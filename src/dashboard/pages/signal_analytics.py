@@ -148,7 +148,7 @@ if exec_count > 0 or noexec_count > 0:
     # Motivos pelos quais os sinais NAO foram executados (para ajustar filtros)
     if noexec_count > 0 and "non_execution_reason" in df.columns:
         exec_col = df["executed"] if "executed" in df.columns else pd.Series([False] * len(df))
-        not_exec = df[exec_col != True]
+        not_exec = df[~exec_col.astype(bool)]
         reasons = not_exec["non_execution_reason"].fillna("(nao registado)").replace("", "(nao registado)")
         reason_counts = reasons.value_counts()
         if not reason_counts.empty:
@@ -202,14 +202,14 @@ with tab1:
         df["symbol"].isin(filter_symbol)
     )
     if filter_executed == "Executados":
-        mask = mask & (df["executed"] == True)
+        mask = mask & (df["executed"].astype(bool))
     elif filter_executed == "Nao Executados":
-        mask = mask & ((df["executed"] == False) | (df["executed"].isna()))
+        mask = mask & (~df["executed"].astype(bool) | df["executed"].isna())
     df_filtered = df[mask].copy()
 
     # Preparar coluna de status de execucao para exibicao
     df_filtered["exec_status"] = df_filtered["executed"].apply(
-        lambda x: "SIM" if x == True else "NAO"
+        lambda x: "SIM" if bool(x) else "NAO"
     )
     df_filtered["ml_prob_display"] = df_filtered["ml_probability"].apply(
         lambda x: f"{x:.0%}" if isinstance(x, (int, float)) and x == x else "-"

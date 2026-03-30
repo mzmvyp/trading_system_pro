@@ -24,11 +24,11 @@ import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score
-from sklearn.model_selection import TimeSeriesSplit, cross_val_score, train_test_split
-from sklearn.utils.class_weight import compute_sample_weight
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 
 # Sklearn
 from sklearn.preprocessing import StandardScaler
+from sklearn.utils.class_weight import compute_sample_weight
 
 try:
     import xgboost as xgb

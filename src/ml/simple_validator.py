@@ -40,7 +40,7 @@ from sklearn.utils.class_weight import compute_sample_weight  # noqa: E402
 
 warnings.filterwarnings('ignore')
 
-from src.core.logger import get_logger
+from src.core.logger import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
 

@@ -16,11 +16,10 @@ Pipeline:
 """
 
 import json
-import os
 import pickle
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 
@@ -59,7 +58,7 @@ class LSTMSequenceValidator:
         self.sequence_length = X_train.shape[1]
         self.n_features = X_train.shape[2]
 
-        print(f"[OK] Dataset carregado:")
+        print("[OK] Dataset carregado:")
         print(f"  Train: {X_train.shape} (win rate: {y_train.mean()*100:.1f}%)")
         print(f"  Test:  {X_test.shape} (win rate: {y_test.mean()*100:.1f}%)")
 
@@ -127,7 +126,6 @@ class LSTMSequenceValidator:
 
     def train(self, epochs: int = 100, batch_size: int = 32) -> Dict:
         """Treina o modelo nos dados do backtest."""
-        import tensorflow as tf
         from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
         print("\n" + "=" * 60)
@@ -243,7 +241,7 @@ class LSTMSequenceValidator:
         }
 
         print(f"\n{'='*60}")
-        print(f"RESULTADOS")
+        print("RESULTADOS")
         print(f"{'='*60}")
         print(f"  Train: acc={results['train']['accuracy']*100:.1f}%, f1={results['train']['f1_score']:.3f}")
         print(f"  Test:  acc={results['test']['accuracy']*100:.1f}%, f1={results['test']['f1_score']:.3f}")
@@ -296,7 +294,7 @@ class LSTMSequenceValidator:
             logger.warning(f"[Bi-LSTM] Erro ao carregar modelo: {e}")
             return False
 
-    def predict_from_candles(self, candles_df: "pd.DataFrame") -> Dict:
+    def predict_from_candles(self, candles_df) -> Dict:
         """
         Prediz probabilidade de sucesso a partir de candles recentes.
 
