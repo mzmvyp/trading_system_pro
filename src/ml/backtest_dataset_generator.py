@@ -13,9 +13,6 @@ Vantagem: Gera milhares de trades rotulados sem esperar dados reais de produçã
 
 import asyncio
 import json
-import os
-import pickle
-from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -285,7 +282,7 @@ class BacktestDatasetGenerator:
         split_idx = int(len(X) * 0.8)
         X_train, X_test = X[:split_idx], X[split_idx:]
         y_train, y_test = y[:split_idx], y[split_idx:]
-        meta_train, meta_test = meta[:split_idx], meta[split_idx:]
+        _ = (meta[:split_idx], meta[split_idx:])  # meta splits available if needed
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
@@ -326,7 +323,7 @@ class BacktestDatasetGenerator:
             json.dump(dataset_info, f, indent=2, default=str)
 
         print(f"\n{'='*60}")
-        print(f"DATASET GERADO COM SUCESSO")
+        print("DATASET GERADO COM SUCESSO")
         print(f"{'='*60}")
         print(f"  Shape: {X.shape} (samples, sequence_len, features)")
         print(f"  Train: {len(X_train)} amostras (win rate: {y_train.mean()*100:.1f}%)")

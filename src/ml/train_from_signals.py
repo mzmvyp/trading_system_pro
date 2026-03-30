@@ -44,6 +44,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 import requests
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
@@ -52,9 +53,7 @@ from sklearn.metrics import (
     f1_score,
     roc_auc_score,
 )
-from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit, cross_val_score
-from sklearn.neural_network import MLPClassifier
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_sample_weight
 

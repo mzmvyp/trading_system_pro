@@ -13,10 +13,9 @@ Responsabilidades:
 - Calcular métricas: win rate, return, Sharpe, max drawdown
 """
 
-import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -248,7 +247,9 @@ class BacktestEngine:
         trades: List[Trade] = []
         in_trade = False
         current_trade: Optional[Trade] = None
+        entry_bar = 0
         tp1_hit = False
+        tp1_pnl = 0.0
 
         for i in range(len(df)):
             if in_trade and current_trade:

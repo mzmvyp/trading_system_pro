@@ -4,7 +4,7 @@ Technical SL/TP Calculator - Calcula Stop Loss e Take Profit baseados em niveis 
 Usa: suportes/resistencias, Fibonacci, Bollinger Bands, EMAs, Volume POC, market structure.
 Nunca usa percentuais fixos arbitrarios.
 """
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from src.core.logger import get_logger
 
@@ -108,7 +108,7 @@ def _collect_all_levels(
                 resistances.append({"price": fib_price, "source": fib_name, "strength": 0.8})
 
     # 3. EMAs como suporte/resistencia dinamico
-    ema_struct = indicators.get("ema_structure", {})
+    indicators.get("ema_structure", {})  # usado para contexto
     # Tentar obter valores de EMA do analysis_data
     # O analysis_data de prepare_analysis_for_llm nao tem os valores brutos de EMA,
     # mas temos as posicoes relativas. Vamos calcular a partir de volatility/atr

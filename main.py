@@ -307,7 +307,7 @@ async def main():
 
                         # Registrar cooldowns para evitar whipsaw e reentrada na mesma direção
                         try:
-                            from src.trading.risk_manager import register_sl_hit, register_position_closed
+                            from src.trading.risk_manager import register_position_closed, register_sl_hit
                             for sym in closed_positions:
                                 register_sl_hit(sym)
                                 # Cooldown direcional: bloquear mesma direção por 6h
