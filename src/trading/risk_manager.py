@@ -15,11 +15,28 @@ logger = get_logger(__name__)
 _sl_cooldown_hours = 4.0
 _sl_cooldown_registry: Dict[str, datetime] = {}
 
+# Cooldown direcional pós-close: bloqueia MESMA DIREÇÃO por N horas após fechar
+# Evita reabrir short após short lucrativo (mercado reverteu por isso bateu TP)
+_direction_cooldown_hours = 6.0
+_direction_cooldown_registry: Dict[str, dict] = {}  # {symbol: {"direction": "SELL", "time": datetime}}
+
 
 def register_sl_hit(symbol: str):
     """Registra que um símbolo teve SL atingido (para cooldown)"""
     _sl_cooldown_registry[symbol] = datetime.now(timezone.utc)
     logger.warning(f"[COOLDOWN] {symbol}: bloqueado por {_sl_cooldown_hours}h após stop loss")
+
+
+def register_position_closed(symbol: str, direction: str):
+    """Registra fechamento de posição com direção (para cooldown direcional)"""
+    _direction_cooldown_registry[symbol] = {
+        "direction": direction.upper(),
+        "time": datetime.now(timezone.utc)
+    }
+    logger.warning(
+        f"[COOLDOWN DIRECIONAL] {symbol}: {direction} bloqueado por "
+        f"{_direction_cooldown_hours}h (evita reabrir mesma direção)"
+    )
 
 
 def _check_sl_cooldown(symbol: str) -> bool:
@@ -138,6 +155,21 @@ def validate_risk_and_position(
                 "reason": f"Cooldown pos-stop ativo para {symbol}: {remaining:.1f}h restantes (evita whipsaw)",
                 "risk_level": "medium"
             }
+
+        # Check cooldown direcional pós-close (evita reabrir mesma direção)
+        dir_cd = _direction_cooldown_registry.get(symbol)
+        if dir_cd:
+            hours_since = (datetime.now(timezone.utc) - dir_cd["time"]).total_seconds() / 3600
+            if hours_since < _direction_cooldown_hours and sig_type == dir_cd["direction"]:
+                remaining = _direction_cooldown_hours - hours_since
+                return {
+                    "can_execute": False,
+                    "reason": f"Cooldown direcional: {sig_type} {symbol} bloqueado por {remaining:.1f}h "
+                              f"(última posição {dir_cd['direction']} fechada há {hours_since:.1f}h)",
+                    "risk_level": "medium"
+                }
+            elif hours_since >= _direction_cooldown_hours:
+                del _direction_cooldown_registry[symbol]
 
         # Check existing position + GUARDA DIRECIONAL (anti stop em massa)
         try:
