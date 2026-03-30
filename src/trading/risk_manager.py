@@ -4,6 +4,7 @@ Risk management and position validation
 import json
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict
 
 from src.core.logger import get_logger
@@ -11,20 +12,78 @@ from src.core.logger import get_logger
 logger = get_logger(__name__)
 
 # Cooldown pós-stop: símbolo bloqueado por N horas após SL ser atingido
-# Evita whipsaw (abre LONG, estopa, abre SHORT, estopa de novo)
 _sl_cooldown_hours = 4.0
 _sl_cooldown_registry: Dict[str, datetime] = {}
 
 # Cooldown direcional pós-close: bloqueia MESMA DIREÇÃO por N horas após fechar
-# Evita reabrir short após short lucrativo (mercado reverteu por isso bateu TP)
 _direction_cooldown_hours = 6.0
-_direction_cooldown_registry: Dict[str, dict] = {}  # {symbol: {"direction": "SELL", "time": datetime}}
+_direction_cooldown_registry: Dict[str, dict] = {}
+
+# Arquivo de persistência para cooldowns
+_COOLDOWN_FILE = Path("data/cooldowns.json")
+
+
+def _save_cooldowns():
+    """Persiste cooldowns em disco (sobrevive restarts)"""
+    try:
+        _COOLDOWN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "sl_cooldowns": {
+                sym: t.isoformat() for sym, t in _sl_cooldown_registry.items()
+            },
+            "direction_cooldowns": {
+                sym: {"direction": d["direction"], "time": d["time"].isoformat()}
+                for sym, d in _direction_cooldown_registry.items()
+            }
+        }
+        with open(_COOLDOWN_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.warning(f"[COOLDOWN] Erro ao salvar cooldowns: {e}")
+
+
+def _load_cooldowns():
+    """Carrega cooldowns do disco no startup"""
+    global _sl_cooldown_registry, _direction_cooldown_registry
+    try:
+        if not _COOLDOWN_FILE.exists():
+            return
+        with open(_COOLDOWN_FILE) as f:
+            data = json.load(f)
+
+        now = datetime.now(timezone.utc)
+
+        # Carregar SL cooldowns (descartar expirados)
+        for sym, t_str in data.get("sl_cooldowns", {}).items():
+            t = datetime.fromisoformat(t_str)
+            if (now - t).total_seconds() / 3600 < _sl_cooldown_hours:
+                _sl_cooldown_registry[sym] = t
+
+        # Carregar direction cooldowns (descartar expirados)
+        for sym, d in data.get("direction_cooldowns", {}).items():
+            t = datetime.fromisoformat(d["time"])
+            if (now - t).total_seconds() / 3600 < _direction_cooldown_hours:
+                _direction_cooldown_registry[sym] = {
+                    "direction": d["direction"],
+                    "time": t
+                }
+
+        loaded = len(_sl_cooldown_registry) + len(_direction_cooldown_registry)
+        if loaded > 0:
+            logger.info(f"[COOLDOWN] {loaded} cooldowns carregados do disco")
+    except Exception as e:
+        logger.warning(f"[COOLDOWN] Erro ao carregar cooldowns: {e}")
+
+
+# Carregar cooldowns ao importar o módulo
+_load_cooldowns()
 
 
 def register_sl_hit(symbol: str):
     """Registra que um símbolo teve SL atingido (para cooldown)"""
     _sl_cooldown_registry[symbol] = datetime.now(timezone.utc)
     logger.warning(f"[COOLDOWN] {symbol}: bloqueado por {_sl_cooldown_hours}h após stop loss")
+    _save_cooldowns()
 
 
 def register_position_closed(symbol: str, direction: str):
@@ -37,6 +96,7 @@ def register_position_closed(symbol: str, direction: str):
         f"[COOLDOWN DIRECIONAL] {symbol}: {direction} bloqueado por "
         f"{_direction_cooldown_hours}h (evita reabrir mesma direção)"
     )
+    _save_cooldowns()
 
 
 def _check_sl_cooldown(symbol: str) -> bool:
