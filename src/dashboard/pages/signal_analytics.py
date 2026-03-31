@@ -599,7 +599,7 @@ with tab7:
         )
     else:
         # Separar votantes tecnicos, ML/LSTM e DeepSeek
-        tech_voters = ["rsi", "macd", "trend", "adx", "bb", "orderbook", "mtf", "cvd"]
+        tech_voters = ["rsi", "macd", "trend", "adx", "bb", "orderbook", "mtf", "cvd", "regime"]
         model_voters = ["ml", "lstm"]
 
         # KPIs: DeepSeek win rate

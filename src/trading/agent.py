@@ -511,11 +511,18 @@ class AgnoTradingAgent:
             voter_votes["trend"] = 0
 
         # 4. ADX trend strength
+        # ADX < 20 = mercado lateral forte → vota CONTRA (não neutro!)
+        # ADX 20-25 = mercado indeciso → neutro
+        # ADX >= 25 = tendência → vota a favor
         adx = trend_data.get("trend_strength_adx", trend_data.get("adx", 0))
         if adx >= adx_threshold:
             votes_for += 1
             voter_votes["adx"] = 1
             details.append(f"ADX strong trend ({adx:.1f} >= {adx_threshold})")
+        elif adx < 20:
+            votes_against += 1
+            voter_votes["adx"] = -1
+            details.append(f"ADX LATERAL ({adx:.1f} < 20 — mercado sem tendência)")
         else:
             voter_votes["adx"] = 0
             details.append(f"ADX weak trend ({adx:.1f} < {adx_threshold})")
@@ -924,6 +931,28 @@ Responda APENAS com JSON:
             logger.info(f"[AGNO] Coletando dados localmente para {symbol}...")
             analysis_data = await prepare_analysis_for_llm(symbol)
 
+            # ========================================
+            # DETECÇÃO DE REGIME DE MERCADO
+            # Identifica: BULL, BEAR, SIDEWAYS + volatilidade
+            # Usado para: ajustar TP/SL, penalizar sinais laterais
+            # ========================================
+            market_regime = None
+            try:
+                from src.analysis.market_regime_detector import MarketRegimeDetectorFutures
+                regime_detector = MarketRegimeDetectorFutures()
+                market_regime = await regime_detector.detect_regime(symbol)
+                base_regime = market_regime.get("base_regime", "SIDEWAYS")
+                regime_name = market_regime.get("regime", "UNKNOWN")
+                adx_regime = market_regime.get("details", {}).get("trend", {}).get("adx", 0)
+                vol_regime = market_regime.get("details", {}).get("volatility", {}).get("volatility", "NORMAL")
+                logger.info(
+                    f"[REGIME] {symbol}: {regime_name} (base={base_regime}, "
+                    f"ADX={adx_regime:.1f}, vol={vol_regime})"
+                )
+            except Exception as e:
+                logger.warning(f"[REGIME] Erro na detecção de regime: {e}")
+                market_regime = {"base_regime": "SIDEWAYS", "regime": "UNKNOWN", "confidence": 0.5, "details": {}}
+
             if "error" not in analysis_data:
                 market_classification = classify_market_condition(analysis_data)
                 prompt = _create_analysis_prompt(analysis_data, market_classification)
@@ -1017,6 +1046,8 @@ Responda APENAS com JSON:
             # Calcular score técnico local + voto LLM → decisão por confluência
             # ========================================
             llm_signal_dir = agno_signal.get("signal", "NO_SIGNAL")
+            is_buy = llm_signal_dir == "BUY"
+            is_sideways = market_regime and market_regime.get("base_regime") == "SIDEWAYS"
 
             if llm_signal_dir in ["BUY", "SELL"] and "error" not in analysis_data:
                 # VALIDAÇÃO ML: obter voto ML ANTES da confluência
@@ -1159,16 +1190,56 @@ Responda APENAS com JSON:
                 elif lstm_vote < 0:
                     votes_against += abs(lstm_vote)
 
+                # ========================================
+                # REGIME DE MERCADO: voto extra na confluência
+                # SIDEWAYS = voto contra (penaliza sinais em lateral)
+                # BULL/BEAR alinhado com direção = voto a favor
+                # ========================================
+                regime_vote = 0
+                is_sideways = False
+                if market_regime:
+                    base_regime = market_regime.get("base_regime", "SIDEWAYS")
+                    vol_regime = market_regime.get("details", {}).get("volatility", {}).get("volatility", "NORMAL")
+
+                    if base_regime == "SIDEWAYS":
+                        is_sideways = True
+                        # Mercado lateral: voto contra + penalidade extra se squeeze
+                        regime_vote = -2 if vol_regime == "SQUEEZE" else -1
+                        votes_against += abs(regime_vote)
+                        confluence["details"].append(
+                            f"REGIME LATERAL ({base_regime}_{vol_regime}) — voto contra x{abs(regime_vote)}"
+                        )
+                    elif (is_buy and base_regime == "BULL") or (not is_buy and base_regime == "BEAR"):
+                        regime_vote = 1
+                        votes_for += 1
+                        confluence["details"].append(
+                            f"REGIME alinhado ({base_regime}) — voto a favor"
+                        )
+                    elif (is_buy and base_regime == "BEAR") or (not is_buy and base_regime == "BULL"):
+                        regime_vote = -1
+                        votes_against += 1
+                        confluence["details"].append(
+                            f"REGIME contra ({base_regime} vs {llm_signal_dir}) — voto contra"
+                        )
+
+                    agno_signal["market_regime"] = market_regime.get("regime", "UNKNOWN")
+                    agno_signal["market_regime_base"] = base_regime
+
                 total_for = votes_for + llm_vote_weight
                 total_against = votes_against
                 total_all = total_for + total_against
                 combined_score = total_for / max(total_all, 1)
 
-                # Sistema de 10 votos (8 técnicos + ML + LSTM + LLM):
+                # Sistema de votos (8 técnicos + ML + LSTM + LLM + Regime):
                 # Mínimo 5 votos a favor OU score >= 55%
                 # Se score >= 80% (forte concordância), aceitar com 4 votos
+                # Em mercado LATERAL: exigir mais votos (mín 6) para filtrar ruído
                 MIN_COMBINED_SCORE = 0.55
-                MIN_VOTES_FOR = 4 if combined_score >= 0.80 else 5
+                if is_sideways:
+                    MIN_VOTES_FOR = 6  # Lateral: exigir mais confirmação
+                    MIN_COMBINED_SCORE = 0.60  # Lateral: score mínimo mais alto
+                else:
+                    MIN_VOTES_FOR = 4 if combined_score >= 0.80 else 5
 
                 agno_signal["confluence_score"] = round(combined_score, 3)
                 agno_signal["confluence_details"] = confluence["details"]
@@ -1182,6 +1253,7 @@ Responda APENAS com JSON:
                 voter_breakdown["ml"] = ml_vote
                 voter_breakdown["lstm"] = lstm_vote
                 voter_breakdown["llm"] = 1 if llm_vote_weight >= 1 else 0
+                voter_breakdown["regime"] = regime_vote
                 voter_breakdown["ml_prob"] = round(ml_prob, 4)
                 voter_breakdown["lstm_prob"] = round(lstm_prob, 4)
                 agno_signal["voter_votes"] = voter_breakdown
@@ -1192,6 +1264,7 @@ Responda APENAS com JSON:
                     f"| LLM_conf={agno_signal.get('confidence', '?')}/10 (peso={llm_vote_weight}) "
                     f"| ML={'A FAVOR' if ml_vote > 0 else 'CONTRA' if ml_vote < 0 else 'NEUTRO'} (prob={ml_prob:.1%}) "
                     f"| LSTM={'prob=' + f'{lstm_prob:.1%}' if lstm_vote or lstm_prob != 0.5 else 'N/A'} "
+                    f"| REGIME={market_regime.get('regime', '?') if market_regime else 'N/A'} "
                     f"| thresholds: {confluence['thresholds_source']}"
                 )
 
@@ -1234,6 +1307,19 @@ Responda APENAS com JSON:
                     tp1 = agno_signal.get("take_profit_1", 0) or 0
                     tp2 = agno_signal.get("take_profit_2", 0) or 0
                     op_type = agno_signal.get("operation_type", "DAY_TRADE")
+
+                    # ========================================
+                    # REGIME-AWARE: Em mercado lateral → forçar SCALP (alvos curtos)
+                    # Isso reduz os multiplicadores ATR no calculador técnico
+                    # ========================================
+                    if is_sideways and op_type in ("DAY_TRADE", "SWING_TRADE", "POSITION_TRADE"):
+                        logger.info(
+                            f"[REGIME→SCALP] {symbol}: Mercado lateral detectado. "
+                            f"Forçando SCALP (era {op_type}) — alvos mais curtos"
+                        )
+                        op_type = "SCALP"
+                        agno_signal["operation_type"] = "SCALP"
+                        agno_signal["operation_type_override"] = "regime_sideways"
 
                     # 2. Calcular SL/TP baseado em NIVEIS TECNICOS REAIS
                     # Usa suporte/resistencia, Fibonacci, EMAs, BBands, POC

@@ -403,7 +403,7 @@ def compute_voter_accuracy() -> Dict:
         return {}
 
     # Voters técnicos que tracked individualmente
-    voter_names = ["rsi", "macd", "trend", "adx", "bb", "orderbook", "mtf", "cvd", "ml", "lstm", "llm"]
+    voter_names = ["rsi", "macd", "trend", "adx", "bb", "orderbook", "mtf", "cvd", "ml", "lstm", "llm", "regime"]
     stats = {name: {"total": 0, "correct": 0, "voted_for": 0, "voted_against": 0} for name in voter_names}
     deepseek_stats = {"total": 0, "wins": 0}
 

@@ -63,6 +63,10 @@ VOTER_PATTERNS = {
         "for": [r"CVD aligned"],
         "against": [r"CVD contra"],
     },
+    "regime": {
+        "for": [r"REGIME alinhado"],
+        "against": [r"REGIME LATERAL", r"REGIME contra"],
+    },
 }
 
 
@@ -265,35 +269,52 @@ def backfill(last_n: int = 0, days: int = 0):
         print("[AVISO] Nenhum registro para salvar.")
         return
 
-    # Salvar no model_votes_log.jsonl (append ou criar)
+    # Salvar no model_votes_log.jsonl
+    # Estratégia: SUBSTITUIR registros que tem voter_votes=null pelo backfill
     os.makedirs(os.path.dirname(MODEL_VOTES_LOG) or ".", exist_ok=True)
 
-    # Ler registros existentes para evitar duplicatas
-    existing_keys = set()
+    # Indexar registros novos por key
+    new_records_by_key = {}
+    for record in records:
+        key = f"{record['symbol']}_{record['timestamp']}_{record['source']}"
+        new_records_by_key[key] = record
+
+    # Ler registros existentes e substituir os que tem voter_votes=null
+    existing_lines = []
+    replaced = 0
+    kept_keys = set()
     if os.path.exists(MODEL_VOTES_LOG):
         with open(MODEL_VOTES_LOG, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line:
-                    try:
-                        r = json.loads(line)
-                        key = f"{r.get('symbol')}_{r.get('timestamp')}_{r.get('source')}"
-                        existing_keys.add(key)
-                    except json.JSONDecodeError:
-                        pass
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                    key = f"{r.get('symbol')}_{r.get('timestamp')}_{r.get('source')}"
+                    kept_keys.add(key)
+                    # Substituir se voter_votes era null e temos dados novos
+                    if key in new_records_by_key and (not r.get("voter_votes") or not isinstance(r.get("voter_votes"), dict)):
+                        existing_lines.append(json.dumps(new_records_by_key[key], ensure_ascii=False, default=str))
+                        replaced += 1
+                    else:
+                        existing_lines.append(line)
+                except json.JSONDecodeError:
+                    existing_lines.append(line)
 
+    # Adicionar registros completamente novos (nao existiam antes)
     new_count = 0
-    with open(MODEL_VOTES_LOG, "a", encoding="utf-8") as f:
-        for record in records:
-            key = f"{record['symbol']}_{record['timestamp']}_{record['source']}"
-            if key in existing_keys:
-                continue
-            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    for key, record in new_records_by_key.items():
+        if key not in kept_keys:
+            existing_lines.append(json.dumps(record, ensure_ascii=False, default=str))
             new_count += 1
 
-    print(f"[4/4] {new_count} registros adicionados ao {MODEL_VOTES_LOG}")
-    if new_count < len(records):
-        print(f"  ({len(records) - new_count} duplicatas ignoradas)")
+    # Reescrever arquivo completo
+    with open(MODEL_VOTES_LOG, "w", encoding="utf-8") as f:
+        for line in existing_lines:
+            f.write(line + "\n")
+
+    print(f"[4/4] {replaced} registros atualizados (voter_votes preenchido), {new_count} novos adicionados")
 
     # Mostrar resumo
     print("\n" + "=" * 60)
