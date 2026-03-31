@@ -367,6 +367,10 @@ def _append_model_votes_log(signal: Dict, evaluation: Dict) -> None:
         "lstm_correct": evaluation.get("lstm_correct"),
         "confluence_score": signal.get("confluence_score"),
         "confluence_votes_for": signal.get("confluence_votes_for"),
+        # Per-voter breakdown: voto individual de cada componente
+        # {rsi: 1, macd: -1, trend: 1, adx: 0, bb: 0, orderbook: 1,
+        #  mtf: 1, cvd: -1, ml: 0, lstm: 0, llm: 1, ml_prob: 0.72, lstm_prob: 0.5}
+        "voter_votes": signal.get("voter_votes"),
     }
     try:
         os.makedirs(os.path.dirname(MODEL_VOTES_LOG) or ".", exist_ok=True)
@@ -374,6 +378,101 @@ def _append_model_votes_log(signal: Dict, evaluation: Dict) -> None:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
     except Exception as e:
         logger.warning(f"Erro ao registrar voto no log: {e}")
+
+
+def compute_voter_accuracy() -> Dict:
+    """
+    Calcula accuracy de cada votante individual (RSI, MACD, Trend, ADX, BB,
+    Orderbook, MTF, CVD, ML, LSTM, LLM, DeepSeek) baseado nos sinais finalizados.
+
+    Um voto é "correto" se:
+    - Votou a favor (+1) e o trade foi winner (TP1/TP2)
+    - Votou contra (-1) e o trade foi loser (SL)
+    - Voto neutro (0) não conta
+
+    Returns:
+        Dict com accuracy por votante:
+        {
+            "rsi": {"total": 50, "correct": 30, "accuracy": 0.60, "voted_for": 20, "voted_against": 30},
+            "ml": {...},
+            ...
+            "deepseek": {"total": 100, "wins": 35, "win_rate": 0.35},
+        }
+    """
+    if not os.path.exists(MODEL_VOTES_LOG):
+        return {}
+
+    # Voters técnicos que tracked individualmente
+    voter_names = ["rsi", "macd", "trend", "adx", "bb", "orderbook", "mtf", "cvd", "ml", "lstm", "llm"]
+    stats = {name: {"total": 0, "correct": 0, "voted_for": 0, "voted_against": 0} for name in voter_names}
+    deepseek_stats = {"total": 0, "wins": 0}
+
+    try:
+        with open(MODEL_VOTES_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                outcome = record.get("outcome", "")
+                if outcome not in ("SL_HIT", "TP1_HIT", "TP2_HIT"):
+                    continue
+
+                is_winner = outcome in ("TP1_HIT", "TP2_HIT")
+
+                # DeepSeek/LLM accuracy (todos os sinais gerados)
+                deepseek_stats["total"] += 1
+                if is_winner:
+                    deepseek_stats["wins"] += 1
+
+                # Per-voter accuracy
+                voter_votes = record.get("voter_votes")
+                if not voter_votes or not isinstance(voter_votes, dict):
+                    continue
+
+                for name in voter_names:
+                    vote = voter_votes.get(name)
+                    if vote is None or vote == 0:
+                        continue  # Neutro = não conta
+
+                    stats[name]["total"] += 1
+                    if vote > 0:
+                        stats[name]["voted_for"] += 1
+                    else:
+                        stats[name]["voted_against"] += 1
+
+                    # Correto = (votou a favor E ganhou) OU (votou contra E perdeu)
+                    if (vote > 0 and is_winner) or (vote < 0 and not is_winner):
+                        stats[name]["correct"] += 1
+
+    except Exception as e:
+        logger.warning(f"Erro ao computar voter accuracy: {e}")
+        return {}
+
+    # Calcular percentuais
+    result = {}
+    for name in voter_names:
+        s = stats[name]
+        if s["total"] > 0:
+            s["accuracy"] = round(s["correct"] / s["total"], 4)
+        else:
+            s["accuracy"] = None
+        result[name] = s
+
+    # DeepSeek win rate
+    if deepseek_stats["total"] > 0:
+        deepseek_stats["win_rate"] = round(
+            deepseek_stats["wins"] / deepseek_stats["total"], 4
+        )
+    else:
+        deepseek_stats["win_rate"] = None
+    result["deepseek"] = deepseek_stats
+
+    return result
 
 
 def evaluate_all_signals(

@@ -19,7 +19,11 @@ root = Path(__file__).resolve().parent.parent.parent.parent
 if str(root) not in sys.path:
     sys.path.insert(0, str(root))
 
-from src.trading.signal_tracker import evaluate_all_signals, get_performance_summary  # noqa: E402
+from src.trading.signal_tracker import (  # noqa: E402
+    compute_voter_accuracy,
+    evaluate_all_signals,
+    get_performance_summary,
+)
 
 st.set_page_config(page_title="Signal Analytics", page_icon="📊", layout="wide")
 
@@ -165,13 +169,14 @@ if exec_count > 0 or noexec_count > 0:
 # ================================================================
 # TABS DE ANALISE
 # ================================================================
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📋 Todos os Sinais",
     "📈 Performance por Fonte",
     "🎯 Performance por Simbolo",
     "📊 Graficos",
     "🔬 Long vs Short",
-    "📉 MFE/MAE"
+    "📉 MFE/MAE",
+    "🗳️ Voter Accuracy"
 ])
 
 # ================================================================
@@ -574,6 +579,154 @@ with tab6:
                 st.success(f"Boa captura: {capture_ratio:.0f}% do MFE medio.")
     else:
         st.info("Nenhum sinal finalizado ainda.")
+
+# ================================================================
+# TAB 7: VOTER ACCURACY
+# ================================================================
+with tab7:
+    st.subheader("Accuracy por Votante")
+    st.markdown(
+        "Mostra a % de acerto de cada componente do sistema de confluencia. "
+        "Um voto **correto** = votou a favor e trade ganhou, OU votou contra e trade perdeu."
+    )
+
+    voter_data = compute_voter_accuracy()
+
+    if not voter_data:
+        st.info(
+            "Sem dados de voter tracking ainda. "
+            "Apos o deploy com voter_votes habilitado, os dados vao acumular aqui."
+        )
+    else:
+        # Separar votantes tecnicos, ML/LSTM e DeepSeek
+        tech_voters = ["rsi", "macd", "trend", "adx", "bb", "orderbook", "mtf", "cvd"]
+        model_voters = ["ml", "lstm"]
+
+        # KPIs: DeepSeek win rate
+        ds = voter_data.get("deepseek", {})
+        ds_total = ds.get("total", 0)
+        ds_wr = ds.get("win_rate")
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(
+                "DeepSeek Win Rate",
+                f"{ds_wr * 100:.1f}%" if ds_wr is not None else "N/A",
+                help="% de sinais gerados pelo DeepSeek que foram vencedores"
+            )
+        with col2:
+            st.metric("Total Sinais Avaliados", ds_total)
+        with col3:
+            ds_wins = ds.get("wins", 0)
+            st.metric("Wins / Losses", f"{ds_wins} / {ds_total - ds_wins}")
+
+        st.markdown("---")
+
+        # Tabela de accuracy por votante tecnico
+        st.markdown("### Votantes Tecnicos")
+        rows = []
+        for name in tech_voters:
+            v = voter_data.get(name, {})
+            total = v.get("total", 0)
+            acc = v.get("accuracy")
+            rows.append({
+                "Votante": name.upper(),
+                "Total Votos": total,
+                "Corretos": v.get("correct", 0),
+                "Accuracy %": f"{acc * 100:.1f}%" if acc is not None else "N/A",
+                "Votou FOR": v.get("voted_for", 0),
+                "Votou AGAINST": v.get("voted_against", 0),
+                "Accuracy": acc if acc is not None else 0,
+            })
+
+        if rows:
+            df_voters = pd.DataFrame(rows)
+
+            # Ordenar por accuracy
+            df_voters = df_voters.sort_values("Accuracy", ascending=False)
+
+            # Mostrar tabela
+            display_cols = ["Votante", "Total Votos", "Corretos", "Accuracy %", "Votou FOR", "Votou AGAINST"]
+            st.dataframe(
+                df_voters[display_cols],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # Grafico de barras
+            df_chart = df_voters[df_voters["Total Votos"] > 0].copy()
+            if not df_chart.empty:
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=df_chart["Votante"],
+                    y=[a * 100 for a in df_chart["Accuracy"]],
+                    marker_color=[
+                        "#00cc00" if a >= 0.6 else "#ffaa00" if a >= 0.5 else "#ff4444"
+                        for a in df_chart["Accuracy"]
+                    ],
+                    text=[f"{a * 100:.1f}%" for a in df_chart["Accuracy"]],
+                    textposition="outside",
+                ))
+                fig.add_hline(y=50, line_dash="dash", line_color="gray",
+                              annotation_text="50% (moeda)")
+                fig.update_layout(
+                    title="Accuracy por Votante Tecnico",
+                    yaxis_title="Accuracy %",
+                    template="plotly_dark",
+                    height=400,
+                    yaxis=dict(range=[0, 100]),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        # ML e LSTM
+        st.markdown("### Modelos ML / LSTM")
+        ml_rows = []
+        for name in model_voters:
+            v = voter_data.get(name, {})
+            total = v.get("total", 0)
+            acc = v.get("accuracy")
+            ml_rows.append({
+                "Modelo": name.upper(),
+                "Total Votos": total,
+                "Corretos": v.get("correct", 0),
+                "Accuracy %": f"{acc * 100:.1f}%" if acc is not None else "N/A",
+                "Votou FOR": v.get("voted_for", 0),
+                "Votou AGAINST": v.get("voted_against", 0),
+            })
+
+        df_ml = pd.DataFrame(ml_rows)
+        st.dataframe(df_ml, use_container_width=True, hide_index=True)
+
+        # Insights automaticos
+        st.markdown("### Insights")
+        all_voters = tech_voters + model_voters
+        good = []
+        bad = []
+        for name in all_voters:
+            v = voter_data.get(name, {})
+            acc = v.get("accuracy")
+            total = v.get("total", 0)
+            if acc is not None and total >= 10:
+                if acc >= 0.60:
+                    good.append((name.upper(), acc, total))
+                elif acc < 0.45:
+                    bad.append((name.upper(), acc, total))
+
+        if good:
+            good.sort(key=lambda x: x[1], reverse=True)
+            lines = [f"- **{n}**: {a * 100:.1f}% accuracy ({t} votos)" for n, a, t in good]
+            st.success("**Votantes com boa accuracy (>= 60%):**\n" + "\n".join(lines))
+
+        if bad:
+            bad.sort(key=lambda x: x[1])
+            lines = [f"- **{n}**: {a * 100:.1f}% accuracy ({t} votos)" for n, a, t in bad]
+            st.error(
+                "**Votantes com accuracy ruim (< 45%) — considere desabilitar ou recalibrar:**\n"
+                + "\n".join(lines)
+            )
+
+        if not good and not bad:
+            st.info("Poucos dados para gerar insights (minimo 10 votos por votante).")
 
 # ================================================================
 # FOOTER

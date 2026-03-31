@@ -24,7 +24,11 @@ root = Path(__file__).resolve().parent.parent.parent.parent
 if str(root) not in sys.path:
     sys.path.insert(0, str(root))
 
-from src.trading.signal_tracker import evaluate_all_signals, get_performance_summary  # noqa: E402
+from src.trading.signal_tracker import (  # noqa: E402
+    compute_voter_accuracy,
+    evaluate_all_signals,
+    get_performance_summary,
+)
 
 st.set_page_config(page_title="Overview", page_icon="📋", layout="wide")
 
@@ -287,6 +291,53 @@ if model_info:
         st.plotly_chart(fig, use_container_width=True)
 else:
     st.warning("Modelo ML nao treinado. Acesse a aba 'ml dashboard' para treinar.")
+
+# ================================================================
+# VOTER ACCURACY (resumo compacto)
+# ================================================================
+st.markdown("---")
+st.header("🗳️ Voter Accuracy")
+
+voter_data = compute_voter_accuracy()
+if voter_data:
+    all_names = ["rsi", "macd", "trend", "adx", "bb", "orderbook", "mtf", "cvd", "ml", "lstm"]
+    rows = []
+    for name in all_names:
+        v = voter_data.get(name, {})
+        acc = v.get("accuracy")
+        total = v.get("total", 0)
+        if total > 0 and acc is not None:
+            rows.append({"Votante": name.upper(), "Accuracy": acc, "Votos": total})
+
+    if rows:
+        df_v = pd.DataFrame(rows).sort_values("Accuracy", ascending=False)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=df_v["Votante"], y=[a * 100 for a in df_v["Accuracy"]],
+            marker_color=[
+                "#00cc00" if a >= 0.6 else "#ffaa00" if a >= 0.5 else "#ff4444"
+                for a in df_v["Accuracy"]
+            ],
+            text=[f"{a * 100:.0f}%" for a in df_v["Accuracy"]],
+            textposition="outside",
+        ))
+        fig.add_hline(y=50, line_dash="dash", line_color="gray")
+        fig.update_layout(
+            template="plotly_dark", height=300,
+            yaxis=dict(range=[0, 100], title="Accuracy %"),
+            margin=dict(l=20, r=20, t=10, b=20),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # DeepSeek win rate
+        ds = voter_data.get("deepseek", {})
+        ds_wr = ds.get("win_rate")
+        if ds_wr is not None:
+            st.caption(f"DeepSeek Win Rate: **{ds_wr * 100:.1f}%** ({ds.get('total', 0)} sinais)")
+    else:
+        st.info("Aguardando dados de voter tracking...")
+else:
+    st.info("Voter tracking ativado. Dados aparecerao apos os proximos sinais.")
 
 st.markdown("---")
 st.markdown(
