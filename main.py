@@ -247,16 +247,24 @@ async def main():
                                 else:
                                     logger.warning(f"[ML-AUTO] Seed falhou: {seed_result.get('error', 'unknown')}")
 
-                                # 2. Treinar LSTM se disponível
+                                # 2. Treinar Bi-LSTM se disponível
                                 try:
-                                    from src.ml.lstm_sequence_validator import BiLSTMSequenceValidator
-                                    lstm = BiLSTMSequenceValidator()
-                                    if hasattr(lstm, 'train_from_backtest'):
-                                        lstm_result = lstm.train_from_backtest()
-                                        if lstm_result:
-                                            logger.info(f"[ML-AUTO] Bi-LSTM retreinado: {lstm_result}")
+                                    from src.ml.lstm_sequence_validator import LSTMSequenceValidator
+                                    lstm = LSTMSequenceValidator()
+                                    lstm_result = lstm.train_from_backtest()
+                                    if lstm_result and lstm_result.get("success"):
+                                        test_acc = lstm_result.get("test_accuracy", 0)
+                                        test_f1 = lstm_result.get("test_f1", 0)
+                                        logger.info(
+                                            f"[ML-AUTO] Bi-LSTM retreinado! "
+                                            f"Accuracy={test_acc:.1%}, F1={test_f1:.3f}, "
+                                            f"Amostras={lstm_result.get('total_samples', 0)}"
+                                        )
+                                    else:
+                                        reason = lstm_result.get("reason", "unknown") if lstm_result else "no result"
+                                        logger.info(f"[ML-AUTO] Bi-LSTM treino: {reason}")
                                 except Exception as lstm_err:
-                                    logger.debug(f"[ML-AUTO] LSTM treino falhou (nao critico): {lstm_err}")
+                                    logger.warning(f"[ML-AUTO] LSTM treino falhou: {lstm_err}")
 
                             except Exception as e:
                                 logger.error(f"[ML-AUTO] Erro no treino automático: {e}")

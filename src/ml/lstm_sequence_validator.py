@@ -375,6 +375,104 @@ class LSTMSequenceValidator:
             return {"probability": 0.5, "prediction": 0, "confidence": 0, "error": str(e)}
 
 
+    def train_from_backtest(
+        self,
+        symbols=None,
+        days_back: int = 180,
+        epochs: int = 100,
+        batch_size: int = 32,
+    ) -> Dict:
+        """
+        Pipeline completo: gera dataset via backtest + treina Bi-LSTM.
+        Chamado pelo auto-training em main.py a cada ciclo.
+
+        Returns:
+            Dict com success, test_accuracy, test_f1, total_samples
+        """
+        import asyncio
+
+        try:
+            # 1. Gerar dataset de treino via backtest
+            from src.ml.backtest_dataset_generator import BacktestDatasetGenerator
+
+            if symbols is None:
+                symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+
+            generator = BacktestDatasetGenerator(
+                symbols=symbols,
+                interval="1h",
+                sequence_length=self.sequence_length,
+                days_back=days_back,
+                n_param_variations=10,
+            )
+
+            # Rodar backtest (async → sync bridge)
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        stats = pool.submit(
+                            asyncio.run, generator.generate()
+                        ).result()
+                else:
+                    stats = loop.run_until_complete(generator.generate())
+            except RuntimeError:
+                stats = asyncio.run(generator.generate())
+
+            total = stats.get("total_trades", 0)
+            if total < 50:
+                return {
+                    "success": False,
+                    "reason": f"Poucos trades gerados pelo backtest ({total} < 50)",
+                }
+
+            logger.info(f"[Bi-LSTM] Dataset gerado: {total} trades")
+
+            # 2. Treinar modelo
+            results = self.train(epochs=epochs, batch_size=batch_size)
+
+            test_results = results.get("test", {})
+            return {
+                "success": True,
+                "test_accuracy": test_results.get("accuracy", 0),
+                "test_f1": test_results.get("f1_score", 0),
+                "total_samples": total,
+                "results": results,
+            }
+
+        except Exception as e:
+            logger.error(f"[Bi-LSTM] Erro no train_from_backtest: {e}")
+            return {"success": False, "reason": str(e)}
+
+    def _log_prediction(self, symbol: str, prob: float, prediction: int):
+        """Registra predição do LSTM para avaliação futura (dashboard)."""
+        try:
+            log_path = MODEL_DIR / "lstm_prediction_log.json"
+
+            predictions = []
+            if log_path.exists():
+                with open(log_path, 'r') as f:
+                    predictions = json.load(f)
+
+            predictions.append({
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'symbol': symbol,
+                'lstm_probability': prob,
+                'lstm_prediction': prediction,
+                'lstm_recommendation': 'EXECUTE' if prediction == 1 else 'SKIP',
+                'actual_result': None,
+            })
+
+            # Manter últimas 1000
+            predictions = predictions[-1000:]
+
+            with open(log_path, 'w') as f:
+                json.dump(predictions, f, indent=2, default=str)
+        except Exception:
+            pass
+
+
 def main():
     """Treina o Bi-LSTM com dados do backtest."""
     print("\n" + "=" * 70)

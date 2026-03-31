@@ -435,6 +435,8 @@ class AgnoTradingAgent:
         votes_for = 0
         votes_against = 0
         details = []
+        # Tracking individual de cada votante: +1 (a favor), -1 (contra), 0 (neutro)
+        voter_votes = {}
 
         is_buy = signal_direction == "BUY"
 
@@ -445,7 +447,7 @@ class AgnoTradingAgent:
         except Exception:
             best = None
 
-        # Thresholds padrão (sobrescritos por best_config se existir; BacktestParams usa adx_min_strength e volume_surge_multiplier)
+        # Thresholds padrão
         rsi_oversold = getattr(best, "rsi_oversold", 30) if best else 30
         rsi_overbought = getattr(best, "rsi_overbought", 70) if best else 70
         adx_threshold = getattr(best, "adx_min_strength", getattr(best, "adx_threshold", 25)) if best else 25
@@ -458,16 +460,22 @@ class AgnoTradingAgent:
         rsi = indicators.get("rsi", {}).get("value", 50)
         if is_buy and rsi < rsi_oversold:
             votes_for += 1
+            voter_votes["rsi"] = 1
             details.append(f"RSI oversold ({rsi:.1f} < {rsi_oversold})")
         elif not is_buy and rsi > rsi_overbought:
             votes_for += 1
+            voter_votes["rsi"] = 1
             details.append(f"RSI overbought ({rsi:.1f} > {rsi_overbought})")
         elif is_buy and rsi > rsi_overbought:
             votes_against += 1
+            voter_votes["rsi"] = -1
             details.append(f"RSI contra BUY ({rsi:.1f} > {rsi_overbought})")
         elif not is_buy and rsi < rsi_oversold:
             votes_against += 1
+            voter_votes["rsi"] = -1
             details.append(f"RSI contra SELL ({rsi:.1f} < {rsi_oversold})")
+        else:
+            voter_votes["rsi"] = 0
 
         # 2. MACD histogram direction (zona morta para valores insignificantes)
         macd_hist = indicators.get("macd", {}).get("histogram", 0)
@@ -476,12 +484,15 @@ class AgnoTradingAgent:
         _price = indicators.get("close", indicators.get("price", 1))
         _macd_deadzone = abs(_price) * 0.0001 if _price else 0.0001
         if abs(macd_hist) < _macd_deadzone:
+            voter_votes["macd"] = 0
             details.append(f"MACD neutro ({macd_hist:.6f}, zona morta)")
         elif (is_buy and macd_hist > 0) or (not is_buy and macd_hist < 0):
             votes_for += 1
+            voter_votes["macd"] = 1
             details.append(f"MACD aligned ({macd_hist:.4f})")
         elif (is_buy and macd_hist < 0) or (not is_buy and macd_hist > 0):
             votes_against += 1
+            voter_votes["macd"] = -1
             details.append(f"MACD contra ({macd_hist:.4f})")
 
         # 3. EMA alignment (trend direction)
@@ -489,28 +500,38 @@ class AgnoTradingAgent:
         if (is_buy and primary_trend in ("bullish", "strong_bullish")) or \
            (not is_buy and primary_trend in ("bearish", "strong_bearish")):
             votes_for += 1
+            voter_votes["trend"] = 1
             details.append(f"Trend aligned ({primary_trend})")
         elif (is_buy and primary_trend in ("bearish", "strong_bearish")) or \
              (not is_buy and primary_trend in ("bullish", "strong_bullish")):
             votes_against += 1
+            voter_votes["trend"] = -1
             details.append(f"Trend contra ({primary_trend})")
+        else:
+            voter_votes["trend"] = 0
 
         # 4. ADX trend strength
         adx = trend_data.get("trend_strength_adx", trend_data.get("adx", 0))
         if adx >= adx_threshold:
             votes_for += 1
+            voter_votes["adx"] = 1
             details.append(f"ADX strong trend ({adx:.1f} >= {adx_threshold})")
         else:
+            voter_votes["adx"] = 0
             details.append(f"ADX weak trend ({adx:.1f} < {adx_threshold})")
 
         # 5. Bollinger Band position
         bb_pos = indicators.get("bollinger", {}).get("position", 0.5)
         if is_buy and bb_pos < 0.2:
             votes_for += 1
+            voter_votes["bb"] = 1
             details.append(f"BB near lower band ({bb_pos:.2f})")
         elif not is_buy and bb_pos > 0.8:
             votes_for += 1
+            voter_votes["bb"] = 1
             details.append(f"BB near upper band ({bb_pos:.2f})")
+        else:
+            voter_votes["bb"] = 0
 
         # 6. Orderbook imbalance alignment
         ob_imbalance = volume_flow.get("orderbook_imbalance", 0)
@@ -518,35 +539,49 @@ class AgnoTradingAgent:
         # Valores possíveis: strong_buy_pressure, buy_pressure, neutral, sell_pressure, strong_sell_pressure
         if (is_buy and "buy" in ob_bias) or (not is_buy and "sell" in ob_bias):
             votes_for += 1
+            voter_votes["orderbook"] = 1
             details.append(f"Orderbook aligned ({ob_bias}, imb={ob_imbalance:.2f})")
         elif (is_buy and "sell" in ob_bias) or (not is_buy and "buy" in ob_bias):
             votes_against += 1
+            voter_votes["orderbook"] = -1
             details.append(f"Orderbook contra ({ob_bias}, imb={ob_imbalance:.2f})")
+        else:
+            voter_votes["orderbook"] = 0
 
         # 7. Multi-timeframe alignment
         bullish_count = mtf.get("bullish_count", 0)
         bearish_count = mtf.get("bearish_count", 0)
         if is_buy and bullish_count >= 3:
             votes_for += 1
+            voter_votes["mtf"] = 1
             details.append(f"MTF aligned ({bullish_count}/5 bullish)")
         elif not is_buy and bearish_count >= 3:
             votes_for += 1
+            voter_votes["mtf"] = 1
             details.append(f"MTF aligned ({bearish_count}/5 bearish)")
         elif is_buy and bearish_count >= 3:
             votes_against += 1
+            voter_votes["mtf"] = -1
             details.append(f"MTF contra BUY ({bearish_count}/5 bearish)")
         elif not is_buy and bullish_count >= 3:
             votes_against += 1
+            voter_votes["mtf"] = -1
             details.append(f"MTF contra SELL ({bullish_count}/5 bullish)")
+        else:
+            voter_votes["mtf"] = 0
 
         # 8. CVD (Cumulative Volume Delta) alignment
         cvd_direction = volume_flow.get("cvd_direction", "neutral")
         if (is_buy and cvd_direction == "positive") or (not is_buy and cvd_direction == "negative"):
             votes_for += 1
+            voter_votes["cvd"] = 1
             details.append(f"CVD aligned ({cvd_direction})")
         elif (is_buy and cvd_direction == "negative") or (not is_buy and cvd_direction == "positive"):
             votes_against += 1
+            voter_votes["cvd"] = -1
             details.append(f"CVD contra ({cvd_direction})")
+        else:
+            voter_votes["cvd"] = 0
 
         total_votes = votes_for + votes_against
         score = votes_for / max(total_votes, 1)
@@ -557,6 +592,7 @@ class AgnoTradingAgent:
             "total_votes": total_votes,
             "score": round(score, 3),
             "details": details,
+            "voter_votes": voter_votes,
             "thresholds_source": "optimizer" if best else "default",
         }
 
@@ -1021,18 +1057,19 @@ Responda APENAS com JSON:
                 llm_vote_weight = 1 if llm_confidence >= 5 else 0.5
 
                 # Bi-LSTM sequence vote (se modelo treinado)
-                # LSTM só pode votar contra (bloquear) se acurácia >= 60%
+                # Mesma lógica calibrada do ML: confiar no SKIP, exigir alta prob para FOR
                 lstm_vote = 0
                 lstm_prob = 0.5
-                MIN_ACCURACY_TO_BLOCK = 60.0
+                MIN_ACCURACY_TO_VOTE = 55.0
                 if self.lstm_sequence_validator is not None:
                     try:
                         from src.backtesting.backtest_engine import BacktestEngine
-                        # Buscar candles recentes com indicadores para o LSTM
                         _engine = BacktestEngine()
                         _df = await _engine.fetch_data(
                             symbol, "1h",
-                            datetime.now(timezone.utc) - timedelta(hours=self.lstm_sequence_validator.sequence_length + 10),
+                            datetime.now(timezone.utc) - timedelta(
+                                hours=self.lstm_sequence_validator.sequence_length + 10
+                            ),
                             datetime.now(timezone.utc),
                         )
                         if not _df.empty:
@@ -1040,55 +1077,89 @@ Responda APENAS com JSON:
                             lstm_result = self.lstm_sequence_validator.predict_from_candles(_df)
                             lstm_prob = lstm_result.get("probability", 0.5)
 
-                            # Verificar acurácia do LSTM antes de permitir voto
+                            # Log prediction para avaliação futura
+                            self.lstm_sequence_validator._log_prediction(
+                                symbol, lstm_prob,
+                                1 if lstm_prob > 0.5 else 0,
+                            )
+
                             accuracies = self._get_model_accuracies()
                             lstm_acc = accuracies.get("lstm_accuracy")
-                            lstm_is_reliable = lstm_acc is not None and lstm_acc >= MIN_ACCURACY_TO_BLOCK
+                            lstm_is_reliable = (
+                                lstm_acc is not None
+                                and lstm_acc >= MIN_ACCURACY_TO_VOTE
+                            )
 
-                            if lstm_prob > 0.6:
-                                if lstm_is_reliable:
+                            # Mesmos thresholds calibrados do ML:
+                            # prob >= 0.75 → FOR, prob < 0.30 → FORTE CONTRA,
+                            # prob 0.30-0.50 → CONTRA, prob 0.50-0.75 → NEUTRO
+                            if lstm_is_reliable:
+                                if lstm_prob >= 0.75:
                                     lstm_vote = 1
-                                    confluence["details"].append(f"Bi-LSTM win prob={lstm_prob:.1%}")
+                                    confluence["details"].append(
+                                        f"Bi-LSTM A FAVOR (prob={lstm_prob:.1%})"
+                                    )
+                                elif lstm_prob < 0.30:
+                                    lstm_vote = -2
+                                    confluence["details"].append(
+                                        f"Bi-LSTM FORTE CONTRA (prob={lstm_prob:.1%})"
+                                    )
+                                elif lstm_prob < 0.50:
+                                    lstm_vote = -1
+                                    confluence["details"].append(
+                                        f"Bi-LSTM CONTRA (prob={lstm_prob:.1%})"
+                                    )
                                 else:
                                     confluence["details"].append(
-                                        f"Bi-LSTM prob={lstm_prob:.1%} (ignorado: acc={lstm_acc:.1f}% < {MIN_ACCURACY_TO_BLOCK}%)"
-                                        if lstm_acc is not None
-                                        else f"Bi-LSTM prob={lstm_prob:.1%} (ignorado: sem dados de acurácia)"
+                                        f"Bi-LSTM neutro (prob={lstm_prob:.1%})"
                                     )
-                            elif lstm_prob < 0.4:
-                                if lstm_is_reliable:
-                                    votes_against += 1
-                                    confluence["details"].append(f"Bi-LSTM contra (prob={lstm_prob:.1%})")
-                                else:
-                                    confluence["details"].append(
-                                        f"Bi-LSTM contra prob={lstm_prob:.1%} (ignorado: acc={lstm_acc:.1f}% < {MIN_ACCURACY_TO_BLOCK}%)"
-                                        if lstm_acc is not None
-                                        else f"Bi-LSTM contra prob={lstm_prob:.1%} (ignorado: sem dados de acurácia)"
-                                    )
+                            else:
+                                acc_str = (
+                                    f"{lstm_acc:.1f}%" if lstm_acc is not None
+                                    else "N/A"
+                                )
+                                confluence["details"].append(
+                                    f"Bi-LSTM prob={lstm_prob:.1%} "
+                                    f"(ignorado: acc={acc_str})"
+                                )
+
                             agno_signal["lstm_probability"] = lstm_prob
-                            acc_str = f"{lstm_acc:.1f}%" if lstm_acc is not None else "N/A"
+                            acc_str = (
+                                f"{lstm_acc:.1f}%" if lstm_acc is not None
+                                else "N/A"
+                            )
+                            vote_str = (
+                                "FOR(+1)" if lstm_vote > 0
+                                else f"AGAINST({lstm_vote})" if lstm_vote < 0
+                                else "NEUTRAL"
+                            )
                             logger.info(
                                 f"[Bi-LSTM] {symbol}: prob={lstm_prob:.1%}, "
-                                f"acc={acc_str}, reliable={lstm_is_reliable}, "
-                                f"vote={'FOR' if lstm_vote else 'NEUTRAL/AGAINST'}"
+                                f"acc={acc_str}, vote={vote_str}"
                             )
                     except Exception as e:
                         logger.warning(f"[Bi-LSTM] Erro na predição: {e}")
 
-                # VOTO ML: integrado na confluência como voto 9 (de 10 possíveis)
+                # VOTO ML: integrado na confluência (pode ser -2, -1, 0, +1)
                 # Votos: 1.RSI 2.MACD 3.EMA/Trend 4.ADX 5.BB 6.Orderbook
                 #        7.MTF 8.CVD 9.ML 10.LSTM + LLM(peso variável)
                 ml_vote = agno_signal.get("ml_vote", 0)
                 if ml_vote > 0:
-                    votes_for += 1
-                    confluence["details"].append(f"ML a favor (prob={ml_prob:.1%})")
+                    votes_for += ml_vote
+                    confluence["details"].append(f"ML a favor +{ml_vote} (prob={ml_prob:.1%})")
                 elif ml_vote < 0:
-                    votes_against += 1
-                    confluence["details"].append(f"ML contra (prob={ml_prob:.1%})")
+                    votes_against += abs(ml_vote)
+                    confluence["details"].append(f"ML contra {ml_vote} (prob={ml_prob:.1%})")
                 else:
                     confluence["details"].append(f"ML neutro (prob={ml_prob:.1%})")
 
-                total_for = votes_for + llm_vote_weight + lstm_vote
+                # LSTM vote: pode ser -2 (forte contra), -1 (contra), 0, +1 (a favor)
+                if lstm_vote > 0:
+                    votes_for += lstm_vote
+                elif lstm_vote < 0:
+                    votes_against += abs(lstm_vote)
+
+                total_for = votes_for + llm_vote_weight
                 total_against = votes_against
                 total_all = total_for + total_against
                 combined_score = total_for / max(total_all, 1)
@@ -1104,6 +1175,16 @@ Responda APENAS com JSON:
                 agno_signal["confluence_votes_for"] = total_for
                 agno_signal["confluence_votes_against"] = total_against
                 agno_signal["confluence_thresholds"] = confluence["thresholds_source"]
+
+                # Per-voter tracking: voto individual de cada componente
+                # Será usado para calcular accuracy de cada votante
+                voter_breakdown = confluence.get("voter_votes", {})
+                voter_breakdown["ml"] = ml_vote
+                voter_breakdown["lstm"] = lstm_vote
+                voter_breakdown["llm"] = 1 if llm_vote_weight >= 1 else 0
+                voter_breakdown["ml_prob"] = round(ml_prob, 4)
+                voter_breakdown["lstm_prob"] = round(lstm_prob, 4)
+                agno_signal["voter_votes"] = voter_breakdown
 
                 logger.info(
                     f"[CONFLUENCE] {llm_signal_dir} {symbol}: "
