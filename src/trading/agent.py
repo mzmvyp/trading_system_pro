@@ -225,10 +225,8 @@ class AgnoTradingAgent:
 
     def _check_ml_prediction_bias(self) -> bool:
         """
-        Verifica se o modelo ML está viciado (predizendo >85% como mesma classe).
-        Um modelo assim não aprendeu padrões úteis — está apenas chutando.
-
-        Tenta prediction_log.json primeiro, depois fallback para model_votes_log.jsonl.
+        Verifica se o modelo ML está viciado (predizendo >70% como mesma classe).
+        Threshold reduzido de 85%→70% para detectar bias mais cedo.
 
         Returns:
             True se modelo está viciado, False se distribuição é razoável
@@ -269,8 +267,9 @@ class AgnoTradingAgent:
             skip_count = sum(1 for p in recent if p.get('ml_prediction', 0) == 0)
             skip_ratio = skip_count / len(recent)
 
-            # Se >85% é mesma classe (SKIP ou EXECUTE), modelo está viciado
-            if skip_ratio > 0.85 or skip_ratio < 0.15:
+            # Se >70% é mesma classe (SKIP ou EXECUTE), modelo está viciado
+            # Threshold reduzido de 85% → 70%: detectar bias mais cedo
+            if skip_ratio > 0.70 or skip_ratio < 0.30:
                 logger.info(
                     f"[ML BIAS] Modelo viciado detectado: "
                     f"SKIP={skip_count}/{len(recent)} ({skip_ratio:.1%}), "
@@ -331,32 +330,42 @@ class AgnoTradingAgent:
             self.ml_validator._log_prediction(signal, result)
 
             # ML como VOTO (não veto):
-            # prob >= 0.6 e prediction==1 → voto a favor (+1)
-            # prob < 0.4 ou prediction==0 → voto contra (-1)
-            # entre 0.4 e 0.6 → neutro (0)
+            # Dados reais mostram: SKIP (prob<50%) tem 81% accuracy,
+            # EXECUTE (prob>50%) tem apenas 32% accuracy.
+            # Portanto: confiar MUITO no SKIP, exigir prob ALTA para EXECUTE.
+            #
+            # prob >= 0.75 → voto a favor (+1) — só sinais muito fortes
+            # prob < 0.30 → voto FORTE contra (-2) — SKIP é 81% confiável
+            # prob 0.30-0.50 → voto contra (-1)
+            # prob 0.50-0.75 → neutro (0) — zona não confiável
             ml_vote = 0
             ml_is_biased = self._check_ml_prediction_bias()
 
             if ml_is_biased:
                 ml_vote = 0  # Modelo viciado = voto neutro
                 logger.info(
-                    f"[ML VOTO] Modelo viciado (>85% mesma classe) — voto NEUTRO "
+                    f"[ML VOTO] Modelo viciado (>70% mesma classe) — voto NEUTRO "
                     f"(prob={probability:.1%}, pred={prediction})"
                 )
-            elif prediction == 1 and probability >= 0.6:
-                ml_vote = 1  # Voto a favor
+            elif probability >= 0.75:
+                ml_vote = 1  # Voto a favor — só com alta confiança
                 logger.info(
-                    f"[ML VOTO] A FAVOR — prob={probability:.1%}, pred={prediction}"
+                    f"[ML VOTO] A FAVOR — prob={probability:.1%} (>= 75%)"
                 )
-            elif prediction == 0 or probability < 0.4:
+            elif probability < 0.30:
+                ml_vote = -2  # Voto FORTE contra — SKIP accuracy 81%
+                logger.info(
+                    f"[ML VOTO] FORTE CONTRA (-2) — prob={probability:.1%} (< 30%)"
+                )
+            elif probability < 0.50:
                 ml_vote = -1  # Voto contra
                 logger.info(
-                    f"[ML VOTO] CONTRA — prob={probability:.1%}, pred={prediction}"
+                    f"[ML VOTO] CONTRA — prob={probability:.1%} (< 50%)"
                 )
             else:
-                ml_vote = 0  # Neutro (zona cinza)
+                ml_vote = 0  # Neutro — zona 50-75% não confiável
                 logger.info(
-                    f"[ML VOTO] NEUTRO — prob={probability:.1%}, pred={prediction} (zona cinza)"
+                    f"[ML VOTO] NEUTRO — prob={probability:.1%} (zona 50-75% não confiável)"
                 )
 
             return {

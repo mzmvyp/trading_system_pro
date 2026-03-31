@@ -506,6 +506,17 @@ class OnlineLearningManager:
                 print("[OL] Primeiro treinamento - salvando modelo inicial")
 
             if should_save:
+                # Calibrar probabilidades do melhor modelo (corrige overconfidence)
+                try:
+                    from sklearn.calibration import CalibratedClassifierCV
+                    base = trained_models[best_model_name]
+                    cal = CalibratedClassifierCV(base, method='isotonic', cv=3)
+                    cal.fit(X_train_scaled, y_train, sample_weight=sample_weights)
+                    trained_models[best_model_name] = cal
+                    print(f"[OL] Probabilidades calibradas para {best_model_name}")
+                except Exception as e:
+                    print(f"[OL] Calibração falhou: {e} — usando modelo original")
+
                 # Salvar TODOS os modelos treinados (nao so o melhor)
                 self._save_new_model_ensemble(trained_models, best_model_name, scaler, available_cols, new_accuracy, new_f1)
 

@@ -26,6 +26,7 @@ try:
     XGBOOST_AVAILABLE = True
 except ImportError:
     XGBOOST_AVAILABLE = False
+from sklearn.calibration import CalibratedClassifierCV  # noqa: E402
 from sklearn.metrics import (  # noqa: E402
     accuracy_score,
     classification_report,
@@ -234,6 +235,9 @@ class SimpleSignalValidator:
         if self.best_model_name:
             print(f"\n[BEST] Melhor modelo: {self.best_model_name}")
 
+            # Calibrar probabilidades do melhor modelo (corrige overconfidence)
+            self._calibrate_best_model(X_train, y_train)
+
             # Avaliar melhor modelo
             self._evaluate_best_model(X_test, y_test)
 
@@ -255,6 +259,29 @@ class SimpleSignalValidator:
         self._save_models()
 
         return results
+
+    def _calibrate_best_model(self, X_train, y_train):
+        """
+        Calibra probabilidades do melhor modelo usando CalibratedClassifierCV.
+        Dados reais mostram: EXECUTE prob 50-80% tem apenas 32% accuracy.
+        Calibração corrige overconfidence para probabilidades mais realistas.
+        """
+        if self.best_model_name is None:
+            return
+
+        try:
+            base_model = self.models[self.best_model_name]
+            # Usar isotonic calibration (melhor para dados não-lineares)
+            # cv=3 para evitar overfitting com poucos dados
+            calibrated = CalibratedClassifierCV(
+                base_model, method='isotonic', cv=3
+            )
+            sample_weights = compute_sample_weight('balanced', y_train)
+            calibrated.fit(X_train, y_train, sample_weight=sample_weights)
+            self.models[self.best_model_name] = calibrated
+            print(f"  [CALIB] Probabilidades calibradas para {self.best_model_name}")
+        except Exception as e:
+            print(f"  [CALIB] Erro na calibração: {e} — usando modelo original")
 
     def _evaluate_best_model(self, X_test, y_test):
         """Avalia o melhor modelo em detalhes"""
