@@ -447,10 +447,11 @@ class AgnoTradingAgent:
         except Exception:
             best = None
 
-        # Thresholds padrão
+        # Thresholds padrão (ou otimizados se disponíveis)
         rsi_oversold = getattr(best, "rsi_oversold", 30) if best else 30
         rsi_overbought = getattr(best, "rsi_overbought", 70) if best else 70
         adx_threshold = getattr(best, "adx_min_strength", getattr(best, "adx_threshold", 25)) if best else 25
+        thresholds_source = "optimizer" if best else "default"
         indicators = analysis_data.get("key_indicators", {})
         trend_data = analysis_data.get("trend_analysis", {})
         volume_flow = analysis_data.get("volume_flow", {})
