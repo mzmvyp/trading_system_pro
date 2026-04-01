@@ -22,7 +22,11 @@ import asyncio
 import json
 import os
 import sys
+import warnings
 from pathlib import Path
+
+# Suprimir RuntimeWarning do numpy (std com ddof=1 quando poucos trades)
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
 
 # Garantir root no path
 _ROOT = Path(__file__).resolve().parent.parent.parent
