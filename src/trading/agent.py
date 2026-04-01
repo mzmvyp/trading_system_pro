@@ -591,6 +591,50 @@ class AgnoTradingAgent:
         else:
             voter_votes["cvd"] = 0
 
+        # 9. Setup Validator — valida contexto contra win rate histórico
+        try:
+            from src.optimizer.setup_validator import validate_signal_before_trade
+            symbol = analysis_data.get("symbol", "")
+            rsi_val = rsi_data.get("rsi", 50)
+            adx_val = trend_data.get("adx", 25)
+            atr_val = trend_data.get("atr", 0)
+            entry_price = analysis_data.get("price", {}).get("current", 1)
+            ema_fast = trend_data.get("ema_fast", entry_price)
+            ema_slow = trend_data.get("ema_slow", entry_price)
+            if entry_price > ema_fast > ema_slow:
+                sv_trend = "bullish"
+            elif entry_price < ema_fast < ema_slow:
+                sv_trend = "bearish"
+            else:
+                sv_trend = "neutral"
+
+            sv_result = validate_signal_before_trade({
+                "signal": signal_direction,
+                "rsi": rsi_val,
+                "adx": adx_val,
+                "atr": atr_val,
+                "entry_price": entry_price,
+                "trend": sv_trend,
+            })
+            sv_vote = sv_result.get("vote", 0)
+            sv_rec = sv_result.get("recommendation", "NEW_SETUP")
+            sv_wr = sv_result.get("historical_win_rate", 0)
+            sv_samples = sv_result.get("total_samples", 0)
+
+            if sv_vote > 0:
+                votes_for += 1
+                voter_votes["setup_validator"] = 1
+                details.append(f"Setup aprovado ({sv_rec}, WR={sv_wr:.0f}%, n={sv_samples})")
+            elif sv_vote < 0:
+                votes_against += 1
+                voter_votes["setup_validator"] = -1
+                details.append(f"Setup rejeitado ({sv_rec}, WR={sv_wr:.0f}%, n={sv_samples})")
+            else:
+                voter_votes["setup_validator"] = 0
+                details.append(f"Setup neutro ({sv_rec}, n={sv_samples})")
+        except Exception:
+            voter_votes["setup_validator"] = 0
+
         total_votes = votes_for + votes_against
         score = votes_for / max(total_votes, 1)
 
@@ -1174,7 +1218,7 @@ Responda APENAS com JSON:
 
                 # VOTO ML: integrado na confluência (pode ser -2, -1, 0, +1)
                 # Votos: 1.RSI 2.MACD 3.EMA/Trend 4.ADX 5.BB 6.Orderbook
-                #        7.MTF 8.CVD 9.ML 10.LSTM + LLM(peso variável)
+                #        7.MTF 8.CVD 9.SetupValidator 10.ML 11.LSTM + LLM(peso variável)
                 ml_vote = agno_signal.get("ml_vote", 0)
                 if ml_vote > 0:
                     votes_for += ml_vote
@@ -1231,7 +1275,7 @@ Responda APENAS com JSON:
                 total_all = total_for + total_against
                 combined_score = total_for / max(total_all, 1)
 
-                # Sistema de votos (8 técnicos + ML + LSTM + LLM + Regime):
+                # Sistema de votos (9 técnicos + ML + LSTM + LLM + Regime):
                 # Mínimo 5 votos a favor OU score >= 55%
                 # Se score >= 80% (forte concordância), aceitar com 4 votos
                 # Em mercado LATERAL: exigir mais votos (mín 6) para filtrar ruído

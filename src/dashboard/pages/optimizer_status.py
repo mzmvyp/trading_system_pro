@@ -205,6 +205,62 @@ else:
     st.info("Nenhuma otimização registrada. Aguarde o optimizer completar o primeiro ciclo.")
 
 # ================================================================
+# SETUP VALIDATOR — Melhores e Piores Setups
+# ================================================================
+st.markdown("---")
+st.header("Setup Validator — Contextos Históricos")
+
+try:
+    from src.optimizer.setup_validator import get_setup_validator
+    sv = get_setup_validator()
+
+    best_setups = sv.get_best_setups(min_samples=10)
+    worst_setups = sv.get_worst_setups(min_samples=10)
+
+    if best_setups or worst_setups:
+        col_best, col_worst = st.columns(2)
+
+        with col_best:
+            st.subheader("Melhores Setups")
+            if best_setups:
+                best_rows = []
+                for s in best_setups[:15]:
+                    best_rows.append({
+                        "Setup": s["setup"],
+                        "Win Rate": f"{s['win_rate']:.1f}%",
+                        "Avg PnL": f"{s['avg_pnl']:.2f}%",
+                        "Amostras": s["total"],
+                        "Avg Horas": f"{s.get('avg_hours', 0):.1f}",
+                    })
+                st.dataframe(pd.DataFrame(best_rows), use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhum setup com dados suficientes ainda.")
+
+        with col_worst:
+            st.subheader("Piores Setups (Evitar)")
+            if worst_setups:
+                worst_rows = []
+                for s in worst_setups[:15]:
+                    worst_rows.append({
+                        "Setup": s["setup"],
+                        "Win Rate": f"{s['win_rate']:.1f}%",
+                        "Avg PnL": f"{s['avg_pnl']:.2f}%",
+                        "Amostras": s["total"],
+                    })
+                st.dataframe(pd.DataFrame(worst_rows), use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhum setup ruim detectado ainda.")
+
+        # Stats gerais
+        total_setups = len(sv.statistics)
+        total_signals = sum(s.get("total", 0) for s in sv.statistics.values())
+        st.info(f"Total: {total_setups} setups rastreados, {total_signals} sinais validados")
+    else:
+        st.info("Setup Validator ainda sem dados. Aguarde o optimizer completar um ciclo.")
+except Exception:
+    st.info("Setup Validator não disponível.")
+
+# ================================================================
 # FOOTER
 # ================================================================
 st.markdown("---")

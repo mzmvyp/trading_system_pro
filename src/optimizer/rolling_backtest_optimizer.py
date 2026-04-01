@@ -533,6 +533,21 @@ class RollingBacktestOptimizer:
 
         result = await self.run_global_optimization()
 
+        # Setup Validator: gerar sinais históricos e validar contextos
+        setup_validation = None
+        try:
+            from src.optimizer.setup_validator import SetupValidator
+            sv = SetupValidator()
+            setup_validation = await sv.run_full_validation(
+                symbols=self.symbols, days_back=self.days_back
+            )
+            logger.info(
+                f"[SETUP_VALIDATOR] {setup_validation['total_signals']} sinais validados, "
+                f"{setup_validation['total_setups']} setups rastreados"
+            )
+        except Exception as e:
+            logger.warning(f"[SETUP_VALIDATOR] Erro na validação periódica: {e}")
+
         # Salvar status
         self._status = {
             "running": self._running,
@@ -560,6 +575,13 @@ class RollingBacktestOptimizer:
             )
         else:
             logger.warning(f"[OPTIMIZER] Ciclo {self._cycle_count}: sem resultado válido")
+
+        if setup_validation:
+            self._status["setup_validation"] = {
+                "total_signals": setup_validation.get("total_signals", 0),
+                "total_setups": setup_validation.get("total_setups", 0),
+                "per_symbol": setup_validation.get("per_symbol", {}),
+            }
 
         status_file = BEST_CONFIG_DIR / "optimizer_status.json"
         with open(status_file, "w") as f:
