@@ -169,14 +169,15 @@ if exec_count > 0 or noexec_count > 0:
 # ================================================================
 # TABS DE ANALISE
 # ================================================================
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "📋 Todos os Sinais",
     "📈 Performance por Fonte",
     "🎯 Performance por Simbolo",
     "📊 Graficos",
     "🔬 Long vs Short",
     "📉 MFE/MAE",
-    "🗳️ Voter Accuracy"
+    "🗳️ Voter Accuracy",
+    "🆚 DeepSeek vs Local"
 ])
 
 # ================================================================
@@ -727,6 +728,104 @@ with tab7:
 
         if not good and not bad:
             st.info("Poucos dados para gerar insights (minimo 10 votos por votante).")
+
+# ================================================================
+# TAB 8: DEEPSEEK vs LOCAL GENERATOR
+# ================================================================
+with tab8:
+    st.subheader("DeepSeek vs Local Generator — Shadow Mode")
+    st.markdown(
+        "Compara a performance do DeepSeek (LLM) com o gerador local (100% tecnico). "
+        "O gerador local roda em **shadow mode** — gera sinais mas **nunca executa**."
+    )
+
+    # Filtrar sinais por fonte
+    closed_outcomes = ["SL_HIT", "TP1_HIT", "TP2_HIT", "EXPIRED"]
+
+    df_agno = df[(df["source"] == "AGNO") & (df["outcome"].isin(closed_outcomes))].copy()
+    df_local = df[(df["source"] == "LOCAL_GEN") & (df["outcome"].isin(closed_outcomes))].copy()
+
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        st.markdown("### AGNO (DeepSeek)")
+        if not df_agno.empty:
+            agno_wins = df_agno["outcome"].isin(["TP1_HIT", "TP2_HIT"]).sum()
+            agno_total = len(df_agno)
+            agno_wr = agno_wins / agno_total * 100 if agno_total > 0 else 0
+            agno_pnl = df_agno["pnl_percent"].sum() if "pnl_percent" in df_agno.columns else 0
+
+            st.metric("Win Rate", f"{agno_wr:.1f}%")
+            st.metric("Total Sinais", agno_total)
+            st.metric("Wins / Losses", f"{agno_wins} / {agno_total - agno_wins}")
+            st.metric("PnL Total", f"{agno_pnl:.2f}%")
+        else:
+            st.info("Nenhum sinal AGNO finalizado.")
+
+    with col_b:
+        st.markdown("### LOCAL_GEN (Tecnico)")
+        if not df_local.empty:
+            local_wins = df_local["outcome"].isin(["TP1_HIT", "TP2_HIT"]).sum()
+            local_total = len(df_local)
+            local_wr = local_wins / local_total * 100 if local_total > 0 else 0
+            local_pnl = df_local["pnl_percent"].sum() if "pnl_percent" in df_local.columns else 0
+
+            st.metric("Win Rate", f"{local_wr:.1f}%")
+            st.metric("Total Sinais", local_total)
+            st.metric("Wins / Losses", f"{local_wins} / {local_total - local_wins}")
+            st.metric("PnL Total", f"{local_pnl:.2f}%")
+        else:
+            st.info("Nenhum sinal LOCAL_GEN finalizado ainda. Aguarde sinais serem avaliados.")
+
+    # Tabela de concordancia/divergencia
+    if not df_local.empty and not df_agno.empty:
+        st.markdown("---")
+        st.subheader("Concordancia de Sinais")
+        st.markdown(
+            "Quando DeepSeek e Local Generator analisam o mesmo ativo no mesmo momento, "
+            "eles concordam ou divergem na direcao?"
+        )
+
+        # Tentar matching por symbol + timestamp (aproximado)
+        matches = []
+        for _, local_row in df_local.iterrows():
+            sym = local_row.get("symbol", "")
+            ts = str(local_row.get("timestamp", ""))[:16]  # Match até minutos
+            sig_local = local_row.get("signal", "")
+            out_local = local_row.get("outcome", "")
+
+            # Buscar AGNO correspondente
+            mask = (df_agno["symbol"] == sym) & (df_agno["timestamp"].astype(str).str[:16] == ts)
+            agno_match = df_agno[mask]
+            if not agno_match.empty:
+                agno_row = agno_match.iloc[0]
+                sig_agno = agno_row.get("signal", "")
+                out_agno = agno_row.get("outcome", "")
+                concordam = sig_local == sig_agno
+                matches.append({
+                    "Symbol": sym,
+                    "Timestamp": ts,
+                    "AGNO": sig_agno,
+                    "LOCAL": sig_local,
+                    "Concordam": "Sim" if concordam else "Nao",
+                    "Outcome AGNO": out_agno,
+                    "Outcome LOCAL": out_local,
+                })
+
+        if matches:
+            df_match = pd.DataFrame(matches)
+            concordance_pct = (df_match["Concordam"] == "Sim").mean() * 100
+            st.metric("Taxa de Concordancia", f"{concordance_pct:.0f}%")
+            st.dataframe(df_match, use_container_width=True, hide_index=True)
+        else:
+            st.info("Ainda sem dados suficientes para calcular concordancia.")
+
+    elif df_local.empty:
+        st.markdown("---")
+        st.info(
+            "O gerador local esta ativo em **shadow mode**. "
+            "Os primeiros sinais aparecerão aqui apos serem avaliados contra o mercado."
+        )
 
 # ================================================================
 # FOOTER
