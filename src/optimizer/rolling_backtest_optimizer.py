@@ -1,19 +1,26 @@
 """
-Rolling Backtest Optimizer — Walk-Forward com aplicação automática
+Rolling Backtest Optimizer — Walk-Forward GLOBAL (multi-symbol)
 =================================================================
 
 Roda como container separado. A cada ciclo (default: 24h):
-1. Baixa últimos 90 dias de candles (Binance Futures)
+1. Baixa últimos 90 dias de candles de TODOS os pares (Binance Futures)
 2. Walk-forward: 75 dias in-sample → 15 dias out-of-sample
-3. Testa N combinações de parâmetros dos indicadores
-4. Valida no out-of-sample (dados que o optimizer NUNCA viu)
-5. Se o novo setup for melhor que o atual → aplica automaticamente
-6. Salva em data/optimization/dynamic_params.json (agent.py lê em runtime)
+3. Testa N combinações de parâmetros em TODOS os pares simultaneamente
+4. Score = performance AGREGADA (evita overfit em 1 par)
+5. Valida no out-of-sample com Monte Carlo
+6. Se melhor que o atual → aplica automaticamente para todos os pares
+7. Salva em data/optimization/ (agent.py lê em runtime)
+
+GLOBAL vs PER-SYMBOL:
+- Cada combinação de params é testada em TODOS os pares
+- Score = média ponderada (pares com mais trades pesam mais)
+- Um param set que só funciona em BTC mas perde em ETH/SOL é rejeitado
+- Muito mais trades no OOS → confiança estatística real
 
 Métricas de decisão:
-- Win Rate >= 50%
+- Win Rate >= 50% (agregado de todos os pares)
 - Profit Factor >= 1.2
-- Min 30 trades no out-of-sample
+- Min 30 trades totais no out-of-sample
 - OOS score não degradar mais que 30% do IS score (anti-overfit)
 """
 
@@ -47,16 +54,78 @@ OPTIMIZER_LOG_FILE = Path("data/optimization/optimizer_log.json")
 BEST_CONFIG_DIR = Path("data/optimization")
 
 
+def _aggregate_metrics(all_metrics: List[BacktestMetrics]) -> Dict:
+    """Agrega métricas de múltiplos símbolos em um resumo global."""
+    if not all_metrics:
+        return {"total_trades": 0, "win_rate": 0, "profit_factor": 0}
+
+    total_trades = sum(m.total_trades for m in all_metrics)
+    total_winners = sum(m.winning_trades for m in all_metrics)
+    total_return = sum(m.total_return_pct for m in all_metrics)
+
+    all_pnls = []
+    for m in all_metrics:
+        all_pnls.extend([t.pnl_pct for t in m.trades])
+
+    win_rate = total_winners / total_trades * 100 if total_trades > 0 else 0
+    avg_return = total_return / len(all_metrics) if all_metrics else 0
+
+    # Profit factor agregado
+    total_gains = sum(max(0, p) for p in all_pnls)
+    total_losses = abs(sum(min(0, p) for p in all_pnls))
+    profit_factor = total_gains / total_losses if total_losses > 0 else 0
+
+    # Sharpe ratio agregado
+    if len(all_pnls) >= 2:
+        std = np.std(all_pnls, ddof=1)
+        sharpe = np.mean(all_pnls) / std * np.sqrt(252) if std > 0 else 0
+    else:
+        sharpe = 0
+
+    # Max drawdown (pior de todos)
+    max_dd = max((m.max_drawdown_pct for m in all_metrics), default=0)
+
+    return {
+        "total_trades": total_trades,
+        "winning_trades": total_winners,
+        "win_rate": round(win_rate, 2),
+        "total_return_pct": round(total_return, 2),
+        "avg_return_pct": round(avg_return, 2),
+        "profit_factor": round(profit_factor, 2),
+        "sharpe_ratio": round(sharpe, 2),
+        "max_drawdown_pct": round(max_dd, 2),
+        "n_symbols": len(all_metrics),
+        "all_pnls": all_pnls,
+    }
+
+
+def _global_score(agg: Dict) -> float:
+    """
+    Score composto global: 30% win_rate + 30% return + 20% Sharpe + 20% (1-drawdown)
+    Mesmo critério do OptimizationEngine mas com dados agregados.
+    """
+    if agg["total_trades"] < 10:
+        return 0.0
+
+    win_rate_norm = min(agg["win_rate"] / 100, 1.0)
+    return_norm = 1 / (1 + np.exp(-agg["avg_return_pct"] / 10))
+    sharpe_norm = 1 / (1 + np.exp(-agg["sharpe_ratio"]))
+    drawdown_norm = max(1 - agg["max_drawdown_pct"] / 100, 0.0)
+
+    score = 0.30 * win_rate_norm + 0.30 * return_norm + 0.20 * sharpe_norm + 0.20 * drawdown_norm
+    return round(score, 6)
+
+
 class RollingBacktestOptimizer:
     """
-    Otimizador walk-forward rolling que roda como serviço independente.
+    Otimizador walk-forward GLOBAL que testa params em todos os pares.
 
-    Diferente do ContinuousOptimizer (que faz random search simples):
+    Diferente do ContinuousOptimizer (per-symbol, sem walk-forward):
+    - GLOBAL: cada param set testado em TODOS os pares
     - Walk-forward obrigatório (anti-overfit)
-    - Múltiplas janelas de validação
+    - Score = performance agregada (mais trades = mais confiança)
+    - Monte Carlo para robustez
     - Regras de troca com degradation check
-    - Log de todas as tentativas para auditoria
-    - Monte Carlo opcional para robustez
     """
 
     def __init__(
@@ -67,7 +136,7 @@ class RollingBacktestOptimizer:
         days_back: int = 90,
         n_iterations: int = 500,
         n_windows: int = 3,
-        in_sample_ratio: float = 0.80,  # 75 dias IS, 15 dias OOS
+        in_sample_ratio: float = 0.80,
         min_oos_trades: int = 20,
         min_oos_win_rate: float = 50.0,
         min_profit_factor: float = 1.2,
@@ -99,111 +168,140 @@ class RollingBacktestOptimizer:
 
         # Criar diretórios
         BEST_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
-        # Carregar log existente
         self._load_log()
 
     def _load_log(self):
-        """Carrega log de otimizações anteriores."""
         if OPTIMIZER_LOG_FILE.exists():
             try:
                 with open(OPTIMIZER_LOG_FILE, "r") as f:
                     self._log = json.load(f)
-                # Manter últimos 500 registros
                 if len(self._log) > 500:
                     self._log = self._log[-500:]
             except Exception:
                 self._log = []
 
     def _save_log(self):
-        """Salva log de otimizações."""
         try:
             with open(OPTIMIZER_LOG_FILE, "w") as f:
                 json.dump(self._log, f, indent=2, default=str)
         except Exception as e:
             logger.error(f"Erro ao salvar log: {e}")
 
-    def _load_current_params(self, symbol: str) -> Optional[Dict]:
-        """Carrega os parâmetros atualmente em uso para um símbolo."""
+    def _load_current_global_score(self) -> float:
+        """Carrega o score global atual."""
         try:
             if DYNAMIC_PARAMS_FILE.exists():
                 with open(DYNAMIC_PARAMS_FILE, "r") as f:
                     data = json.load(f)
-                return data.get("symbols", {}).get(symbol)
+                return data.get("global_score", 0)
         except Exception:
             pass
-        return None
+        return 0
 
-    def _save_dynamic_params(self, symbol: str, params: BacktestParams,
-                             metrics: Dict, score: float, wf_summary: Dict):
+    def _save_global_params(self, params: BacktestParams, score: float,
+                            metrics: Dict, wf_summary: Dict, per_symbol: Dict):
         """
-        Salva parâmetros otimizados no arquivo central.
-        O agent.py lê este arquivo em cada análise.
+        Salva parâmetros otimizados globalmente.
+        Um único conjunto de params para todos os pares.
         """
-        # Carregar arquivo existente ou criar novo
-        data = {"updated_at": None, "symbols": {}}
-        if DYNAMIC_PARAMS_FILE.exists():
-            try:
-                with open(DYNAMIC_PARAMS_FILE, "r") as f:
-                    data = json.load(f)
-            except Exception:
-                pass
-
-        data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        data["symbols"] = data.get("symbols", {})
-
-        data["symbols"][symbol] = {
-            "params": asdict(params),
-            "score": round(score, 6),
-            "metrics": metrics,
-            "walk_forward": wf_summary,
+        data = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
-            "optimizer_version": "rolling_v2",
+            "optimizer_version": "rolling_global_v3",
+            "mode": "global",
+            "global_score": round(score, 6),
+            "global_params": asdict(params),
+            "global_metrics": {k: v for k, v in metrics.items() if k != "all_pnls"},
+            "walk_forward": wf_summary,
+            "per_symbol_metrics": per_symbol,
         }
 
+        # Salvar arquivo central
         with open(DYNAMIC_PARAMS_FILE, "w") as f:
             json.dump(data, f, indent=2, default=str)
 
-        # Também salvar no formato que o continuous_optimizer já usa
-        # (compatibilidade com load_best_config)
+        # Salvar no formato per-symbol (compatibilidade com load_best_config)
         from src.backtesting.continuous_optimizer import save_best_config
-        save_best_config(symbol, self.interval, params, score, metrics)
+        for symbol in self.symbols:
+            sym_metrics = per_symbol.get(symbol, metrics)
+            save_best_config(symbol, self.interval, params, score, sym_metrics)
 
-        logger.info(f"[OPTIMIZER] Params salvos para {symbol}: score={score:.4f}")
+        logger.info(f"[OPTIMIZER] Params GLOBAIS salvos: score={score:.4f}")
 
-    async def optimize_symbol(self, symbol: str) -> Optional[Dict]:
-        """
-        Roda walk-forward optimization para um símbolo.
-
-        Returns:
-            Dict com resultados ou None se falhou
-        """
-        logger.info(f"[OPTIMIZER] === Iniciando otimização {symbol} ===")
-
+    async def _fetch_all_data(self) -> Dict[str, Any]:
+        """Baixa dados históricos de todos os símbolos."""
         end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(days=self.days_back)
-
-        # Buscar dados uma vez
         engine = BacktestEngine()
-        try:
-            full_df = await engine.fetch_data(symbol, self.interval, start_time, end_time)
-        except Exception as e:
-            logger.error(f"[OPTIMIZER] Erro ao buscar dados {symbol}: {e}")
+
+        all_data = {}
+        for symbol in self.symbols:
+            try:
+                df = await engine.fetch_data(symbol, self.interval, start_time, end_time)
+                if df.empty or len(df) < 200:
+                    logger.warning(f"[OPTIMIZER] {symbol}: dados insuficientes ({len(df)} candles)")
+                    continue
+                if "timestamp" not in df.columns:
+                    df = df.reset_index()
+                all_data[symbol] = df
+                logger.info(f"[OPTIMIZER] {symbol}: {len(df)} candles")
+            except Exception as e:
+                logger.error(f"[OPTIMIZER] {symbol}: erro ao buscar dados: {e}")
+
+        return all_data
+
+    def _run_params_on_all_symbols(
+        self, params: BacktestParams, symbol_dfs: Dict[str, Any], max_hold: int = 48
+    ) -> tuple:
+        """
+        Roda um conjunto de params em TODOS os símbolos.
+
+        Returns:
+            (aggregated_metrics_dict, list_of_per_symbol_metrics)
+        """
+        all_metrics = []
+        per_symbol = {}
+        for symbol, df in symbol_dfs.items():
+            bt = BacktestEngine(params=params)
+            metrics = bt.run_on_dataframe(df, max_hold_bars=max_hold)
+            all_metrics.append(metrics)
+            per_symbol[symbol] = {
+                "trades": metrics.total_trades,
+                "win_rate": round(metrics.win_rate, 1),
+                "return": round(metrics.total_return_pct, 2),
+                "profit_factor": round(metrics.profit_factor, 2),
+                "max_dd": round(metrics.max_drawdown_pct, 2),
+            }
+
+        agg = _aggregate_metrics(all_metrics)
+        return agg, per_symbol
+
+    async def run_global_optimization(self) -> Optional[Dict]:
+        """
+        Otimização global walk-forward: testa cada param set em TODOS os pares.
+
+        Fluxo:
+        1. Baixar dados de todos os pares
+        2. Para cada janela walk-forward:
+           a. Dividir dados em IS/OOS
+           b. Random search: testar N combinações em TODOS os pares (IS)
+           c. Validar melhor no OOS de TODOS os pares
+        3. Monte Carlo no OOS agregado
+        4. Se passar critérios → aplicar
+        """
+        logger.info(f"[OPTIMIZER] === Otimização GLOBAL ({len(self.symbols)} pares) ===")
+
+        # 1. Buscar todos os dados
+        all_data = await self._fetch_all_data()
+        if len(all_data) < 3:
+            logger.warning(f"[OPTIMIZER] Apenas {len(all_data)} pares com dados. Mínimo: 3.")
             return None
 
-        if full_df.empty or len(full_df) < 200:
-            logger.warning(f"[OPTIMIZER] Dados insuficientes para {symbol}: {len(full_df)} candles")
-            return None
+        symbols_ok = list(all_data.keys())
+        logger.info(f"[OPTIMIZER] {len(symbols_ok)} pares carregados: {symbols_ok}")
 
-        # Garantir coluna timestamp
-        if "timestamp" not in full_df.columns:
-            full_df = full_df.reset_index()
-
-        logger.info(f"[OPTIMIZER] {symbol}: {len(full_df)} candles carregados")
-
-        # ================================================================
-        # WALK-FORWARD: Dividir em janelas IS/OOS
-        # ================================================================
+        # 2. Walk-forward
+        end_time = datetime.now(timezone.utc)
+        start_time = end_time - timedelta(days=self.days_back)
         total_days = (end_time - start_time).days
         window_days = total_days // self.n_windows
         is_days = int(window_days * self.in_sample_ratio)
@@ -213,11 +311,16 @@ class RollingBacktestOptimizer:
             logger.warning(f"[OPTIMIZER] Janelas muito pequenas: IS={is_days}d, OOS={oos_days}d")
             return None
 
-        logger.info(f"[OPTIMIZER] Walk-forward: {self.n_windows} janelas, IS={is_days}d, OOS={oos_days}d")
+        logger.info(
+            f"[OPTIMIZER] Walk-forward: {self.n_windows} janelas, "
+            f"IS={is_days}d, OOS={oos_days}d, {self.n_iterations} iter/janela"
+        )
 
         windows_results = []
         best_overall_params = None
         best_overall_oos_score = 0.0
+        best_overall_oos_metrics = {}
+        best_overall_per_symbol = {}
 
         for w in range(self.n_windows):
             w_start = start_time + timedelta(days=w * window_days)
@@ -225,181 +328,187 @@ class RollingBacktestOptimizer:
             oos_start = is_end
             oos_end = w_start + timedelta(days=window_days)
 
-            # Filtrar dados
-            is_mask = (full_df["timestamp"] >= w_start) & (full_df["timestamp"] < is_end)
-            oos_mask = (full_df["timestamp"] >= oos_start) & (full_df["timestamp"] < oos_end)
-            is_df = full_df[is_mask].copy().reset_index(drop=True)
-            oos_df = full_df[oos_mask].copy().reset_index(drop=True)
+            # Dividir dados IS/OOS para TODOS os pares
+            is_dfs = {}
+            oos_dfs = {}
+            for sym, df in all_data.items():
+                is_mask = (df["timestamp"] >= w_start) & (df["timestamp"] < is_end)
+                oos_mask = (df["timestamp"] >= oos_start) & (df["timestamp"] < oos_end)
+                is_df = df[is_mask].copy().reset_index(drop=True)
+                oos_df = df[oos_mask].copy().reset_index(drop=True)
+                if len(is_df) >= 50 and len(oos_df) >= 10:
+                    is_dfs[sym] = is_df
+                    oos_dfs[sym] = oos_df
 
-            if len(is_df) < 100 or len(oos_df) < 30:
-                logger.warning(f"[OPTIMIZER] Janela {w+1}: dados insuficientes IS={len(is_df)}, OOS={len(oos_df)}")
+            if len(is_dfs) < 3:
+                logger.warning(f"[OPTIMIZER] W{w+1}: apenas {len(is_dfs)} pares com dados suficientes")
                 continue
 
-            # Random search no in-sample
+            logger.info(f"[OPTIMIZER] W{w+1}: {len(is_dfs)} pares, IS/OOS split ok")
+
+            # Random search no IS GLOBAL
             best_is_score = 0.0
             best_is_params = BacktestParams()
-            best_is_metrics = BacktestMetrics()
+            best_is_agg = {}
 
             for i in range(self.n_iterations):
                 params = OptimizationEngine.random_params()
-                bt = BacktestEngine(params=params)
-                metrics = bt.run_on_dataframe(is_df, max_hold_bars=48)
-                score = OptimizationEngine.calculate_score(metrics)
+                agg, _ = self._run_params_on_all_symbols(params, is_dfs)
+                score = _global_score(agg)
 
                 if score > best_is_score:
                     best_is_score = score
                     best_is_params = params
-                    best_is_metrics = metrics
+                    best_is_agg = agg
 
                 if (i + 1) % 100 == 0:
                     logger.info(
-                        f"[OPTIMIZER] {symbol} W{w+1} [{i+1}/{self.n_iterations}] "
-                        f"best_IS={best_is_score:.4f}"
+                        f"[OPTIMIZER] W{w+1} [{i+1}/{self.n_iterations}] "
+                        f"best_IS={best_is_score:.4f} "
+                        f"(WR={best_is_agg.get('win_rate', 0):.1f}%, "
+                        f"trades={best_is_agg.get('total_trades', 0)}, "
+                        f"PF={best_is_agg.get('profit_factor', 0):.2f})"
                     )
 
-            # Validar no out-of-sample
-            bt_oos = BacktestEngine(params=best_is_params)
-            oos_metrics = bt_oos.run_on_dataframe(oos_df, max_hold_bars=48)
-            oos_score = OptimizationEngine.calculate_score(oos_metrics)
+            # Validar no OOS GLOBAL
+            oos_agg, oos_per_sym = self._run_params_on_all_symbols(best_is_params, oos_dfs)
+            oos_score = _global_score(oos_agg)
 
-            # Calcular degradação IS→OOS
             degradation = 0.0
             if best_is_score > 0:
                 degradation = (best_is_score - oos_score) / best_is_score * 100
 
             window_result = {
                 "window": w + 1,
-                "is_candles": len(is_df),
-                "oos_candles": len(oos_df),
+                "n_symbols": len(is_dfs),
                 "is_score": round(best_is_score, 4),
                 "oos_score": round(oos_score, 4),
                 "degradation_pct": round(degradation, 1),
-                "oos_trades": oos_metrics.total_trades,
-                "oos_win_rate": round(oos_metrics.win_rate, 1),
-                "oos_return": round(oos_metrics.total_return_pct, 2),
-                "oos_profit_factor": round(oos_metrics.profit_factor, 2),
-                "oos_max_dd": round(oos_metrics.max_drawdown_pct, 2),
-                "oos_sharpe": round(oos_metrics.sharpe_ratio, 2),
-                "params": asdict(best_is_params),
+                "oos_trades": oos_agg["total_trades"],
+                "oos_win_rate": oos_agg["win_rate"],
+                "oos_return": oos_agg.get("total_return_pct", 0),
+                "oos_profit_factor": oos_agg["profit_factor"],
+                "oos_max_dd": oos_agg["max_drawdown_pct"],
+                "oos_sharpe": oos_agg["sharpe_ratio"],
+                "per_symbol": oos_per_sym,
             }
             windows_results.append(window_result)
 
             logger.info(
-                f"[OPTIMIZER] {symbol} W{w+1}: IS={best_is_score:.4f} → OOS={oos_score:.4f} "
-                f"(degradation={degradation:.1f}%) | "
-                f"WR={oos_metrics.win_rate:.1f}%, PF={oos_metrics.profit_factor:.2f}, "
-                f"trades={oos_metrics.total_trades}"
+                f"[OPTIMIZER] W{w+1}: IS={best_is_score:.4f} → OOS={oos_score:.4f} "
+                f"(degrad={degradation:.1f}%) | "
+                f"trades={oos_agg['total_trades']}, WR={oos_agg['win_rate']:.1f}%, "
+                f"PF={oos_agg['profit_factor']:.2f}"
             )
 
-            # Atualizar melhor OOS
+            # Log per-symbol no OOS
+            for sym, sm in sorted(oos_per_sym.items()):
+                logger.info(
+                    f"  {sym}: trades={sm['trades']}, WR={sm['win_rate']}%, "
+                    f"PF={sm['profit_factor']}, return={sm['return']}%"
+                )
+
             if oos_score > best_overall_oos_score:
                 best_overall_oos_score = oos_score
                 best_overall_params = best_is_params
+                best_overall_oos_metrics = oos_agg
+                best_overall_per_symbol = oos_per_sym
 
         if not windows_results or best_overall_params is None:
-            logger.warning(f"[OPTIMIZER] {symbol}: Nenhuma janela válida")
+            logger.warning("[OPTIMIZER] Nenhuma janela válida")
             return None
 
-        # ================================================================
-        # VALIDAÇÃO FINAL: Checar qualidade do melhor resultado
-        # ================================================================
-        # Usar a ÚLTIMA janela OOS como referência (mais recente)
+        # 3. Monte Carlo no OOS agregado
         last_window = windows_results[-1]
         avg_oos_score = np.mean([w["oos_score"] for w in windows_results])
         avg_degradation = np.mean([w["degradation_pct"] for w in windows_results])
 
-        # Monte Carlo: embaralhar trades e ver se o resultado se mantém
         mc_pass = True
-        if self.monte_carlo_runs > 0 and last_window["oos_trades"] >= 10:
-            bt_mc = BacktestEngine(params=best_overall_params)
-            # Re-rodar no último OOS para pegar trades
-            last_oos_mask = (full_df["timestamp"] >= (end_time - timedelta(days=oos_days))) & \
-                            (full_df["timestamp"] < end_time)
-            last_oos_df = full_df[last_oos_mask].copy().reset_index(drop=True)
-            if len(last_oos_df) >= 30:
-                mc_metrics = bt_mc.run_on_dataframe(last_oos_df, max_hold_bars=48)
-                if mc_metrics.trades:
-                    pnls = [t.pnl_pct for t in mc_metrics.trades]
-                    mc_win_rates = []
-                    for _ in range(self.monte_carlo_runs):
-                        shuffled = random.sample(pnls, len(pnls))
-                        wins = sum(1 for p in shuffled if p > 0)
-                        mc_win_rates.append(wins / len(shuffled) * 100)
+        oos_pnls = best_overall_oos_metrics.get("all_pnls", [])
+        if self.monte_carlo_runs > 0 and len(oos_pnls) >= 10:
+            mc_win_rates = []
+            for _ in range(self.monte_carlo_runs):
+                shuffled = random.sample(oos_pnls, len(oos_pnls))
+                wins = sum(1 for p in shuffled if p > 0)
+                mc_win_rates.append(wins / len(shuffled) * 100)
 
-                    mc_5th = np.percentile(mc_win_rates, 5)
-                    mc_pass = mc_5th >= 45.0  # 5th percentile > 45%
-                    logger.info(
-                        f"[OPTIMIZER] {symbol} Monte Carlo: "
-                        f"median WR={np.median(mc_win_rates):.1f}%, "
-                        f"5th pct={mc_5th:.1f}% → {'PASS' if mc_pass else 'FAIL'}"
-                    )
+            mc_5th = np.percentile(mc_win_rates, 5)
+            mc_pass = mc_5th >= 45.0
+            logger.info(
+                f"[OPTIMIZER] Monte Carlo ({len(oos_pnls)} trades): "
+                f"median WR={np.median(mc_win_rates):.1f}%, "
+                f"5th pct={mc_5th:.1f}% → {'PASS' if mc_pass else 'FAIL'}"
+            )
 
-        # Critérios de aceitação
+        # 4. Critérios de aceitação
         passes_quality = (
-            last_window["oos_trades"] >= self.min_oos_trades and
-            last_window["oos_win_rate"] >= self.min_oos_win_rate and
-            last_window["oos_profit_factor"] >= self.min_profit_factor and
+            best_overall_oos_metrics.get("total_trades", 0) >= self.min_oos_trades and
+            best_overall_oos_metrics.get("win_rate", 0) >= self.min_oos_win_rate and
+            best_overall_oos_metrics.get("profit_factor", 0) >= self.min_profit_factor and
             avg_degradation <= self.max_degradation_pct and
             mc_pass
         )
 
-        # Comparar com params atuais
-        current = self._load_current_params(symbol)
-        current_score = current.get("score", 0) if current else 0
-        is_better = best_overall_oos_score > current_score * 1.05  # Precisa ser 5% melhor
+        current_score = self._load_current_global_score()
+        is_better = best_overall_oos_score > current_score * 1.05
 
         should_apply = passes_quality and (is_better or current_score == 0)
 
         result = {
-            "symbol": symbol,
+            "mode": "global",
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "symbols": symbols_ok,
+            "n_symbols": len(symbols_ok),
             "windows": windows_results,
             "avg_oos_score": round(avg_oos_score, 4),
             "avg_degradation": round(avg_degradation, 1),
             "best_oos_score": round(best_overall_oos_score, 4),
             "current_score": round(current_score, 4),
+            "oos_trades_total": best_overall_oos_metrics.get("total_trades", 0),
+            "oos_win_rate": best_overall_oos_metrics.get("win_rate", 0),
+            "oos_profit_factor": best_overall_oos_metrics.get("profit_factor", 0),
             "passes_quality": passes_quality,
             "is_better": is_better,
             "applied": should_apply,
             "monte_carlo_pass": mc_pass,
+            "per_symbol": best_overall_per_symbol,
+            "params": asdict(best_overall_params) if best_overall_params else {},
         }
 
         if should_apply:
-            # APLICAR novos parâmetros
-            self._save_dynamic_params(
-                symbol=symbol,
+            clean_metrics = {k: v for k, v in best_overall_oos_metrics.items() if k != "all_pnls"}
+            self._save_global_params(
                 params=best_overall_params,
-                metrics={
-                    "oos_win_rate": last_window["oos_win_rate"],
-                    "oos_return": last_window["oos_return"],
-                    "oos_profit_factor": last_window["oos_profit_factor"],
-                    "oos_max_dd": last_window["oos_max_dd"],
-                    "oos_sharpe": last_window["oos_sharpe"],
-                    "oos_trades": last_window["oos_trades"],
-                    "avg_degradation": round(avg_degradation, 1),
-                },
                 score=best_overall_oos_score,
+                metrics=clean_metrics,
                 wf_summary={
                     "n_windows": len(windows_results),
                     "avg_oos_score": round(avg_oos_score, 4),
                     "avg_degradation": round(avg_degradation, 1),
                     "monte_carlo_pass": mc_pass,
                 },
+                per_symbol=best_overall_per_symbol,
             )
             logger.warning(
-                f"[OPTIMIZER] ★ {symbol}: NOVOS PARAMS APLICADOS! "
+                f"[OPTIMIZER] ★ PARAMS GLOBAIS APLICADOS! "
                 f"score={best_overall_oos_score:.4f} (era {current_score:.4f}) | "
-                f"WR={last_window['oos_win_rate']:.1f}%, PF={last_window['oos_profit_factor']:.2f}"
+                f"WR={best_overall_oos_metrics['win_rate']:.1f}%, "
+                f"PF={best_overall_oos_metrics['profit_factor']:.2f}, "
+                f"trades={best_overall_oos_metrics['total_trades']} "
+                f"({len(symbols_ok)} pares)"
             )
         else:
             reasons = []
             if not passes_quality:
-                if last_window["oos_trades"] < self.min_oos_trades:
-                    reasons.append(f"trades={last_window['oos_trades']} < {self.min_oos_trades}")
-                if last_window["oos_win_rate"] < self.min_oos_win_rate:
-                    reasons.append(f"WR={last_window['oos_win_rate']:.1f}% < {self.min_oos_win_rate}%")
-                if last_window["oos_profit_factor"] < self.min_profit_factor:
-                    reasons.append(f"PF={last_window['oos_profit_factor']:.2f} < {self.min_profit_factor}")
+                t = best_overall_oos_metrics.get("total_trades", 0)
+                wr = best_overall_oos_metrics.get("win_rate", 0)
+                pf = best_overall_oos_metrics.get("profit_factor", 0)
+                if t < self.min_oos_trades:
+                    reasons.append(f"trades={t} < {self.min_oos_trades}")
+                if wr < self.min_oos_win_rate:
+                    reasons.append(f"WR={wr:.1f}% < {self.min_oos_win_rate}%")
+                if pf < self.min_profit_factor:
+                    reasons.append(f"PF={pf:.2f} < {self.min_profit_factor}")
                 if avg_degradation > self.max_degradation_pct:
                     reasons.append(f"degradation={avg_degradation:.1f}% > {self.max_degradation_pct}%")
                 if not mc_pass:
@@ -407,62 +516,56 @@ class RollingBacktestOptimizer:
             if not is_better:
                 reasons.append(f"score {best_overall_oos_score:.4f} <= current {current_score:.4f}")
 
-            logger.info(
-                f"[OPTIMIZER] {symbol}: Params NÃO aplicados — {', '.join(reasons)}"
-            )
+            logger.info(f"[OPTIMIZER] Params NÃO aplicados — {', '.join(reasons)}")
 
-        # Adicionar ao log
         self._log.append(result)
         self._save_log()
-
         return result
 
     async def run_cycle(self):
-        """Executa um ciclo completo de otimização para todos os símbolos."""
+        """Executa um ciclo completo de otimização global."""
         self._cycle_count += 1
         logger.info(f"\n{'='*60}")
         logger.info(f"[OPTIMIZER] CICLO {self._cycle_count} — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
-        logger.info(f"[OPTIMIZER] Símbolos: {self.symbols}")
+        logger.info(f"[OPTIMIZER] Modo: GLOBAL ({len(self.symbols)} pares)")
         logger.info(f"[OPTIMIZER] Config: {self.n_iterations} iter, {self.n_windows} janelas, {self.days_back}d dados")
         logger.info(f"{'='*60}")
 
-        results = []
-        for symbol in self.symbols:
-            try:
-                result = await self.optimize_symbol(symbol)
-                if result:
-                    results.append(result)
-                    status = "APLICADO" if result["applied"] else "MANTIDO"
-                    logger.info(f"[OPTIMIZER] {symbol}: {status} (score={result['best_oos_score']:.4f})")
-            except Exception as e:
-                logger.error(f"[OPTIMIZER] Erro em {symbol}: {e}")
-                import traceback
-                traceback.print_exc()
-
-        # Resumo do ciclo
-        applied = sum(1 for r in results if r["applied"])
-        logger.info(f"\n[OPTIMIZER] Ciclo {self._cycle_count} completo: {len(results)} símbolos, {applied} atualizados")
+        result = await self.run_global_optimization()
 
         # Salvar status
         self._status = {
             "running": self._running,
+            "mode": "global",
             "cycle": self._cycle_count,
             "last_run": datetime.now(timezone.utc).isoformat(),
             "next_run": (datetime.now(timezone.utc) + timedelta(hours=self.cycle_hours)).isoformat(),
-            "symbols_optimized": len(results),
-            "params_applied": applied,
-            "results": {r["symbol"]: {
-                "score": r["best_oos_score"],
-                "applied": r["applied"],
-                "passes_quality": r["passes_quality"],
-            } for r in results},
         }
+
+        if result:
+            self._status.update({
+                "symbols_count": result.get("n_symbols", 0),
+                "best_oos_score": result.get("best_oos_score", 0),
+                "oos_win_rate": result.get("oos_win_rate", 0),
+                "oos_profit_factor": result.get("oos_profit_factor", 0),
+                "oos_trades": result.get("oos_trades_total", 0),
+                "applied": result.get("applied", False),
+                "passes_quality": result.get("passes_quality", False),
+                "per_symbol": result.get("per_symbol", {}),
+            })
+            status_str = "APLICADO" if result["applied"] else "MANTIDO"
+            logger.info(
+                f"\n[OPTIMIZER] Ciclo {self._cycle_count}: {status_str} "
+                f"(score={result['best_oos_score']:.4f})"
+            )
+        else:
+            logger.warning(f"[OPTIMIZER] Ciclo {self._cycle_count}: sem resultado válido")
 
         status_file = BEST_CONFIG_DIR / "optimizer_status.json"
         with open(status_file, "w") as f:
             json.dump(self._status, f, indent=2, default=str)
 
-        return results
+        return [result] if result else []
 
     async def run_continuous(self):
         """Loop contínuo: roda um ciclo, dorme, repete."""
@@ -477,7 +580,6 @@ class RollingBacktestOptimizer:
                 import traceback
                 traceback.print_exc()
 
-            # Dormir até próximo ciclo
             sleep_secs = self.cycle_hours * 3600
             logger.info(f"[OPTIMIZER] Próximo ciclo em {self.cycle_hours}h...")
             for _ in range(sleep_secs // 30):
