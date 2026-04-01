@@ -80,3 +80,31 @@ services:
     depends_on:
       trading_bot:
         condition: service_started
+
+  optimizer:
+    build: .
+    image: trading_system_pro:latest
+    container_name: trading_optimizer
+    env_file: .env
+    environment:
+      - TZ=UTC
+      - PYTHONPATH=/app:/app/src
+      - PYTHONUNBUFFERED=1
+      - OPTIMIZER_CYCLE_HOURS=${OPTIMIZER_CYCLE_HOURS:-24}
+      - OPTIMIZER_ITERATIONS=${OPTIMIZER_ITERATIONS:-500}
+      - OPTIMIZER_DAYS_BACK=${OPTIMIZER_DAYS_BACK:-90}
+      - OPTIMIZER_WINDOWS=${OPTIMIZER_WINDOWS:-3}
+      - OPTIMIZER_MIN_WR=${OPTIMIZER_MIN_WR:-50}
+      - OPTIMIZER_MIN_PF=${OPTIMIZER_MIN_PF:-1.2}
+      - OPTIMIZER_MC_RUNS=${OPTIMIZER_MC_RUNS:-50}
+      - OPTIMIZER_SYMBOLS=${OPTIMIZER_SYMBOLS:-}
+    command: ["python", "-m", "src.optimizer.run_optimizer"]
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./signals:/app/signals
+      - ./ml_models:/app/ml_models
+    restart: unless-stopped
+    depends_on:
+      trading_bot:
+        condition: service_started
