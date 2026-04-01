@@ -436,7 +436,7 @@ class BacktestEngine:
 
         # Sortino ratio
         downside = [p for p in pnls if p < 0]
-        if downside and np.std(downside, ddof=1) > 0:
+        if len(downside) >= 2 and np.std(downside, ddof=1) > 0:
             sortino = np.mean(pnls) / np.std(downside, ddof=1) * np.sqrt(252)
         else:
             sortino = 0.0
