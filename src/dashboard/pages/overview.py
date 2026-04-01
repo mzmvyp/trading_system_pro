@@ -300,7 +300,7 @@ st.header("🗳️ Voter Accuracy")
 
 voter_data = compute_voter_accuracy()
 if voter_data:
-    all_names = ["rsi", "macd", "trend", "adx", "bb", "orderbook", "mtf", "cvd", "ml", "lstm"]
+    all_names = ["rsi", "macd", "trend", "adx", "bb", "orderbook", "mtf", "cvd", "ml", "lstm", "regime"]
     rows = []
     for name in all_names:
         v = voter_data.get(name, {})
