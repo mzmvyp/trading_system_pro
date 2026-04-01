@@ -451,6 +451,8 @@ class AgnoTradingAgent:
         rsi_oversold = getattr(best, "rsi_oversold", 30) if best else 30
         rsi_overbought = getattr(best, "rsi_overbought", 70) if best else 70
         adx_threshold = getattr(best, "adx_min_strength", getattr(best, "adx_threshold", 25)) if best else 25
+        bb_std = getattr(best, "bb_std", 2.0) if best else 2.0
+        volume_surge = getattr(best, "volume_surge_multiplier", 1.5) if best else 1.5
         thresholds_source = "optimizer" if best else "default"
         indicators = analysis_data.get("key_indicators", {})
         trend_data = analysis_data.get("trend_analysis", {})
@@ -528,33 +530,53 @@ class AgnoTradingAgent:
             voter_votes["adx"] = 0
             details.append(f"ADX weak trend ({adx:.1f} < {adx_threshold})")
 
-        # 5. Bollinger Band position
+        # 5. Bollinger Band position (thresholds ajustados pelo bb_std otimizado)
         bb_pos = indicators.get("bollinger", {}).get("position", 0.5)
-        if is_buy and bb_pos < 0.2:
+        # bb_std mais alto = bandas mais largas = threshold mais generoso
+        # bb_std=2.0 → 0.20/0.80, bb_std=1.5 → 0.25/0.75, bb_std=3.0 → 0.15/0.85
+        bb_lower_thr = max(0.10, 0.40 - bb_std * 0.10)
+        bb_upper_thr = min(0.90, 0.60 + bb_std * 0.10)
+        if is_buy and bb_pos < bb_lower_thr:
             votes_for += 1
             voter_votes["bb"] = 1
-            details.append(f"BB near lower band ({bb_pos:.2f})")
-        elif not is_buy and bb_pos > 0.8:
+            details.append(f"BB near lower band ({bb_pos:.2f} < {bb_lower_thr:.2f})")
+        elif not is_buy and bb_pos > bb_upper_thr:
             votes_for += 1
             voter_votes["bb"] = 1
-            details.append(f"BB near upper band ({bb_pos:.2f})")
+            details.append(f"BB near upper band ({bb_pos:.2f} > {bb_upper_thr:.2f})")
+        elif is_buy and bb_pos > bb_upper_thr:
+            votes_against += 1
+            voter_votes["bb"] = -1
+            details.append(f"BB contra BUY ({bb_pos:.2f} > {bb_upper_thr:.2f})")
+        elif not is_buy and bb_pos < bb_lower_thr:
+            votes_against += 1
+            voter_votes["bb"] = -1
+            details.append(f"BB contra SELL ({bb_pos:.2f} < {bb_lower_thr:.2f})")
         else:
             voter_votes["bb"] = 0
 
-        # 6. Orderbook imbalance alignment
+        # 6. Orderbook imbalance + volume surge alignment
         ob_imbalance = volume_flow.get("orderbook_imbalance", 0)
         ob_bias = volume_flow.get("orderbook_bias", "neutral")
+        vol_ratio = volume_flow.get("volume_ratio", volume_flow.get("volume_surge_ratio", 1.0))
+        has_volume_surge = vol_ratio >= volume_surge
         # Valores possíveis: strong_buy_pressure, buy_pressure, neutral, sell_pressure, strong_sell_pressure
         if (is_buy and "buy" in ob_bias) or (not is_buy and "sell" in ob_bias):
             votes_for += 1
             voter_votes["orderbook"] = 1
-            details.append(f"Orderbook aligned ({ob_bias}, imb={ob_imbalance:.2f})")
+            surge_str = f", SURGE x{vol_ratio:.1f}" if has_volume_surge else ""
+            details.append(f"Orderbook aligned ({ob_bias}, imb={ob_imbalance:.2f}{surge_str})")
         elif (is_buy and "sell" in ob_bias) or (not is_buy and "buy" in ob_bias):
             votes_against += 1
             voter_votes["orderbook"] = -1
             details.append(f"Orderbook contra ({ob_bias}, imb={ob_imbalance:.2f})")
         else:
-            voter_votes["orderbook"] = 0
+            # Volume surge sem bias claro = ainda conta como confirmação parcial
+            if has_volume_surge:
+                voter_votes["orderbook"] = 0
+                details.append(f"Orderbook neutro, mas volume surge x{vol_ratio:.1f} >= {volume_surge:.1f}")
+            else:
+                voter_votes["orderbook"] = 0
 
         # 7. Multi-timeframe alignment
         bullish_count = mtf.get("bullish_count", 0)
