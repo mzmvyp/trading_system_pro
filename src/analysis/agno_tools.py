@@ -1786,6 +1786,48 @@ def validate_risk_and_position(
                 "risk_level": "low"
             }
 
+        # ========================================
+        # COOLDOWN PÓS-FECHAMENTO (anti-whipsaw)
+        # Impede reabrir posição logo após fechamento (TP ou SL)
+        # Bug fix: DRIFTUSDT bateu TP2 e reabriu imediatamente, perdendo o lucro
+        # ========================================
+        try:
+            from src.trading.risk_manager import _check_sl_cooldown, _sl_cooldown_registry, _sl_cooldown_hours
+            from src.trading.risk_manager import _direction_cooldown_registry, _direction_cooldown_hours
+            from datetime import datetime as _dt_cd, timezone as _tz_cd
+
+            # Check 1: Cooldown geral pós-fechamento (4h após qualquer fechamento)
+            if _check_sl_cooldown(symbol):
+                remaining = _sl_cooldown_hours - (_dt_cd.now(_tz_cd.utc) - _sl_cooldown_registry[symbol]).total_seconds() / 3600
+                logger.warning(f"[COOLDOWN] {symbol} BLOQUEADO: cooldown pós-fechamento ativo ({remaining:.1f}h restantes)")
+                return {
+                    "can_execute": False,
+                    "reason": f"Cooldown pós-fechamento ativo para {symbol}: {remaining:.1f}h restantes (evita reentrada imediata)",
+                    "risk_level": "medium"
+                }
+
+            # Check 2: Cooldown direcional (6h para mesma direção)
+            sig_type_cd = signal.get("signal", "").upper()
+            dir_cd = _direction_cooldown_registry.get(symbol)
+            if dir_cd:
+                hours_since = (_dt_cd.now(_tz_cd.utc) - dir_cd["time"]).total_seconds() / 3600
+                if hours_since < _direction_cooldown_hours and sig_type_cd == dir_cd["direction"]:
+                    remaining = _direction_cooldown_hours - hours_since
+                    logger.warning(
+                        f"[COOLDOWN DIRECIONAL] {symbol} BLOQUEADO: {sig_type_cd} bloqueado por {remaining:.1f}h "
+                        f"(última posição {dir_cd['direction']} fechada há {hours_since:.1f}h)"
+                    )
+                    return {
+                        "can_execute": False,
+                        "reason": f"Cooldown direcional: {sig_type_cd} {symbol} bloqueado por {remaining:.1f}h "
+                                  f"(última posição {dir_cd['direction']} fechada há {hours_since:.1f}h)",
+                        "risk_level": "medium"
+                    }
+                elif hours_since >= _direction_cooldown_hours:
+                    del _direction_cooldown_registry[symbol]
+        except Exception as e:
+            logger.warning(f"[COOLDOWN] Erro ao verificar cooldowns: {e}")
+
         # CORRIGIDO: Verificar se já existe QUALQUER posição aberta para este símbolo
         # NÃO permite long e short ao mesmo tempo no mesmo símbolo (de qualquer fonte)
         try:

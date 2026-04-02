@@ -7,7 +7,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from src.core.logger import get_logger
 from src.trading.agent import AgnoTradingAgent
@@ -314,10 +314,14 @@ async def main():
                         logger.info(f"[POSICAO FECHADA] Detectado fechamento: {closed_positions}")
 
                         # Registrar cooldowns para evitar whipsaw e reentrada na mesma direção
+                        # CORRIGIDO: Aplica cooldown para QUALQUER fechamento (TP ou SL)
+                        # Bug fix: DRIFTUSDT bateu TP2 e reabriu imediatamente no mesmo ciclo
                         try:
                             from src.trading.risk_manager import register_position_closed, register_sl_hit
                             for sym in closed_positions:
+                                # Cooldown geral: bloqueia símbolo por 4h após QUALQUER fechamento
                                 register_sl_hit(sym)
+                                logger.warning(f"[COOLDOWN] {sym}: bloqueado por 4h após fechamento de posição (anti-reentrada)")
                                 # Cooldown direcional: bloquear mesma direção por 6h
                                 pos_info = previous_positions_info.get(sym, {})
                                 pos_side = pos_info.get("side", "UNKNOWN")
@@ -401,8 +405,18 @@ async def main():
                         except Exception as e:
                             logger.warning(f"[TOP_MOVERS] Erro ao buscar top movers: {e} (usando apenas pares fixos)")
 
-                    # Filtrar apenas símbolos sem posição ativa
-                    symbols_to_analyze = [s for s in all_symbols if s not in active_positions]
+                    # Filtrar símbolos sem posição ativa E sem cooldown ativo
+                    from src.trading.risk_manager import _check_sl_cooldown, _sl_cooldown_registry, _sl_cooldown_hours
+                    from src.trading.risk_manager import _direction_cooldown_registry
+                    symbols_to_analyze = []
+                    for s in all_symbols:
+                        if s in active_positions_set:
+                            continue
+                        if _check_sl_cooldown(s):
+                            remaining = _sl_cooldown_hours - (datetime.now(timezone.utc) - _sl_cooldown_registry[s]).total_seconds() / 3600
+                            logger.info(f"[COOLDOWN] {s}: pulando análise — cooldown pós-fechamento ({remaining:.1f}h restantes)")
+                            continue
+                        symbols_to_analyze.append(s)
 
                     if not symbols_to_analyze:
                         logger.info("[OK] Todos os pares tem posicoes ativas. Aguardando...")

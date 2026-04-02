@@ -839,6 +839,25 @@ Responda APENAS com JSON:
         # A verificação de posição existente no paper trading será feita em validate_risk_and_position()
 
         # ========================================
+        # COOLDOWN PÓS-FECHAMENTO: Impede análise de símbolo recém-fechado
+        # Bug fix: DRIFTUSDT bateu TP2 e reabriu no mesmo ciclo
+        # ========================================
+        try:
+            from src.trading.risk_manager import _check_sl_cooldown, _sl_cooldown_registry, _sl_cooldown_hours
+            if _check_sl_cooldown(symbol):
+                remaining = _sl_cooldown_hours - (datetime.now(timezone.utc) - _sl_cooldown_registry[symbol]).total_seconds() / 3600
+                logger.warning(f"[COOLDOWN PÓS-FECHAMENTO] {symbol}: análise bloqueada — cooldown ativo ({remaining:.1f}h restantes)")
+                return {
+                    "symbol": symbol,
+                    "signal": "NO_SIGNAL",
+                    "confidence": 0,
+                    "reason": f"Cooldown pós-fechamento ativo: {remaining:.1f}h restantes (evita reentrada imediata)",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+        except Exception as e:
+            logger.warning(f"Erro ao verificar cooldown pós-fechamento: {e}")
+
+        # ========================================
         # COOLDOWN ROBUSTO: Memória + Arquivo
         # Impede análise repetida do mesmo símbolo
         # ========================================
