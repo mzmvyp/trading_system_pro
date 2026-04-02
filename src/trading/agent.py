@@ -1117,8 +1117,21 @@ Responda APENAS com JSON:
             is_sideways = market_regime and market_regime.get("base_regime") == "SIDEWAYS"
 
             if llm_signal_dir in ["BUY", "SELL"] and "error" not in analysis_data:
+                # Drift check: pausar ML se drift severo detectado
+                _ml_paused_by_drift = False
+                try:
+                    from src.analysis.drift_detector import get_drift_detector
+                    if get_drift_detector().should_pause_ml():
+                        _ml_paused_by_drift = True
+                        logger.warning("[DRIFT] ML pausado — drift severo detectado, aguardando retreino")
+                except Exception:
+                    pass
+
                 # VALIDAÇÃO ML: obter voto ML ANTES da confluência
-                ml_validation = self._validate_with_ml_model(agno_signal)
+                if _ml_paused_by_drift:
+                    ml_validation = {"probability": 0.5, "prediction": 0, "ml_vote": 0}
+                else:
+                    ml_validation = self._validate_with_ml_model(agno_signal)
                 ml_prob = ml_validation.get('probability', 0)
                 ml_pred = ml_validation.get('prediction', 0)
                 ml_vote = ml_validation.get("ml_vote", 0)
