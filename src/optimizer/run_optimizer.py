@@ -65,7 +65,7 @@ def main():
     # Ler configuração de variáveis de ambiente
     cycle_hours = int(os.getenv("OPTIMIZER_CYCLE_HOURS", "24"))
     n_iterations = int(os.getenv("OPTIMIZER_ITERATIONS", "500"))
-    days_back = int(os.getenv("OPTIMIZER_DAYS_BACK", "90"))
+    days_back = int(os.getenv("OPTIMIZER_DAYS_BACK", "180"))
     n_windows = int(os.getenv("OPTIMIZER_WINDOWS", "3"))
     min_wr = float(os.getenv("OPTIMIZER_MIN_WR", "50"))
     min_pf = float(os.getenv("OPTIMIZER_MIN_PF", "1.2"))

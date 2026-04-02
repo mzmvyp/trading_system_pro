@@ -678,18 +678,68 @@ class PositionMonitor:
 
                     logger.info(f"[REAVALIACAO PAPER] {symbol} PnL: ${pnl:.2f}")
 
+                    # PositionReevaluator: gestão ativa (breakeven, trailing, parcial)
+                    try:
+                        from src.trading.position_reevaluator import get_position_reevaluator
+                        reeval = get_position_reevaluator()
+                        reeval_result = await reeval.reevaluate({
+                            "symbol": symbol,
+                            "signal": side,
+                            "entry_price": entry_price,
+                            "stop_loss": pos.get("stop_loss", 0),
+                            "take_profit_1": pos.get("take_profit_1", pos.get("tp1", 0)),
+                            "take_profit_2": pos.get("take_profit_2", pos.get("tp2", 0)),
+                            "current_price": current_price,
+                            "timestamp": entry_time_str,
+                            "rsi": rsi,
+                            "adx": indicators.get("adx", 25),
+                            "macd_histogram": macd_hist,
+                        })
+                        reeval_action = reeval_result.get("action", "HOLD")
+                    except Exception as e:
+                        logger.warning(f"[REEVALUATOR] Erro: {e}")
+                        reeval_action = "HOLD"
+                        reeval_result = {}
+
+                    # Combinar: reevaluator + _evaluate_reversal
                     action, reason, details = self._evaluate_reversal(
                         normalized_side, trend, macd_hist, rsi, pnl, entry_price, current_price
                     )
 
-                    if action == "close":
-                        logger.warning(f"[REAVALIACAO PAPER] {symbol} ({normalized_side}): {reason} - FECHANDO!")
+                    # PositionReevaluator tem prioridade para ações de gestão
+                    if reeval_action in ("MOVE_SL_BREAKEVEN", "TRAILING_STOP"):
+                        new_sl = reeval_result.get("new_stop_loss")
+                        if new_sl:
+                            old_sl = pos.get("stop_loss", 0)
+                            sl_is_better = False
+                            if normalized_side == "LONG":
+                                sl_is_better = new_sl > old_sl if old_sl else True
+                            else:
+                                sl_is_better = new_sl < old_sl if old_sl else True
+                            if sl_is_better:
+                                pos["stop_loss"] = new_sl
+                                state_modified = True
+                                results["sl_moved"] += 1
+                                logger.info(f"[REEVALUATOR] {symbol}: {reeval_result.get('reason')} — SL ${old_sl:.4f} -> ${new_sl:.4f}")
+                            else:
+                                results["kept"] += 1
+                        else:
+                            results["kept"] += 1
+
+                    elif reeval_action == "CLOSE" or action == "close":
+                        close_reason = reeval_result.get("reason", reason)
+                        logger.warning(f"[REAVALIACAO PAPER] {symbol} ({normalized_side}): {close_reason} - FECHANDO!")
                         try:
                             if hasattr(agent, 'paper_system') and agent.paper_system:
                                 cp = await agent.paper_system.get_current_price(symbol)
                                 if cp:
                                     await agent.paper_system.close_position_manual(pos_key, cp)
                                     results["closed_by_reversal"] += 1
+                                    # Limpar estado do reevaluator
+                                    try:
+                                        reeval.clear_position(symbol, side)
+                                    except Exception:
+                                        pass
                                 else:
                                     results["errors"].append(f"Preço não disponível para {symbol}")
                             else:
@@ -701,7 +751,6 @@ class PositionMonitor:
                         new_sl = self._calculate_new_sl(action, normalized_side, entry_price, current_price)
                         if new_sl:
                             old_sl = pos.get("stop_loss", 0)
-                            # Só move se o novo SL é MELHOR que o atual
                             sl_is_better = False
                             if normalized_side == "LONG":
                                 sl_is_better = new_sl > old_sl if old_sl else True
@@ -715,7 +764,6 @@ class PositionMonitor:
                                 logger.info(f"[REAVALIACAO PAPER] {symbol}: {reason} - SL ${old_sl:.4f} -> ${new_sl:.4f}")
                             else:
                                 results["kept"] += 1
-                                logger.debug(f"[REAVALIACAO PAPER] {symbol}: novo SL ${new_sl:.4f} não é melhor que atual ${old_sl:.4f}")
                         else:
                             results["kept"] += 1
                     else:

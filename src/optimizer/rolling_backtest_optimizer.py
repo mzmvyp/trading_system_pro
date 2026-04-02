@@ -133,7 +133,7 @@ class RollingBacktestOptimizer:
         symbols: List[str] = None,
         interval: str = "1h",
         cycle_hours: int = 24,
-        days_back: int = 90,
+        days_back: int = 180,
         n_iterations: int = 500,
         n_windows: int = 3,
         in_sample_ratio: float = 0.80,
