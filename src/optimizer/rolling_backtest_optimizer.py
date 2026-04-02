@@ -548,6 +548,81 @@ class RollingBacktestOptimizer:
         except Exception as e:
             logger.warning(f"[SETUP_VALIDATOR] Erro na validação periódica: {e}")
 
+        # Drift Detector: verificar se features mudaram vs baseline
+        drift_report = None
+        try:
+            from src.analysis.drift_detector import get_drift_detector
+            import glob
+            import json as _json
+
+            detector = get_drift_detector()
+
+            # Coletar sinais recentes (últimos 7 dias) para comparar com baseline
+            recent_signals = []
+            signal_files = sorted(glob.glob("signals/agno_*.json"), reverse=True)[:200]
+            for sf in signal_files:
+                try:
+                    with open(sf, "r") as f:
+                        sig = _json.load(f)
+                    # Extrair features relevantes
+                    indicators = sig.get("key_indicators", {})
+                    recent_signals.append({
+                        "rsi": indicators.get("rsi", {}).get("value", sig.get("rsi", 50)),
+                        "macd_histogram": indicators.get("macd", {}).get("histogram", sig.get("macd_histogram", 0)),
+                        "adx": sig.get("adx", indicators.get("adx", 25)),
+                        "atr": sig.get("atr", 0),
+                        "bb_position": indicators.get("bollinger", {}).get("position", 0.5),
+                        "confidence": sig.get("confidence", 5),
+                        "risk_distance_pct": sig.get("risk_distance_pct", 0),
+                        "reward_distance_pct": sig.get("reward_distance_pct", 0),
+                        "risk_reward_ratio": sig.get("risk_reward_ratio", 0),
+                    })
+                except Exception:
+                    continue
+
+            if len(recent_signals) >= 20:
+                # Criar baseline se não existe
+                if not detector.baseline:
+                    detector.create_baseline_from_signals(recent_signals)
+                    logger.info("[DRIFT] Baseline criado a partir dos sinais recentes")
+                else:
+                    # Coletar predições ML recentes
+                    ml_predictions = []
+                    votes_log = "signals/model_votes_log.jsonl"
+                    if os.path.exists(votes_log):
+                        try:
+                            with open(votes_log, "r") as f:
+                                for line in f:
+                                    line = line.strip()
+                                    if line:
+                                        try:
+                                            rec = _json.loads(line)
+                                            prob = rec.get("ml_probability", rec.get("ml_prob"))
+                                            if prob is not None:
+                                                ml_predictions.append(float(prob))
+                                        except Exception:
+                                            continue
+                        except Exception:
+                            pass
+
+                    drift_report = detector.generate_report(
+                        recent_signals,
+                        predictions=ml_predictions[-100:] if ml_predictions else None,
+                    )
+                    if drift_report.overall_drift_detected:
+                        logger.warning(
+                            f"[DRIFT] ⚠ DRIFT DETECTADO: {drift_report.overall_severity} | "
+                            f"Features: {drift_report.features_with_drift} | "
+                            f"Recomendações: {drift_report.recommendations}"
+                        )
+                    else:
+                        logger.info("[DRIFT] Modelo estável — sem drift significativo")
+            else:
+                logger.info(f"[DRIFT] Apenas {len(recent_signals)} sinais — aguardando mais dados")
+
+        except Exception as e:
+            logger.warning(f"[DRIFT] Erro na detecção de drift: {e}")
+
         # Salvar status
         self._status = {
             "running": self._running,
@@ -581,6 +656,14 @@ class RollingBacktestOptimizer:
                 "total_signals": setup_validation.get("total_signals", 0),
                 "total_setups": setup_validation.get("total_setups", 0),
                 "per_symbol": setup_validation.get("per_symbol", {}),
+            }
+
+        if drift_report:
+            self._status["drift"] = {
+                "detected": drift_report.overall_drift_detected,
+                "severity": drift_report.overall_severity,
+                "features_with_drift": drift_report.features_with_drift,
+                "recommendations": drift_report.recommendations,
             }
 
         status_file = BEST_CONFIG_DIR / "optimizer_status.json"

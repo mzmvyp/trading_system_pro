@@ -261,6 +261,76 @@ except Exception:
     st.info("Setup Validator não disponível.")
 
 # ================================================================
+# DRIFT DETECTOR — Status do Modelo ML
+# ================================================================
+st.markdown("---")
+st.header("Drift Detector — Saúde do Modelo ML")
+
+try:
+    from src.analysis.drift_detector import get_drift_detector
+    dd = get_drift_detector()
+    last_report = dd.get_last_report()
+
+    if last_report:
+        severity = last_report.get("overall_severity", "NONE")
+        severity_colors = {"NONE": "green", "LOW": "blue", "MODERATE": "orange", "HIGH": "red"}
+        color = severity_colors.get(severity, "gray")
+        detected = last_report.get("overall_drift_detected", False)
+
+        col_d1, col_d2, col_d3 = st.columns(3)
+        with col_d1:
+            st.metric("Severidade", severity)
+        with col_d2:
+            st.metric("Features c/ Drift", last_report.get("feature_drift_count", 0))
+        with col_d3:
+            ml_paused = dd.should_pause_ml()
+            st.metric("ML Pausado", "SIM" if ml_paused else "NÃO")
+
+        if detected:
+            st.warning(f"Drift detectado: {', '.join(last_report.get('features_with_drift', []))}")
+
+        # Recomendações
+        recs = last_report.get("recommendations", [])
+        if recs:
+            st.subheader("Recomendações")
+            for r in recs:
+                st.write(f"- {r}")
+
+        # Feature details
+        feat_results = last_report.get("feature_results", [])
+        if feat_results:
+            feat_rows = []
+            for fr in feat_results:
+                feat_rows.append({
+                    "Feature": fr.get("feature_name", ""),
+                    "PSI": f"{fr.get('psi_score', 0):.3f}",
+                    "KS Stat": f"{fr.get('ks_statistic', 0):.3f}",
+                    "Severidade": fr.get("severity", "NONE"),
+                    "Baseline Mean": f"{fr.get('baseline_mean', 0):.2f}",
+                    "Current Mean": f"{fr.get('current_mean', 0):.2f}",
+                    "Drift?": "SIM" if fr.get("drift_detected") else "",
+                })
+            st.dataframe(pd.DataFrame(feat_rows), use_container_width=True, hide_index=True)
+
+        # Prediction drift
+        pred_drift = last_report.get("prediction_drift", {})
+        if pred_drift.get("n_predictions", 0) > 0:
+            st.subheader("Prediction Drift")
+            col_p1, col_p2, col_p3 = st.columns(3)
+            with col_p1:
+                st.metric("Média Predições", f"{pred_drift.get('mean_prediction', 0.5):.2f}")
+            with col_p2:
+                st.metric("Viés", pred_drift.get("bias_direction", "NEUTRAL"))
+            with col_p3:
+                st.metric("% Positivas", f"{pred_drift.get('positive_ratio', 0.5):.0%}")
+
+        st.caption(f"Último check: {last_report.get('timestamp', 'N/A')}")
+    else:
+        st.info("Drift Detector ainda sem dados. Aguarde o optimizer completar um ciclo.")
+except Exception:
+    st.info("Drift Detector não disponível.")
+
+# ================================================================
 # FOOTER
 # ================================================================
 st.markdown("---")
