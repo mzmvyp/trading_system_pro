@@ -824,28 +824,58 @@ class BinanceFuturesExecutor:
                 }
 
             # 5. Calcular e configurar alavancagem DINAMICA
-            # Conceito: margem isolada = valor do risco (risk_amount)
-            # A alavancagem é CONSEQUÊNCIA do cálculo: leverage = posicao / margem
-            # O SL é a proteção real — a margem isolada deve ser ≈ risk_amount
-            # Assim, se SL falhar (gap/spike), a perda máxima = margem ≈ risco planejado
+            # CORRIGIDO: A margem isolada deve ser >= 2x o risco do SL
+            # Isso garante que o preço de liquidação fique BEM ALÉM do SL
+            # Antes: margem ≈ risk_amount → liquidação quase no SL (1% de diferença!)
+            # Agora: margem ≈ 2x risk_amount → liquidação ~2x além do SL
+            # Exemplo: SL a 8%, liquidação fica a ~16% → impossível liquidar antes do SL
             position_value = position_size * entry_price
-            # Buffer de 5% para taxas de abertura/fechamento e slippage do SL
-            desired_margin = risk_amount * 1.05
+            # Margem = 2x o risco + 10% buffer para taxas
+            # Isso faz a alavancagem ser ~metade do que era antes
+            # Se SL = 8%, leverage antes = ~11x, agora = ~5x
+            # Preço de liquidação fica a ~20% vs ~9% antes
+            desired_margin = risk_amount * 2.1  # 2x risco + 10% buffer para taxas
 
             if desired_margin > 0:
                 calculated_leverage = int(position_value / desired_margin)
                 # Cap: usar limite do par na Binance (nunca exceder o que a exchange permite)
                 symbol_max_leverage = symbol_info.get("max_leverage", 20) if symbol_info else 20
-                calculated_leverage = max(1, min(calculated_leverage, symbol_max_leverage))
+                # Cap adicional: NUNCA mais que 15x para evitar liquidações
+                calculated_leverage = max(1, min(calculated_leverage, symbol_max_leverage, 15))
             else:
                 calculated_leverage = self.default_leverage
 
             actual_margin = position_value / calculated_leverage if calculated_leverage > 0 else position_value
+
+            # Verificação de segurança: SL distance * leverage deve ser < 80% da margem
+            # Se não, a liquidação pode acontecer antes do SL
+            sl_pct = abs(entry_price - stop_loss) / entry_price * 100
+            margin_loss_at_sl = sl_pct * calculated_leverage  # % da margem perdida no SL
+            liq_distance_approx = 100.0 / calculated_leverage * 0.95  # ~distância de liquidação (com maintenance margin)
             logger.info(
                 f"[ALAVANCAGEM] Posicao: ${position_value:.2f} | Risco: ${risk_amount:.2f} | "
                 f"Margem: ${actual_margin:.2f} | Leverage: {calculated_leverage}x "
                 f"(max_par={symbol_info.get('max_leverage', '?') if symbol_info else '?'})"
             )
+            logger.info(
+                f"[SEGURANCA] SL: {sl_pct:.1f}% | Perda no SL: {margin_loss_at_sl:.0f}% da margem | "
+                f"Liquidação ~{liq_distance_approx:.1f}% | "
+                f"Gap seguro: {liq_distance_approx - sl_pct:.1f}%"
+            )
+            if margin_loss_at_sl > 75:
+                logger.warning(
+                    f"[PERIGO] Perda no SL seria {margin_loss_at_sl:.0f}% da margem! "
+                    f"Muito próximo da liquidação. Reduzindo leverage."
+                )
+                # Recalcular para que perda no SL = máximo 60% da margem
+                safe_leverage = int(60.0 / sl_pct) if sl_pct > 0 else 5
+                calculated_leverage = max(1, min(safe_leverage, calculated_leverage))
+                actual_margin = position_value / calculated_leverage if calculated_leverage > 0 else position_value
+                margin_loss_at_sl = sl_pct * calculated_leverage
+                logger.warning(
+                    f"[CORRIGIDO] Novo leverage: {calculated_leverage}x | "
+                    f"Perda no SL: {margin_loss_at_sl:.0f}% da margem"
+                )
 
             leverage_result = await self.set_leverage(symbol, calculated_leverage)
             if "error" in leverage_result:
