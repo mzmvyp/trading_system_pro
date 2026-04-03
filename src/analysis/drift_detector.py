@@ -435,11 +435,48 @@ class DriftDetector:
         return recs
 
     def should_pause_ml(self) -> bool:
-        """Retorna True se drift é severo o suficiente para pausar ML."""
+        """Retorna True se drift é severo o suficiente para pausar ML.
+
+        Time-limited: ML pause expires after 12h to prevent permanent lockout.
+        When expired, auto-rebuilds baseline from recent signals.
+        """
         if not self.drift_history:
             return False
         last = self.drift_history[-1]
-        return last.get("overall_severity") == "HIGH"
+        if last.get("overall_severity") != "HIGH":
+            return False
+
+        # Time-based expiry: don't pause ML forever
+        try:
+            last_ts = datetime.fromisoformat(last.get("timestamp", ""))
+            hours_since = (datetime.now(timezone.utc) - last_ts).total_seconds() / 3600
+            if hours_since > 12:
+                logger.info(
+                    f"[DRIFT] Pausa ML expirada ({hours_since:.1f}h > 12h). "
+                    f"ML reativado — baseline será recriado no próximo ciclo."
+                )
+                # Auto-rebuild baseline from recent signals
+                self._auto_rebuild_baseline()
+                return False
+        except (ValueError, TypeError):
+            pass
+
+        return True
+
+    def _auto_rebuild_baseline(self):
+        """Rebuild baseline from recent evaluated signals to clear stale drift."""
+        try:
+            from src.trading.signal_tracker import load_all_signals
+            recent_signals = load_all_signals()
+            if recent_signals and len(recent_signals) >= 20:
+                # Use last 100 signals for new baseline
+                recent = recent_signals[-100:]
+                self.create_baseline_from_signals(recent)
+                logger.info(f"[DRIFT] Baseline recriado com {len(recent)} sinais recentes")
+            else:
+                logger.warning("[DRIFT] Sinais insuficientes para rebuild de baseline")
+        except Exception as e:
+            logger.warning(f"[DRIFT] Erro ao reconstruir baseline: {e}")
 
     def get_last_report(self) -> Optional[Dict]:
         return self.drift_history[-1] if self.drift_history else None

@@ -87,7 +87,7 @@ def _register_trade_result(symbol: str, add_trade_result_fn):
     try:
         # Buscar ultimo sinal salvo para este simbolo
         import glob as glob_mod
-        signal_files = glob_mod.glob(f"signals/agno_*_{symbol}_*.json")
+        signal_files = glob_mod.glob(f"signals/agno_{symbol}_*.json")
         if not signal_files:
             return
 
@@ -103,13 +103,11 @@ def _register_trade_result(symbol: str, add_trade_result_fn):
         result = 'TIMEOUT'
         return_pct = 0.0
 
+        # Try portfolio state (paper trading)
         if os.path.exists("portfolio/state.json"):
             with open("portfolio/state.json", 'r', encoding='utf-8') as f:
                 state = json.load(f)
-                state.get("positions", {})
                 trade_history = state.get("trade_history", [])
-
-                # Procurar no historico de trades
                 for trade in reversed(trade_history):
                     if trade.get("symbol") == symbol:
                         pnl = trade.get("pnl", trade.get("pnl_pct", 0))
@@ -119,6 +117,30 @@ def _register_trade_result(symbol: str, add_trade_result_fn):
                         else:
                             result = 'SL'
                         break
+
+        # Fallback for real mode: try to get PnL from Binance income history
+        if result == 'TIMEOUT':
+            try:
+                import asyncio
+                from src.exchange.executor import BinanceFuturesExecutor
+                _exec = BinanceFuturesExecutor()
+                # Get recent income (realized PnL) for this symbol
+                income = asyncio.get_event_loop().run_until_complete(
+                    _exec.client.futures_income_history(symbol=symbol, incomeType="REALIZED_PNL", limit=5)
+                ) if hasattr(_exec, 'client') else []
+                if income:
+                    latest = income[-1]
+                    pnl_val = float(latest.get("income", 0))
+                    return_pct = pnl_val
+                    result = 'TP1' if pnl_val > 0 else 'SL'
+            except Exception as e:
+                logger.debug(f"[ML] Fallback Binance income falhou para {symbol}: {e}")
+
+        # Last resort: infer from signal entry vs TP/SL (positive = TP1, negative = SL)
+        if result == 'TIMEOUT':
+            # Can't determine result, skip this signal (add_signal_result filters TIMEOUT)
+            logger.info(f"[ML] Resultado indeterminado para {symbol}, pulando registro")
+            return
 
         add_trade_result_fn(signal, result, return_pct)
         logger.info(f"[ML] Resultado registrado para online learning: {symbol} -> {result} ({return_pct:+.2f}%)")

@@ -386,6 +386,25 @@ class AgnoTradingAgent:
                 "reason": f"Erro: {e}"
             }
 
+    _voter_accuracy_cache = None
+    _voter_accuracy_cache_time = None
+
+    def _get_cached_voter_accuracy(self) -> Dict:
+        """Get voter accuracy with 1h cache to avoid recomputing every analysis."""
+        now = datetime.now(timezone.utc)
+        if (self._voter_accuracy_cache is not None and
+                self._voter_accuracy_cache_time is not None and
+                (now - self._voter_accuracy_cache_time).total_seconds() < 3600):
+            return self._voter_accuracy_cache
+
+        try:
+            from src.trading.signal_tracker import compute_voter_accuracy
+            self._voter_accuracy_cache = compute_voter_accuracy()
+            self._voter_accuracy_cache_time = now
+            return self._voter_accuracy_cache
+        except Exception:
+            return {}
+
     def _encode_trend(self, trend: str) -> int:
         """Codifica tendencia para valor numerico"""
         trend_map = {'strong_bullish': 2, 'bullish': 1, 'neutral': 0, 'bearish': -1, 'strong_bearish': -2}
@@ -656,6 +675,38 @@ class AgnoTradingAgent:
                 details.append(f"Setup neutro ({sv_rec}, n={sv_samples})")
         except Exception:
             voter_votes["setup_validator"] = 0
+
+        # Adaptive voter weights: invert votes from voters with proven <45% accuracy
+        # This turns consistently wrong voters into useful contrarian signals
+        try:
+            voter_accuracy = self._get_cached_voter_accuracy()
+            CONTRARIAN_VOTERS = ["rsi", "macd", "trend", "adx", "bb", "orderbook", "cvd", "regime"]
+            MIN_SAMPLES_FOR_INVERSION = 20
+            INVERSION_THRESHOLD = 0.45  # Invert if accuracy < 45%
+
+            for voter_name in CONTRARIAN_VOTERS:
+                acc_data = voter_accuracy.get(voter_name, {})
+                total = acc_data.get("total", 0)
+                accuracy = acc_data.get("accuracy")
+
+                if total >= MIN_SAMPLES_FOR_INVERSION and accuracy is not None and accuracy < INVERSION_THRESHOLD:
+                    original_vote = voter_votes.get(voter_name, 0)
+                    if original_vote != 0:
+                        # Invert the vote
+                        inverted = -original_vote
+                        # Adjust vote counts
+                        if original_vote > 0:
+                            votes_for -= 1
+                            votes_against += 1
+                        else:
+                            votes_against -= 1
+                            votes_for += 1
+                        voter_votes[voter_name] = inverted
+                        details.append(
+                            f"{voter_name.upper()} INVERTIDO (acc={accuracy:.0%}, n={total})"
+                        )
+        except Exception:
+            pass
 
         total_votes = votes_for + votes_against
         score = votes_for / max(total_votes, 1)

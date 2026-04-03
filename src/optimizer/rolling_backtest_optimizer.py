@@ -450,7 +450,8 @@ class RollingBacktestOptimizer:
         )
 
         current_score = self._load_current_global_score()
-        is_better = best_overall_oos_score > current_score * 1.05
+        # Require at least 2% improvement (was 5%, which rejected valid improvements)
+        is_better = best_overall_oos_score > current_score * 1.02
 
         should_apply = passes_quality and (is_better or current_score == 0)
 
@@ -514,7 +515,11 @@ class RollingBacktestOptimizer:
                 if not mc_pass:
                     reasons.append("Monte Carlo falhou")
             if not is_better:
-                reasons.append(f"score {best_overall_oos_score:.4f} <= current {current_score:.4f}")
+                needed = current_score * 1.02
+                reasons.append(
+                    f"score {best_overall_oos_score:.4f} não superou mínimo de 2% sobre current "
+                    f"{current_score:.4f} (precisa {needed:.4f})"
+                )
 
             logger.info(f"[OPTIMIZER] Params NÃO aplicados — {', '.join(reasons)}")
 
