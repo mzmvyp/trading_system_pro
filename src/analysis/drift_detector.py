@@ -475,6 +475,22 @@ class DriftDetector:
                 logger.info(f"[DRIFT] Baseline recriado com {len(recent)} sinais recentes")
             else:
                 logger.warning("[DRIFT] Sinais insuficientes para rebuild de baseline")
+
+            # Clear stale HIGH drift entry to prevent rebuild loop
+            self.drift_history.append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "overall_drift_detected": False,
+                "overall_severity": "NONE",
+                "feature_drift_count": 0,
+                "features_with_drift": [],
+                "feature_results": [],
+                "prediction_drift": {"drift_detected": False, "severity": "NONE"},
+                "performance_drift": {"drift_detected": False, "severity": "NONE"},
+                "recommendations": ["Baseline recriado após expiração de pausa ML"],
+            })
+            if len(self.drift_history) > 100:
+                self.drift_history = self.drift_history[-100:]
+            self._save_json(HISTORY_FILE, self.drift_history)
         except Exception as e:
             logger.warning(f"[DRIFT] Erro ao reconstruir baseline: {e}")
 
