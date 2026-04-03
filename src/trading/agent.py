@@ -1140,6 +1140,7 @@ Responda APENAS com JSON:
                     logger.debug(f"[ML] Indicadores do analysis_data: RSI={agno_signal.get('rsi')}, ADX={agno_signal.get('adx')}")
                 else:
                     # Fallback: coletar indicadores separadamente
+                    # analyze_technical_indicators auto-carrega params otimizados por símbolo
                     tech_data = await analyze_technical_indicators(symbol)
                     if tech_data and "indicators" in tech_data:
                         indicators = tech_data["indicators"]
