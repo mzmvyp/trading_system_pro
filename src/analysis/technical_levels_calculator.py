@@ -529,3 +529,206 @@ def _validate_risk_reward(
     result["tp1_distance_pct"] = round(tp1_dist / entry * 100, 2)
 
     return result
+
+
+# ===== SIDEWAYS MEAN REVERSION MODE =====
+
+def assess_range_quality(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Avalia a qualidade do range lateral para decidir se vale operar mean reversion.
+
+    Critérios:
+    - BB width estável (não expandindo rapidamente)
+    - Preço dentro das bandas (não rompendo)
+    - RSI não em extremo absoluto (< 20 ou > 80 = possível breakout)
+    - ADX baixo e estável (confirma lateral)
+
+    Returns:
+        Dict com: tradeable (bool), quality_score (0-1), reason (str), bb_data (dict)
+    """
+    indicators = analysis_data.get("key_indicators", {})
+    raw = analysis_data.get("_raw_indicators", {})
+    trend_data = analysis_data.get("trend_analysis", {})
+
+    bb_upper = raw.get("bb_upper", 0)
+    bb_lower = raw.get("bb_lower", 0)
+    bb_middle = raw.get("bb_middle", 0)
+    close = raw.get("close", indicators.get("close", indicators.get("price", 0)))
+    adx = trend_data.get("adx", indicators.get("adx", {}).get("value", 25) if isinstance(indicators.get("adx"), dict) else indicators.get("adx", 25))
+    rsi = indicators.get("rsi", {}).get("value", 50) if isinstance(indicators.get("rsi"), dict) else indicators.get("rsi", 50)
+
+    if not bb_upper or not bb_lower or bb_upper <= bb_lower or not close:
+        return {"tradeable": False, "quality_score": 0, "reason": "BB data indisponível",
+                "bb_data": {"upper": 0, "lower": 0, "middle": 0, "width_pct": 0}}
+
+    bb_width_pct = (bb_upper - bb_lower) / close * 100
+    bb_position = (close - bb_lower) / (bb_upper - bb_lower) if (bb_upper - bb_lower) > 0 else 0.5
+
+    score = 0.0
+    reasons = []
+
+    # 1. Range deve ter tamanho mínimo (> 0.5%) para ter lucro viável
+    if bb_width_pct < 0.5:
+        return {"tradeable": False, "quality_score": 0, "reason": "Range muito estreito (BB width < 0.5%)",
+                "bb_data": {"upper": bb_upper, "lower": bb_lower, "middle": bb_middle,
+                            "width_pct": round(bb_width_pct, 3), "position": round(bb_position, 3)}}
+
+    # 2. Range não pode ser excessivo (> 8%) — seria volátil demais para mean reversion
+    if bb_width_pct > 8.0:
+        return {"tradeable": False, "quality_score": 0, "reason": f"Range muito amplo ({bb_width_pct:.1f}% > 8%)",
+                "bb_data": {"upper": bb_upper, "lower": bb_lower, "middle": bb_middle,
+                            "width_pct": round(bb_width_pct, 3), "position": round(bb_position, 3)}}
+
+    # 3. Preço deve estar PERTO de uma extremidade (< 0.25 ou > 0.75)
+    # Mean reversion = comprar na banda inferior, vender na superior
+    near_extreme = bb_position < 0.25 or bb_position > 0.75
+    if near_extreme:
+        score += 0.4
+        reasons.append(f"BB pos={bb_position:.2f} (perto de extremo)")
+    else:
+        score += 0.1
+        reasons.append(f"BB pos={bb_position:.2f} (meio do range)")
+
+    # 4. ADX baixo confirma lateral
+    if adx < 15:
+        score += 0.3
+        reasons.append(f"ADX={adx:.1f} (forte lateral)")
+    elif adx < 20:
+        score += 0.2
+        reasons.append(f"ADX={adx:.1f} (lateral)")
+    elif adx < 25:
+        score += 0.1
+        reasons.append(f"ADX={adx:.1f} (fraco lateral)")
+
+    # 5. RSI moderado (não em extremo absoluto que indique breakout)
+    if 25 <= rsi <= 75:
+        score += 0.2
+        reasons.append(f"RSI={rsi:.1f} (dentro do range)")
+    elif 20 <= rsi <= 80:
+        score += 0.1
+        reasons.append(f"RSI={rsi:.1f} (perto do extremo)")
+    else:
+        # RSI < 20 ou > 80 pode indicar breakout iminente — não operar mean reversion
+        return {"tradeable": False, "quality_score": 0,
+                "reason": f"RSI em extremo absoluto ({rsi:.1f}) — possível breakout",
+                "bb_data": {"upper": bb_upper, "lower": bb_lower, "middle": bb_middle,
+                            "width_pct": round(bb_width_pct, 3), "position": round(bb_position, 3)}}
+
+    # 6. Width ideal para scalp (1% - 4%) = bonus
+    if 1.0 <= bb_width_pct <= 4.0:
+        score += 0.1
+        reasons.append(f"BB width={bb_width_pct:.2f}% (ideal)")
+
+    tradeable = score >= 0.4 and near_extreme
+    reason = " | ".join(reasons)
+
+    return {
+        "tradeable": tradeable,
+        "quality_score": round(score, 2),
+        "reason": reason,
+        "bb_data": {
+            "upper": bb_upper,
+            "lower": bb_lower,
+            "middle": bb_middle,
+            "width_pct": round(bb_width_pct, 3),
+            "position": round(bb_position, 3),
+        },
+    }
+
+
+def calculate_sideways_mean_reversion_levels(
+    entry_price: float,
+    direction: str,
+    bb_data: Dict[str, Any],
+    atr: float = 0,
+) -> Dict[str, Any]:
+    """
+    Calcula SL/TP específicos para mean reversion em mercado lateral.
+
+    Lógica:
+    - BUY perto da BB inferior → TP1 = BB middle, TP2 = BB upper (com margem)
+    - SELL perto da BB superior → TP1 = BB middle, TP2 = BB lower (com margem)
+    - SL = além da banda (com margem ATR pequena)
+
+    Isso gera R:R bom porque o SL é curto (logo além da banda) e o TP é a banda oposta.
+    """
+    bb_upper = bb_data["upper"]
+    bb_lower = bb_data["lower"]
+    bb_middle = bb_data["middle"]
+
+    if not atr or atr <= 0:
+        atr = entry_price * 0.005  # fallback 0.5%
+
+    # Margem de segurança: 30% do ATR para não ser stopado no pavio
+    margin = atr * 0.3
+
+    if direction == "BUY":
+        # BUY: entrada perto da BB lower
+        # SL logo abaixo da BB lower
+        sl = bb_lower - margin
+        sl_method = "BB_lower_mean_rev"
+
+        # TP1 = BB middle (centro do range)
+        tp1 = bb_middle
+        tp1_method = "BB_middle_mean_rev"
+
+        # TP2 = 75% do caminho até BB upper (não esperar toque exato)
+        tp2 = bb_middle + (bb_upper - bb_middle) * 0.75
+        tp2_method = "BB_upper_75pct_mean_rev"
+
+        # Validações
+        if sl <= 0:
+            sl = entry_price * 0.995
+        if tp1 <= entry_price:
+            tp1 = entry_price + (entry_price - sl) * 1.5
+            tp1_method = "min_RR_mean_rev"
+        if tp2 <= tp1:
+            tp2 = tp1 + (tp1 - entry_price) * 0.5
+    else:
+        # SELL: entrada perto da BB upper
+        # SL logo acima da BB upper
+        sl = bb_upper + margin
+        sl_method = "BB_upper_mean_rev"
+
+        # TP1 = BB middle
+        tp1 = bb_middle
+        tp1_method = "BB_middle_mean_rev"
+
+        # TP2 = 75% do caminho até BB lower
+        tp2 = bb_middle - (bb_middle - bb_lower) * 0.75
+        tp2_method = "BB_lower_75pct_mean_rev"
+
+        # Validações
+        if tp1 >= entry_price:
+            tp1 = entry_price - (sl - entry_price) * 1.5
+            tp1_method = "min_RR_mean_rev"
+        if tp2 >= tp1:
+            tp2 = tp1 - (entry_price - tp1) * 0.5
+        if tp2 <= 0:
+            tp2 = tp1 * 0.99
+
+    sl_dist = abs(entry_price - sl) / entry_price * 100
+    tp1_dist = abs(tp1 - entry_price) / entry_price * 100
+    rr = tp1_dist / sl_dist if sl_dist > 0 else 0
+
+    # Clampar SL dentro dos limites
+    if sl_dist < MIN_SL_DISTANCE_PCT:
+        if direction == "BUY":
+            sl = entry_price * (1 - MIN_SL_DISTANCE_PCT / 100)
+        else:
+            sl = entry_price * (1 + MIN_SL_DISTANCE_PCT / 100)
+        sl_dist = MIN_SL_DISTANCE_PCT
+        sl_method += "+clamped"
+
+    return {
+        "stop_loss": round(sl, 8),
+        "take_profit_1": round(tp1, 8),
+        "take_profit_2": round(tp2, 8),
+        "sl_method": sl_method,
+        "tp1_method": tp1_method,
+        "tp2_method": tp2_method,
+        "sl_distance_pct": round(sl_dist, 2),
+        "tp1_distance_pct": round(tp1_dist, 2),
+        "risk_reward": round(rr, 2),
+        "mode": "sideways_mean_reversion",
+    }

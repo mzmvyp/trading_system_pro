@@ -523,6 +523,10 @@ class RealPaperTradingSystem:
                         }
 
                         max_duration = max_hours.get(operation_type, 168)
+                        # Respeitar timeout customizado (ex: mean reversion sideways = 0.25h)
+                        custom_max = position.get("max_duration_hours")
+                        if custom_max and custom_max > 0:
+                            max_duration = custom_max
 
                         if hours_open > max_duration:
                             logger.warning(f"[TIMEOUT] {clean_symbol} {source}: Posição aberta há {hours_open:.1f}h (máx: {max_duration}h para {operation_type})")
