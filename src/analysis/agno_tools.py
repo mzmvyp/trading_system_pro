@@ -489,13 +489,26 @@ async def analyze_order_flow(symbol: str) -> Dict[str, Any]:
             "symbol": symbol
         }
 
-async def analyze_technical_indicators(symbol: str = "BTCUSDT") -> Dict[str, Any]:
+async def analyze_technical_indicators(symbol: str = "BTCUSDT", optimized_params: Optional[Dict] = None) -> Dict[str, Any]:
     """
     Analisa indicadores técnicos REAIS usando TA-Lib.
     MELHORADO: Inclui EMA, OBV, Volume Profile e Fibonacci conforme sugestões Claude/DeepSeek.
     CORRIGIDO: Agora async usando BinanceClient.
+    DINÂMICO: Usa parâmetros otimizados do ContinuousOptimizer quando disponíveis.
+    Se optimized_params não for passado, tenta carregar automaticamente para o símbolo.
     """
     try:
+        # Auto-carregar parâmetros otimizados se não fornecidos
+        if optimized_params is None:
+            try:
+                from src.backtesting.continuous_optimizer import load_best_config
+                from dataclasses import asdict
+                best = load_best_config(symbol, "1h")
+                if best:
+                    optimized_params = asdict(best)
+            except Exception:
+                pass  # Usa defaults se falhar
+
         from src.exchange.client import BinanceClient
 
         # CORRIGIDO: Obter klines usando BinanceClient async
@@ -555,35 +568,50 @@ async def analyze_technical_indicators(symbol: str = "BTCUSDT") -> Dict[str, Any
 
         current_price = close_prices[-1]
 
-        # RSI (14 períodos)
-        rsi = talib.RSI(close_prices, timeperiod=14)[-1]
+        # Parâmetros dinâmicos do optimizer (fallback para defaults clássicos)
+        op = optimized_params or {}
+        _rsi_period = int(op.get("rsi_period", 14))
+        _macd_fast = int(op.get("macd_fast", 12))
+        _macd_slow = int(op.get("macd_slow", 26))
+        _macd_signal = int(op.get("macd_signal", 9))
+        _adx_period = int(op.get("adx_period", 14))
+        _atr_period = int(op.get("atr_period", 14))
+        _bb_period = int(op.get("bb_period", 20))
+        _bb_std = float(op.get("bb_std", 2.0))
+        _params_source = "optimizer" if optimized_params else "default"
+        logger.info(f"[{symbol}] Indicadores usando params {_params_source}: RSI={_rsi_period}, MACD={_macd_fast}/{_macd_slow}/{_macd_signal}, ADX={_adx_period}, BB={_bb_period}/{_bb_std}")
 
-        # MACD
-        macd, macd_signal, macd_hist = talib.MACD(close_prices)
+        # RSI (período dinâmico)
+        rsi = talib.RSI(close_prices, timeperiod=_rsi_period)[-1]
+
+        # MACD (períodos dinâmicos)
+        macd, macd_signal, macd_hist = talib.MACD(close_prices, fastperiod=_macd_fast, slowperiod=_macd_slow, signalperiod=_macd_signal)
         macd_value = macd[-1]
         macd_signal_value = macd_signal[-1]
         macd_histogram = macd_hist[-1]
         macd_crossover = "bullish" if macd_histogram > 0 and macd_value > macd_signal_value else "bearish" if macd_histogram < 0 else "neutral"
 
-        # ADX (14 períodos)
-        adx = talib.ADX(high_prices, low_prices, close_prices, timeperiod=14)[-1]
+        # ADX (período dinâmico)
+        adx = talib.ADX(high_prices, low_prices, close_prices, timeperiod=_adx_period)[-1]
 
-        # ATR (14 períodos)
-        atr = talib.ATR(high_prices, low_prices, close_prices, timeperiod=14)[-1]
+        # ATR (período dinâmico)
+        atr = talib.ATR(high_prices, low_prices, close_prices, timeperiod=_atr_period)[-1]
 
-        # Bollinger Bands
-        bb_upper, bb_middle, bb_lower = talib.BBANDS(close_prices, timeperiod=20)
+        # Bollinger Bands (período e desvio dinâmicos)
+        bb_upper, bb_middle, bb_lower = talib.BBANDS(close_prices, timeperiod=_bb_period, nbdevup=_bb_std, nbdevdn=_bb_std)
         bb_position = (close_prices[-1] - bb_lower[-1]) / (bb_upper[-1] - bb_lower[-1]) if (bb_upper[-1] - bb_lower[-1]) > 0 else 0.5
 
-        # SMA 20, 50 e 200
-        sma_20 = talib.SMA(close_prices, timeperiod=20)[-1]
-        sma_50 = talib.SMA(close_prices, timeperiod=50)[-1]
+        # SMA (fast/slow dinâmicos, 200 sempre fixo)
+        _ema_fast_period = int(op.get("ema_fast", 20))
+        _ema_slow_period = int(op.get("ema_slow", 50))
+        sma_20 = talib.SMA(close_prices, timeperiod=_ema_fast_period)[-1]
+        sma_50 = talib.SMA(close_prices, timeperiod=_ema_slow_period)[-1]
         sma_200 = talib.SMA(close_prices, timeperiod=200) if len(close_prices) >= 200 else None
         sma_200_value = float(sma_200[-1]) if sma_200 is not None and not np.isnan(sma_200[-1]) else None
 
-        # EMA 20, 50 e 200 (conforme sugestão Claude/DeepSeek)
-        ema_20 = talib.EMA(close_prices, timeperiod=20)[-1]
-        ema_50 = talib.EMA(close_prices, timeperiod=50)[-1]
+        # EMA (fast/slow dinâmicos, 200 sempre fixo)
+        ema_20 = talib.EMA(close_prices, timeperiod=_ema_fast_period)[-1]
+        ema_50 = talib.EMA(close_prices, timeperiod=_ema_slow_period)[-1]
         ema_200 = talib.EMA(close_prices, timeperiod=200) if len(close_prices) >= 200 else None
         ema_200_value = float(ema_200[-1]) if ema_200 is not None and not np.isnan(ema_200[-1]) else None
 
@@ -717,7 +745,17 @@ async def analyze_technical_indicators(symbol: str = "BTCUSDT") -> Dict[str, Any
             "fibonacci_levels": fib_levels,
             "support": float(support) if not np.isnan(support) else current_price * 0.95,
             "resistance": float(resistance) if not np.isnan(resistance) else current_price * 1.05,
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "_params_source": _params_source,
+            "_optimized_params_used": {
+                "rsi_period": _rsi_period,
+                "macd": f"{_macd_fast}/{_macd_slow}/{_macd_signal}",
+                "adx_period": _adx_period,
+                "bb_period": _bb_period,
+                "bb_std": _bb_std,
+                "ema_fast": _ema_fast_period,
+                "ema_slow": _ema_slow_period,
+            } if _params_source == "optimizer" else None,
         }
     except Exception as e:
         error_type = type(e).__name__
@@ -1194,9 +1232,21 @@ async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
         Dict estruturado e compacto para a LLM
     """
     try:
+        # Carregar parâmetros otimizados por símbolo (se disponíveis)
+        _opt_params = None
+        try:
+            from src.backtesting.continuous_optimizer import load_best_config
+            from dataclasses import asdict
+            best = load_best_config(symbol, "1h")
+            if best:
+                _opt_params = asdict(best)
+                logger.info(f"[{symbol}] Usando parâmetros otimizados do ContinuousOptimizer")
+        except Exception as e:
+            logger.debug(f"[{symbol}] Sem parâmetros otimizados: {e}")
+
         # Coletar todos os dados necessários (async)
         market_data = await get_market_data(symbol)
-        technical_indicators = await analyze_technical_indicators(symbol)
+        technical_indicators = await analyze_technical_indicators(symbol, optimized_params=_opt_params)
         sentiment = await analyze_market_sentiment(symbol)
         multi_timeframe = await analyze_multiple_timeframes(symbol)
         order_flow = await analyze_order_flow(symbol)
@@ -1419,6 +1469,7 @@ async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
                 "bb_middle": indicators.get("bb_middle", ema_20),
             },
             "_market_structure": technical_indicators.get("market_structure", {}),
+            "_optimized_params": _opt_params,  # None se usando defaults
         }
 
         # Identificar sinais conflitantes
