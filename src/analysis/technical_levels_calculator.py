@@ -184,6 +184,10 @@ def _collect_all_levels(
     atr = volatility.get("atr_value", volatility.get("atr", 0))
     if not atr or atr <= 0:
         atr = current_price * 0.015  # fallback 1.5%
+    # Cap ATR at 5% of price to prevent absurd SL distances for low-priced tokens
+    max_atr = current_price * 0.05
+    if atr > max_atr:
+        atr = max_atr
 
     return {
         "supports": supports,
@@ -334,6 +338,15 @@ def _find_buy_sl(
 
     # Fallback: usar ATR se nenhum suporte valido encontrado
     sl_atr = entry - (atr * _sl_atr_multiplier(op_type))
+    # Clamp ATR fallback to respect MAX_SL_DISTANCE_PCT
+    sl_distance_pct = (entry - sl_atr) / entry * 100 if entry > 0 else 0
+    if sl_distance_pct > MAX_SL_DISTANCE_PCT:
+        sl_atr = entry * (1 - MAX_SL_DISTANCE_PCT / 100)
+    elif sl_distance_pct < MIN_SL_DISTANCE_PCT:
+        sl_atr = entry * (1 - MIN_SL_DISTANCE_PCT / 100)
+    # Never allow SL <= 0
+    if sl_atr <= 0:
+        sl_atr = entry * (1 - min(MAX_SL_DISTANCE_PCT, 5.0) / 100)
     return sl_atr, "ATR_fallback"
 
 
@@ -391,6 +404,12 @@ def _find_sell_sl(
 
     # Fallback ATR
     sl_atr = entry + (atr * _sl_atr_multiplier(op_type))
+    # Clamp ATR fallback to respect MAX_SL_DISTANCE_PCT
+    sl_distance_pct = (sl_atr - entry) / entry * 100 if entry > 0 else 0
+    if sl_distance_pct > MAX_SL_DISTANCE_PCT:
+        sl_atr = entry * (1 + MAX_SL_DISTANCE_PCT / 100)
+    elif sl_distance_pct < MIN_SL_DISTANCE_PCT:
+        sl_atr = entry * (1 + MIN_SL_DISTANCE_PCT / 100)
     return sl_atr, "ATR_fallback"
 
 
@@ -406,8 +425,11 @@ def _find_sell_tp1(
             return s["price"], f"em_{s['source']}"
 
     tp1_atr = entry - (atr * _tp1_atr_multiplier(op_type))
-    if tp1_atr < min_tp1:
+    if tp1_atr < min_tp1 and tp1_atr > 0:
         return tp1_atr, "ATR_fallback"
+    # Ensure TP never goes negative
+    if min_tp1 <= 0:
+        min_tp1 = entry * 0.97  # Fallback: 3% below entry
     return min_tp1, "min_RR_1.5"
 
 
@@ -421,6 +443,9 @@ def _find_sell_tp2(
 
     tp1_distance = entry - tp1
     tp2 = entry - (tp1_distance * 1.5)
+    # Ensure TP2 never goes negative
+    if tp2 <= 0:
+        tp2 = tp1 * 0.97  # Fallback: 3% below TP1
     return tp2, "1.5x_TP1_dist"
 
 
