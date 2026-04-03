@@ -6,7 +6,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from src.analysis.agno_tools import (
     _calculate_suggested_stops,
@@ -195,23 +195,23 @@ def _calculate_overall_bias(data: Dict) -> Dict[str, Any]:
         }
 
 
-async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
+async def prepare_analysis_for_llm(symbol: str, mover_type: Optional[str] = None) -> Dict[str, Any]:
     """Prepara dados SUMARIZADOS e INTERPRETADOS para envio ao DeepSeek."""
     try:
-        # Carregar parâmetros otimizados por símbolo (se disponíveis)
+        # Carregar parâmetros otimizados por símbolo (com fallback de categoria)
         _opt_params = None
         try:
             from src.backtesting.continuous_optimizer import load_best_config
             from dataclasses import asdict
-            best = load_best_config(symbol, "1h")
+            best = load_best_config(symbol, "1h", mover_type=mover_type)
             if best:
                 _opt_params = asdict(best)
-                logger.info(f"[{symbol}] Usando parâmetros otimizados do ContinuousOptimizer")
+                logger.info(f"[{symbol}] Usando parâmetros otimizados (mover_type={mover_type})")
         except Exception as e:
             logger.debug(f"[{symbol}] Sem parâmetros otimizados: {e}")
 
         market_data = await get_market_data(symbol)
-        technical_indicators = await analyze_technical_indicators(symbol, optimized_params=_opt_params)
+        technical_indicators = await analyze_technical_indicators(symbol, optimized_params=_opt_params, mover_type=mover_type)
         sentiment = await analyze_market_sentiment(symbol)
         multi_timeframe = await analyze_multiple_timeframes(symbol)
         order_flow = await analyze_order_flow(symbol)

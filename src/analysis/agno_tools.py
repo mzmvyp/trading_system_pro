@@ -489,13 +489,18 @@ async def analyze_order_flow(symbol: str) -> Dict[str, Any]:
             "symbol": symbol
         }
 
-async def analyze_technical_indicators(symbol: str = "BTCUSDT", optimized_params: Optional[Dict] = None) -> Dict[str, Any]:
+async def analyze_technical_indicators(symbol: str = "BTCUSDT", optimized_params: Optional[Dict] = None, mover_type: Optional[str] = None) -> Dict[str, Any]:
     """
     Analisa indicadores técnicos REAIS usando TA-Lib.
     MELHORADO: Inclui EMA, OBV, Volume Profile e Fibonacci conforme sugestões Claude/DeepSeek.
     CORRIGIDO: Agora async usando BinanceClient.
     DINÂMICO: Usa parâmetros otimizados do ContinuousOptimizer quando disponíveis.
     Se optimized_params não for passado, tenta carregar automaticamente para o símbolo.
+
+    Args:
+        symbol: Par de trading
+        optimized_params: Parâmetros otimizados (se já carregados)
+        mover_type: "gainer", "loser" ou None - usado para fallback de categoria
     """
     try:
         # Auto-carregar parâmetros otimizados se não fornecidos
@@ -503,7 +508,7 @@ async def analyze_technical_indicators(symbol: str = "BTCUSDT", optimized_params
             try:
                 from src.backtesting.continuous_optimizer import load_best_config
                 from dataclasses import asdict
-                best = load_best_config(symbol, "1h")
+                best = load_best_config(symbol, "1h", mover_type=mover_type)
                 if best:
                     optimized_params = asdict(best)
             except Exception:
@@ -1218,7 +1223,7 @@ def _interpret_confluence(bullish_count: int, bearish_count: int) -> str:
 # FUNÇÃO PRINCIPAL: PREPARAR ANÁLISE PARA LLM
 # ============================================================================
 
-async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
+async def prepare_analysis_for_llm(symbol: str, mover_type: Optional[str] = None) -> Dict[str, Any]:
     """
     Prepara dados SUMARIZADOS e INTERPRETADOS para envio ao DeepSeek.
 
@@ -1228,25 +1233,29 @@ async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
     - SEMPRE interpretar valores numéricos em categorias
     - Incluir scores agregados pré-calculados
 
+    Args:
+        symbol: Par de trading
+        mover_type: "gainer", "loser" ou None - para carregar config de categoria
+
     Returns:
         Dict estruturado e compacto para a LLM
     """
     try:
-        # Carregar parâmetros otimizados por símbolo (se disponíveis)
+        # Carregar parâmetros otimizados por símbolo (com fallback de categoria)
         _opt_params = None
         try:
             from src.backtesting.continuous_optimizer import load_best_config
             from dataclasses import asdict
-            best = load_best_config(symbol, "1h")
+            best = load_best_config(symbol, "1h", mover_type=mover_type)
             if best:
                 _opt_params = asdict(best)
-                logger.info(f"[{symbol}] Usando parâmetros otimizados do ContinuousOptimizer")
+                logger.info(f"[{symbol}] Usando parâmetros otimizados do ContinuousOptimizer (mover_type={mover_type})")
         except Exception as e:
             logger.debug(f"[{symbol}] Sem parâmetros otimizados: {e}")
 
         # Coletar todos os dados necessários (async)
         market_data = await get_market_data(symbol)
-        technical_indicators = await analyze_technical_indicators(symbol, optimized_params=_opt_params)
+        technical_indicators = await analyze_technical_indicators(symbol, optimized_params=_opt_params, mover_type=mover_type)
         sentiment = await analyze_market_sentiment(symbol)
         multi_timeframe = await analyze_multiple_timeframes(symbol)
         order_flow = await analyze_order_flow(symbol)

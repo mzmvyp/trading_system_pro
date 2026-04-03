@@ -839,13 +839,14 @@ Responda APENAS com JSON:
 {"signal":"BUY/SELL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":7,"reasoning":"Regras X,Y,Z confirmadas. Conflitos: nenhum/ABC"}
 ```"""
 
-    async def analyze(self, symbol: str = "BTCUSDT") -> Dict[str, Any]:
+    async def analyze(self, symbol: str = "BTCUSDT", mover_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Executa análise completa usando o AGNO Agent.
         CORRIGIDO: Verifica posição existente antes de analisar.
 
         Args:
             symbol: Símbolo para analisar
+            mover_type: "gainer", "loser" ou None - para config de categoria
 
         Returns:
             Sinal de trading estruturado
@@ -1065,8 +1066,8 @@ Responda APENAS com JSON:
             from src.analysis.market_classifier import classify_market_condition
             from src.prompts.deepseek_prompt import _create_analysis_prompt, prepare_analysis_for_llm
 
-            logger.info(f"[AGNO] Coletando dados localmente para {symbol}...")
-            analysis_data = await prepare_analysis_for_llm(symbol)
+            logger.info(f"[AGNO] Coletando dados localmente para {symbol}..." + (f" (mover_type={mover_type})" if mover_type else ""))
+            analysis_data = await prepare_analysis_for_llm(symbol, mover_type=mover_type)
 
             # ========================================
             # DETECÇÃO DE REGIME DE MERCADO
