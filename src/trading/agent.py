@@ -1353,12 +1353,29 @@ Responda APENAS com JSON:
 
                     if base_regime == "SIDEWAYS":
                         is_sideways = True
-                        # Mercado lateral: voto contra + penalidade extra se squeeze
-                        regime_vote = -2 if vol_regime == "SQUEEZE" else -1
-                        votes_against += abs(regime_vote)
-                        confluence["details"].append(
-                            f"REGIME LATERAL ({base_regime}_{vol_regime}) — voto contra x{abs(regime_vote)}"
-                        )
+
+                        # Avaliar qualidade do range para mean reversion
+                        from src.analysis.technical_levels_calculator import assess_range_quality
+                        range_quality = assess_range_quality(analysis_data)
+                        agno_signal["_range_quality"] = range_quality
+
+                        if range_quality["tradeable"]:
+                            # Range BOM: mean reversion viável — penalidade reduzida
+                            regime_vote = -1 if vol_regime == "SQUEEZE" else 0
+                            if regime_vote != 0:
+                                votes_against += abs(regime_vote)
+                            confluence["details"].append(
+                                f"REGIME LATERAL MEAN-REV ({base_regime}_{vol_regime}) — "
+                                f"range quality={range_quality['quality_score']:.2f} ({range_quality['reason']})"
+                            )
+                        else:
+                            # Range RUIM: sem mean reversion — penalidade normal/extra
+                            regime_vote = -2 if vol_regime == "SQUEEZE" else -1
+                            votes_against += abs(regime_vote)
+                            confluence["details"].append(
+                                f"REGIME LATERAL ({base_regime}_{vol_regime}) — voto contra x{abs(regime_vote)} "
+                                f"(range: {range_quality['reason']})"
+                            )
                     elif (is_buy and base_regime == "BULL") or (not is_buy and base_regime == "BEAR"):
                         regime_vote = 1
                         votes_for += 1
@@ -1459,23 +1476,85 @@ Responda APENAS com JSON:
                     op_type = agno_signal.get("operation_type", "DAY_TRADE")
 
                     # ========================================
-                    # REGIME-AWARE: Em mercado lateral → forçar SCALP (alvos curtos)
-                    # Isso reduz os multiplicadores ATR no calculador técnico
+                    # REGIME-AWARE: Em mercado lateral → mean reversion ou SCALP
+                    # Se range bom → mean reversion com BB targets + timeout 15min
+                    # Se range ruim → SCALP normal (filtro extra já penalizou confluência)
                     # ========================================
+                    sideways_mean_rev = False
                     if is_sideways and op_type in ("DAY_TRADE", "SWING_TRADE", "POSITION_TRADE"):
-                        logger.info(
-                            f"[REGIME→SCALP] {symbol}: Mercado lateral detectado. "
-                            f"Forçando SCALP (era {op_type}) — alvos mais curtos"
-                        )
                         op_type = "SCALP"
                         agno_signal["operation_type"] = "SCALP"
                         agno_signal["operation_type_override"] = "regime_sideways"
 
+                        range_quality = agno_signal.get("_range_quality", {})
+                        if range_quality.get("tradeable"):
+                            sideways_mean_rev = True
+                            logger.info(
+                                f"[REGIME→MEAN_REV] {symbol}: Mercado lateral + range bom "
+                                f"(score={range_quality.get('quality_score', 0):.2f}). "
+                                f"Forçando SCALP mean reversion — TP nas Bollinger Bands, timeout 15min"
+                            )
+                        else:
+                            logger.info(
+                                f"[REGIME→SCALP] {symbol}: Mercado lateral detectado. "
+                                f"Forçando SCALP (era {agno_signal.get('operation_type', op_type)}) — alvos mais curtos"
+                            )
+
                     # 2. Calcular SL/TP baseado em NIVEIS TECNICOS REAIS
-                    # Usa suporte/resistencia, Fibonacci, EMAs, BBands, POC
+                    # Em SIDEWAYS com range bom: usar BB mean reversion targets
+                    # Caso contrário: usar suporte/resistencia, Fibonacci, BBands, EMAs, POC
                     # SEMPRE recalcular tecnicamente — mesmo se DeepSeek forneceu valores
-                    # Os valores técnicos são mais confiáveis que os do LLM
                     needs_calc = True  # Sempre usar niveis tecnicos
+
+                    # SIDEWAYS MEAN REVERSION: usar Bollinger Bands como targets
+                    if sideways_mean_rev and "error" not in analysis_data:
+                        try:
+                            from src.analysis.technical_levels_calculator import (
+                                calculate_sideways_mean_reversion_levels,
+                                _collect_all_levels,
+                            )
+                            range_quality = agno_signal.get("_range_quality", {})
+                            bb_data = range_quality.get("bb_data", {})
+                            all_levels = _collect_all_levels(entry, analysis_data)
+                            mr_levels = calculate_sideways_mean_reversion_levels(
+                                entry_price=entry,
+                                direction=direction,
+                                bb_data=bb_data,
+                                atr=all_levels.get("atr", 0),
+                            )
+
+                            old_sl, old_tp1, old_tp2 = sl, tp1, tp2
+                            sl = mr_levels["stop_loss"]
+                            tp1 = mr_levels["take_profit_1"]
+                            tp2 = mr_levels["take_profit_2"]
+                            agno_signal["stop_loss"] = sl
+                            agno_signal["take_profit_1"] = tp1
+                            agno_signal["take_profit_2"] = tp2
+                            agno_signal["sl_method"] = mr_levels["sl_method"]
+                            agno_signal["tp1_method"] = mr_levels["tp1_method"]
+                            agno_signal["tp2_method"] = mr_levels["tp2_method"]
+                            agno_signal["stop_loss_auto_calculated"] = True
+                            agno_signal["tp1_auto_calculated"] = True
+                            agno_signal["tp2_auto_calculated"] = True
+                            agno_signal["sl_tp_source"] = "sideways_mean_reversion"
+                            agno_signal["risk_reward"] = mr_levels.get("risk_reward", 0)
+                            agno_signal["sideways_mode"] = "mean_reversion"
+                            # Timeout reduzido: 15 minutos em mean reversion lateral
+                            agno_signal["max_duration_hours"] = 0.25
+
+                            logger.info(
+                                f"[MEAN_REV SL/TP] {direction} @ ${entry:,.4f} | "
+                                f"SL=${sl:,.4f} ({mr_levels['sl_method']}) | "
+                                f"TP1=${tp1:,.4f} ({mr_levels['tp1_method']}) | "
+                                f"TP2=${tp2:,.4f} ({mr_levels['tp2_method']}) | "
+                                f"R:R={mr_levels.get('risk_reward', 0):.1f} | "
+                                f"BB: [{bb_data.get('lower', 0):,.4f} — "
+                                f"{bb_data.get('middle', 0):,.4f} — {bb_data.get('upper', 0):,.4f}]"
+                            )
+                            needs_calc = False
+                        except Exception as e:
+                            logger.warning(f"[MEAN_REV] Erro no calculador mean reversion: {e}. Usando tech levels padrão.")
+                            needs_calc = True
 
                     if needs_calc and "error" not in analysis_data:
                         try:
