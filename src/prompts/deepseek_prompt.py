@@ -310,7 +310,20 @@ async def prepare_analysis_for_llm(symbol: str, mover_type: Optional[str] = None
             "sentiment": {"overall": sentiment.get("sentiment", "neutral"), "confidence": sentiment.get("confidence", 0.5), "funding_rate": market_data.get("funding_rate", 0), "funding_interpretation": funding_interpretation, "open_interest_trend": "stable"},
             "volatility": {"atr_value": atr_value, "atr_pct": atr_pct, "level": volatility_level, "suggested_stop_pct": suggested_stops["suggested_stop_pct"], "suggested_tp1_pct": suggested_stops["suggested_tp1_pct"], "suggested_tp2_pct": suggested_stops["suggested_tp2_pct"]},
             "conflicting_signals": [],
-            "aggregated_scores": {}
+            "aggregated_scores": {},
+
+            # Dados brutos para calculo tecnico de SL/TP e range quality (nao enviados ao LLM)
+            "_raw_indicators": {
+                "ema_20": ema_20,
+                "ema_50": ema_50,
+                "ema_200": ema_200,
+                "sma_200": indicators.get("sma_200"),
+                "bb_upper": indicators.get("bb_upper", current_price * 1.05),
+                "bb_lower": indicators.get("bb_lower", current_price * 0.95),
+                "bb_middle": indicators.get("bb_middle", ema_20),
+            },
+            "_market_structure": technical_indicators.get("market_structure", {}),
+            "_optimized_params": _opt_params,
         }
 
         analysis["conflicting_signals"] = _identify_conflicting_signals(analysis)
