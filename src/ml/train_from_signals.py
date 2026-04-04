@@ -333,9 +333,11 @@ def generate_bootstrap_signals(symbol: str, df: pd.DataFrame,
         if outcome is None:
             continue
 
-        risk_distance_pct = abs(entry_price - stop_loss) / entry_price * 100
-        reward_distance_pct = abs(tp1 - entry_price) / entry_price * 100
-        rr_ratio = reward_distance_pct / risk_distance_pct if risk_distance_pct > 0 else 1.0
+        # Features de mercado INDEPENDENTES do SL/TP (evitar tautologia com label)
+        atr_pct = (atr / close * 100) if close > 0 else 0
+        candle_body_pct = abs(row['close'] - row['open']) / close * 100 if close > 0 else 0
+        vol_ma = df['volume'].iloc[max(0, i-20):i].mean()
+        volume_ratio = (row['volume'] / vol_ma) if vol_ma > 0 else 1.0
 
         confidence = _estimate_confidence(rsi, adx_val, bb_pos, trend, signal_type)
 
@@ -354,10 +356,10 @@ def generate_bootstrap_signals(symbol: str, df: pd.DataFrame,
             'confidence': confidence,
             'trend_encoded': int(trend),
             'sentiment_encoded': int(row.get('sentiment_encoded', 0)),
-            'signal_encoded': 1 if signal_type == 'BUY' else -1,
-            'risk_distance_pct': risk_distance_pct,
-            'reward_distance_pct': reward_distance_pct,
-            'risk_reward_ratio': rr_ratio,
+            'signal_encoded': 1 if signal_type == 'BUY' else (-1 if signal_type == 'SELL' else 0),
+            'risk_distance_pct': float(atr_pct),
+            'reward_distance_pct': float(candle_body_pct),
+            'risk_reward_ratio': float(volume_ratio),
             'target': outcome,
             'signal_type': signal_type,
         })
@@ -525,9 +527,14 @@ def enrich_signal_with_klines(signal: Dict) -> Optional[Dict]:
 
     last = df.iloc[-1]
 
-    risk_dist = abs(entry_price - stop_loss) / entry_price * 100 if entry_price > 0 and stop_loss > 0 else 2.0
-    reward_dist = abs(tp1 - entry_price) / entry_price * 100 if entry_price > 0 and tp1 > 0 else 2.0
-    rr_ratio = reward_dist / risk_dist if risk_dist > 0 else 1.0
+    # Features de mercado independentes (não derivadas do SL/TP que define o label)
+    close_price = float(last['close'])
+    atr_val = float(last['atr'])
+    atr_pct = (atr_val / close_price * 100) if close_price > 0 else 0
+    candle_body_pct = abs(float(last['close']) - float(last['open'])) / close_price * 100 if close_price > 0 else 0
+    vol_series = df['volume'].iloc[-21:-1]
+    vol_ma = vol_series.mean() if len(vol_series) > 0 else 1.0
+    volume_ratio = (float(last['volume']) / vol_ma) if vol_ma > 0 else 1.0
 
     target = 1 if outcome in ('TP1_HIT', 'TP2_HIT') else 0
 
@@ -544,10 +551,10 @@ def enrich_signal_with_klines(signal: Dict) -> Optional[Dict]:
         'confidence': signal.get('confidence', 5),
         'trend_encoded': int(last.get('trend_encoded', 0)),
         'sentiment_encoded': int(last.get('sentiment_encoded', 0)),
-        'signal_encoded': 1 if signal_type == 'BUY' else -1,
-        'risk_distance_pct': risk_dist,
-        'reward_distance_pct': reward_dist,
-        'risk_reward_ratio': rr_ratio,
+        'signal_encoded': 1 if signal_type == 'BUY' else (-1 if signal_type == 'SELL' else 0),
+        'risk_distance_pct': float(atr_pct),
+        'reward_distance_pct': float(candle_body_pct),
+        'risk_reward_ratio': float(volume_ratio),
         'target': target,
     }
 

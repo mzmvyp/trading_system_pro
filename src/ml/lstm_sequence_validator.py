@@ -345,9 +345,16 @@ class LSTMSequenceValidator:
             X = seq_data.values.astype(np.float32)
             X = np.nan_to_num(X, nan=0.0)
 
-            # Pad features se necessário
+            # Pad/trim features para match com n_features do treino
             if X.shape[1] < self.n_features:
-                padding = np.zeros((X.shape[0], self.n_features - X.shape[1]), dtype=np.float32)
+                # Pad com a média do treino (via scaler.mean_) para que após
+                # transform() resulte em ~0, não em valores negativos espúrios
+                n_pad = self.n_features - X.shape[1]
+                if hasattr(self.scaler, 'mean_') and self.scaler.mean_ is not None:
+                    pad_means = self.scaler.mean_[X.shape[1]:self.n_features]
+                    padding = np.tile(pad_means, (X.shape[0], 1)).astype(np.float32)
+                else:
+                    padding = np.zeros((X.shape[0], n_pad), dtype=np.float32)
                 X = np.hstack([X, padding])
             elif X.shape[1] > self.n_features:
                 X = X[:, :self.n_features]

@@ -416,28 +416,20 @@ class AgnoTradingAgent:
         return sentiment_map.get(sentiment.lower() if sentiment else 'neutral', 0)
 
     def _calc_risk_distance(self, signal: Dict) -> float:
-        """Calcula distancia do stop em %"""
+        """ATR% — volatilidade relativa (substitui risk_distance derivado do SL)."""
         entry = signal.get('entry_price', 0)
-        stop = signal.get('stop_loss', 0)
-        if entry > 0 and stop > 0:
-            return abs(entry - stop) / entry * 100
-        return 2.0  # Default 2%
+        atr = signal.get('atr', 0)
+        if entry > 0 and atr > 0:
+            return atr / entry * 100
+        return 2.0
 
     def _calc_reward_distance(self, signal: Dict) -> float:
-        """Calcula distancia do TP1 em %"""
-        entry = signal.get('entry_price', 0)
-        tp1 = signal.get('take_profit_1', signal.get('take_profit', 0))
-        if entry > 0 and tp1 > 0:
-            return abs(tp1 - entry) / entry * 100
-        return 2.0  # Default 2%
+        """Candle body % — força do último candle."""
+        return signal.get('candle_body_pct', 0.5)
 
     def _calc_risk_reward(self, signal: Dict) -> float:
-        """Calcula risk/reward ratio"""
-        risk = self._calc_risk_distance(signal)
-        reward = self._calc_reward_distance(signal)
-        if risk > 0:
-            return reward / risk
-        return 1.0
+        """Volume ratio — volume relativo à média."""
+        return signal.get('volume_ratio', 1.0)
 
     def _calculate_technical_confluence(self, analysis_data: Dict, signal_direction: str) -> Dict[str, Any]:
         """
@@ -1273,10 +1265,14 @@ Responda APENAS com JSON:
                 votes_for = confluence["votes_for"]
                 votes_against = confluence["votes_against"]
 
-                # LLM conta como 1 voto a favor (peso ~20% do total, como no sinais)
-                # Confidence da LLM (1-10) modula o peso: alta confiança = voto forte
+                # LLM voto simétrico: confiança alta = favor, baixa = contra
                 llm_confidence = agno_signal.get("confidence", 5)
-                llm_vote_weight = 1 if llm_confidence >= 5 else 0
+                if llm_confidence >= 7:
+                    llm_vote = 1   # Alta confiança: voto a favor
+                elif llm_confidence <= 3:
+                    llm_vote = -1  # Baixa confiança: voto contra
+                else:
+                    llm_vote = 0   # Confiança moderada: neutro
 
                 # Bi-LSTM sequence vote (se modelo treinado)
                 # Mesma lógica calibrada do ML: confiar no SKIP, exigir alta prob para FOR
@@ -1433,7 +1429,11 @@ Responda APENAS com JSON:
                     agno_signal["market_regime"] = market_regime.get("regime", "UNKNOWN")
                     agno_signal["market_regime_base"] = base_regime
 
-                total_for = votes_for + llm_vote_weight
+                if llm_vote > 0:
+                    votes_for += llm_vote
+                elif llm_vote < 0:
+                    votes_against += abs(llm_vote)
+                total_for = votes_for
                 total_against = votes_against
                 total_all = total_for + total_against
                 combined_score = total_for / max(total_all, 1)
@@ -1457,7 +1457,7 @@ Responda APENAS com JSON:
                 voter_breakdown = confluence.get("voter_votes", {})
                 voter_breakdown["ml"] = ml_vote
                 voter_breakdown["lstm"] = lstm_vote
-                voter_breakdown["llm"] = 1 if llm_vote_weight >= 1 else 0
+                voter_breakdown["llm"] = llm_vote
                 voter_breakdown["regime"] = regime_vote
                 voter_breakdown["ml_prob"] = round(ml_prob, 4)
                 voter_breakdown["lstm_prob"] = round(lstm_prob, 4)
@@ -1466,7 +1466,7 @@ Responda APENAS com JSON:
                 logger.info(
                     f"[CONFLUENCE] {llm_signal_dir} {symbol}: "
                     f"score={combined_score:.1%} ({total_for:.0f} for / {total_against} against) "
-                    f"| LLM_conf={agno_signal.get('confidence', '?')}/10 (peso={llm_vote_weight}) "
+                    f"| LLM_conf={agno_signal.get('confidence', '?')}/10 (voto={llm_vote}) "
                     f"| ML={'A FAVOR' if ml_vote > 0 else 'CONTRA' if ml_vote < 0 else 'NEUTRO'} (prob={ml_prob:.1%}) "
                     f"| LSTM={'prob=' + f'{lstm_prob:.1%}' if lstm_vote or lstm_prob != 0.5 else 'N/A'} "
                     f"| REGIME={market_regime.get('regime', '?') if market_regime else 'N/A'} "
