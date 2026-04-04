@@ -676,37 +676,9 @@ class AgnoTradingAgent:
         except Exception:
             voter_votes["setup_validator"] = 0
 
-        # Adaptive voter weights: invert votes from voters with proven <45% accuracy
-        # This turns consistently wrong voters into useful contrarian signals
-        try:
-            voter_accuracy = self._get_cached_voter_accuracy()
-            CONTRARIAN_VOTERS = ["rsi", "macd", "trend", "adx", "bb", "orderbook", "cvd", "regime"]
-            MIN_SAMPLES_FOR_INVERSION = 20
-            INVERSION_THRESHOLD = 0.45  # Invert if accuracy < 45%
-
-            for voter_name in CONTRARIAN_VOTERS:
-                acc_data = voter_accuracy.get(voter_name, {})
-                total = acc_data.get("total", 0)
-                accuracy = acc_data.get("accuracy")
-
-                if total >= MIN_SAMPLES_FOR_INVERSION and accuracy is not None and accuracy < INVERSION_THRESHOLD:
-                    original_vote = voter_votes.get(voter_name, 0)
-                    if original_vote != 0:
-                        # Invert the vote
-                        inverted = -original_vote
-                        # Adjust vote counts
-                        if original_vote > 0:
-                            votes_for -= 1
-                            votes_against += 1
-                        else:
-                            votes_against -= 1
-                            votes_for += 1
-                        voter_votes[voter_name] = inverted
-                        details.append(
-                            f"{voter_name.upper()} INVERTIDO (acc={accuracy:.0%}, n={total})"
-                        )
-        except Exception:
-            pass
+        # Contrarian inversion REMOVIDO — com parâmetros dinâmicos do optimizer,
+        # os voters devem melhorar naturalmente. A inversão mascarava o problema
+        # real (params fixos ruins) e matava votos legítimos.
 
         total_votes = votes_for + votes_against
         score = votes_for / max(total_votes, 1)
@@ -839,13 +811,14 @@ Responda APENAS com JSON:
 {"signal":"BUY/SELL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":7,"reasoning":"Regras X,Y,Z confirmadas. Conflitos: nenhum/ABC"}
 ```"""
 
-    async def analyze(self, symbol: str = "BTCUSDT") -> Dict[str, Any]:
+    async def analyze(self, symbol: str = "BTCUSDT", mover_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Executa análise completa usando o AGNO Agent.
         CORRIGIDO: Verifica posição existente antes de analisar.
 
         Args:
             symbol: Símbolo para analisar
+            mover_type: "gainer", "loser" ou None - para config de categoria
 
         Returns:
             Sinal de trading estruturado
@@ -1065,8 +1038,8 @@ Responda APENAS com JSON:
             from src.analysis.market_classifier import classify_market_condition
             from src.prompts.deepseek_prompt import _create_analysis_prompt, prepare_analysis_for_llm
 
-            logger.info(f"[AGNO] Coletando dados localmente para {symbol}...")
-            analysis_data = await prepare_analysis_for_llm(symbol)
+            logger.info(f"[AGNO] Coletando dados localmente para {symbol}..." + (f" (mover_type={mover_type})" if mover_type else ""))
+            analysis_data = await prepare_analysis_for_llm(symbol, mover_type=mover_type)
 
             # ========================================
             # DETECÇÃO DE REGIME DE MERCADO

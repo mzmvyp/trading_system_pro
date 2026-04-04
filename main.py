@@ -461,8 +461,9 @@ async def main():
                                 )
 
                             try:
+                                _mover_type = dynamic_metadata.get(symbol, {}).get("mover_type") if dynamic_metadata else None
                                 await asyncio.wait_for(
-                                    agent.analyze(symbol),
+                                    agent.analyze(symbol, mover_type=_mover_type),
                                     timeout=300  # 5 minutos max por par
                                 )
                             except asyncio.TimeoutError:

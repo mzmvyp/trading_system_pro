@@ -38,18 +38,10 @@ def get_best_config_path(symbol: str, interval: str) -> Path:
     return BEST_CONFIG_DIR / f"best_config_{symbol}_{interval}.json"
 
 
-def load_best_config(symbol: str, interval: str = "1h") -> Optional[BacktestParams]:
-    """
-    Carrega o melhor config salvo pelo otimizador contínuo.
-    Usado pelo agent.py para aplicar parâmetros otimizados.
-
-    Returns:
-        BacktestParams ou None se não existir.
-    """
-    filepath = get_best_config_path(symbol, interval)
+def _load_config_file(filepath: Path, label: str) -> Optional[BacktestParams]:
+    """Carrega um arquivo de config e retorna BacktestParams ou None."""
     if not filepath.exists():
         return None
-
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -58,7 +50,6 @@ def load_best_config(symbol: str, interval: str = "1h") -> Optional[BacktestPara
         if not config_data:
             return None
 
-        # Filtrar apenas campos válidos do BacktestParams
         valid_fields = BacktestParams.__dataclass_fields__.keys()
         filtered = {k: v for k, v in config_data.items() if k in valid_fields}
 
@@ -66,14 +57,59 @@ def load_best_config(symbol: str, interval: str = "1h") -> Optional[BacktestPara
         age_hours = (datetime.now(timezone.utc) - datetime.fromisoformat(data.get("updated_at", "2020-01-01T00:00:00+00:00"))).total_seconds() / 3600
 
         logger.info(
-            f"[OPTIMIZER] Loaded best config for {symbol} {interval}: "
+            f"[OPTIMIZER] Loaded {label} config: "
             f"score={data.get('score', 0):.4f}, age={age_hours:.1f}h"
         )
         return params
-
     except Exception as e:
-        logger.warning(f"[OPTIMIZER] Error loading best config for {symbol}: {e}")
+        logger.warning(f"[OPTIMIZER] Error loading {label} config: {e}")
         return None
+
+
+def load_best_config(symbol: str, interval: str = "1h", mover_type: Optional[str] = None) -> Optional[BacktestParams]:
+    """
+    Carrega o melhor config com fallback por categoria.
+
+    Prioridade:
+    1. Config específica do símbolo (best_config_BTCUSDT_1h.json)
+    2. Config da categoria gainer/loser (best_config__GAINERS__1h.json)
+    3. Config default genérica (best_config__DEFAULT__1h.json)
+    4. None (usa hardcoded defaults)
+
+    Args:
+        symbol: Par de trading (ex: BTCUSDT)
+        interval: Timeframe (default: 1h)
+        mover_type: "gainer", "loser" ou None para pares fixos
+    """
+    # 1. Config específica do símbolo
+    result = _load_config_file(
+        get_best_config_path(symbol, interval),
+        f"{symbol} {interval}"
+    )
+    if result:
+        return result
+
+    # 2. Config da categoria (gainer/loser)
+    if mover_type:
+        category = "_GAINERS_" if mover_type == "gainer" else "_LOSERS_"
+        result = _load_config_file(
+            get_best_config_path(category, interval),
+            f"{category} {interval}"
+        )
+        if result:
+            return result
+
+    # 3. Config default genérica (otimizada multi-par)
+    result = _load_config_file(
+        get_best_config_path("_DEFAULT_", interval),
+        f"_DEFAULT_ {interval}"
+    )
+    if result:
+        return result
+
+    # 4. Nenhuma config encontrada
+    logger.debug(f"[OPTIMIZER] Nenhuma config encontrada para {symbol} (mover_type={mover_type})")
+    return None
 
 
 def save_best_config(symbol: str, interval: str, params: BacktestParams,
@@ -249,6 +285,92 @@ class ContinuousOptimizer:
 
             except Exception as e:
                 logger.error(f"[OPTIMIZER] Error optimizing {symbol}: {e}")
+
+        # Gerar configs de categoria a partir dos melhores resultados individuais
+        await self._generate_category_configs()
+
+    async def _generate_category_configs(self):
+        """
+        Gera configs agregadas por categoria para pares dinâmicos.
+
+        - _DEFAULT_: média dos melhores params de todos os pares fixos
+        - _GAINERS_: média dos pares com tendência de alta (top movers positivos)
+        - _LOSERS_: média dos pares com tendência de queda (top movers negativos)
+
+        Pares dinâmicos (top gainers/losers) que não têm config própria
+        usam essas configs como fallback.
+        """
+        try:
+            from dataclasses import fields
+
+            # Carregar todas as configs existentes
+            all_configs = {}
+            for symbol in self.symbols:
+                cfg = _load_config_file(
+                    get_best_config_path(symbol, self.interval),
+                    f"{symbol} (para agregação)"
+                )
+                if cfg:
+                    all_configs[symbol] = cfg
+
+            if len(all_configs) < 2:
+                logger.warning("[OPTIMIZER] Configs insuficientes para gerar categorias")
+                return
+
+            # Separar por tendência recente (últimas 24h)
+            gainers_configs = []
+            losers_configs = []
+            try:
+                from src.analysis.top_movers import get_top_movers
+                movers = await get_top_movers()
+                gainer_symbols = {m["symbol"] for m in movers.get("gainers", [])}
+                loser_symbols = {m["symbol"] for m in movers.get("losers", [])}
+
+                for sym, cfg in all_configs.items():
+                    if sym in gainer_symbols:
+                        gainers_configs.append(cfg)
+                    elif sym in loser_symbols:
+                        losers_configs.append(cfg)
+            except Exception as e:
+                logger.debug(f"[OPTIMIZER] Não foi possível classificar por movers: {e}")
+
+            # Função para calcular média de BacktestParams
+            def _average_params(configs: list) -> BacktestParams:
+                if not configs:
+                    return BacktestParams()  # defaults
+                avg = {}
+                for field in fields(BacktestParams):
+                    values = [getattr(c, field.name) for c in configs]
+                    if field.type == int:
+                        avg[field.name] = int(round(sum(values) / len(values)))
+                    else:
+                        avg[field.name] = round(sum(values) / len(values), 4)
+                return BacktestParams(**avg)
+
+            all_list = list(all_configs.values())
+
+            # _DEFAULT_: média de todos os pares fixos
+            default_params = _average_params(all_list)
+            save_best_config("_DEFAULT_", self.interval, default_params,
+                             score=0.5, metrics={"source": "average_all_fixed", "n_symbols": len(all_list)})
+            logger.info(f"[OPTIMIZER] _DEFAULT_ config gerada (média de {len(all_list)} pares)")
+
+            # _GAINERS_: média dos pares que são gainers (ou todos se não há dados)
+            if gainers_configs:
+                gainer_params = _average_params(gainers_configs)
+                save_best_config("_GAINERS_", self.interval, gainer_params,
+                                 score=0.5, metrics={"source": "average_gainers", "n_symbols": len(gainers_configs)})
+                logger.info(f"[OPTIMIZER] _GAINERS_ config gerada ({len(gainers_configs)} pares)")
+
+            # _LOSERS_: média dos pares que são losers (ou todos se não há dados)
+            if losers_configs:
+                loser_params = _average_params(losers_configs)
+                save_best_config("_LOSERS_", self.interval, loser_params,
+                                 score=0.5, metrics={"source": "average_losers", "n_symbols": len(losers_configs)})
+                logger.info(f"[OPTIMIZER] _LOSERS_ config gerada ({len(losers_configs)} pares)")
+
+        except Exception as e:
+            logger.warning(f"[OPTIMIZER] Erro ao gerar configs de categoria: {e}")
 
 
 # Singleton global para acesso de qualquer módulo

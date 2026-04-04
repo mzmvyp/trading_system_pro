@@ -6,7 +6,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from src.analysis.agno_tools import (
     _calculate_suggested_stops,
@@ -195,23 +195,23 @@ def _calculate_overall_bias(data: Dict) -> Dict[str, Any]:
         }
 
 
-async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
+async def prepare_analysis_for_llm(symbol: str, mover_type: Optional[str] = None) -> Dict[str, Any]:
     """Prepara dados SUMARIZADOS e INTERPRETADOS para envio ao DeepSeek."""
     try:
-        # Carregar parâmetros otimizados por símbolo (se disponíveis)
+        # Carregar parâmetros otimizados por símbolo (com fallback de categoria)
         _opt_params = None
         try:
             from src.backtesting.continuous_optimizer import load_best_config
             from dataclasses import asdict
-            best = load_best_config(symbol, "1h")
+            best = load_best_config(symbol, "1h", mover_type=mover_type)
             if best:
                 _opt_params = asdict(best)
-                logger.info(f"[{symbol}] Usando parâmetros otimizados do ContinuousOptimizer")
+                logger.info(f"[{symbol}] Usando parâmetros otimizados (mover_type={mover_type})")
         except Exception as e:
             logger.debug(f"[{symbol}] Sem parâmetros otimizados: {e}")
 
         market_data = await get_market_data(symbol)
-        technical_indicators = await analyze_technical_indicators(symbol, optimized_params=_opt_params)
+        technical_indicators = await analyze_technical_indicators(symbol, optimized_params=_opt_params, mover_type=mover_type)
         sentiment = await analyze_market_sentiment(symbol)
         multi_timeframe = await analyze_multiple_timeframes(symbol)
         order_flow = await analyze_order_flow(symbol)
@@ -310,7 +310,20 @@ async def prepare_analysis_for_llm(symbol: str) -> Dict[str, Any]:
             "sentiment": {"overall": sentiment.get("sentiment", "neutral"), "confidence": sentiment.get("confidence", 0.5), "funding_rate": market_data.get("funding_rate", 0), "funding_interpretation": funding_interpretation, "open_interest_trend": "stable"},
             "volatility": {"atr_value": atr_value, "atr_pct": atr_pct, "level": volatility_level, "suggested_stop_pct": suggested_stops["suggested_stop_pct"], "suggested_tp1_pct": suggested_stops["suggested_tp1_pct"], "suggested_tp2_pct": suggested_stops["suggested_tp2_pct"]},
             "conflicting_signals": [],
-            "aggregated_scores": {}
+            "aggregated_scores": {},
+
+            # Dados brutos para calculo tecnico de SL/TP e range quality (nao enviados ao LLM)
+            "_raw_indicators": {
+                "ema_20": ema_20,
+                "ema_50": ema_50,
+                "ema_200": ema_200,
+                "sma_200": indicators.get("sma_200"),
+                "bb_upper": indicators.get("bb_upper", current_price * 1.05),
+                "bb_lower": indicators.get("bb_lower", current_price * 0.95),
+                "bb_middle": indicators.get("bb_middle", ema_20),
+            },
+            "_market_structure": technical_indicators.get("market_structure", {}),
+            "_optimized_params": _opt_params,
         }
 
         analysis["conflicting_signals"] = _identify_conflicting_signals(analysis)
