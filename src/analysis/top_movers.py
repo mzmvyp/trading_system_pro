@@ -95,10 +95,16 @@ async def fetch_all_futures_tickers(timeout_seconds: int = 15) -> List[Dict]:
 
 def _filter_usdt_perpetuals(tickers: List[Dict], min_volume_usdt: float = 50_000_000) -> List[Dict]:
     """
-    Filtra apenas pares USDT perpétuos com volume mínimo.
-    Exclui pares de baixa liquidez e tokens de nicho.
+    Filtra apenas pares USDT perpétuos com volume mínimo e volatilidade aceitável.
+    Exclui pares de baixa liquidez, tokens de nicho e micro-caps extremamente voláteis.
     """
+    # Limites de segurança para dynamic pairs
+    MAX_PRICE_CHANGE_24H = 40.0  # Rejeitar tokens com ±40%+ em 24h (pump/dump)
+    MAX_HIGH_LOW_RANGE_PCT = 50.0  # Rejeitar se range High-Low 24h > 50% do preço
+    MIN_TRADE_COUNT = 1000  # Mínimo 1000 trades (antes era 100 — muito baixo)
+
     filtered = []
+    rejected_volatile = 0
     for t in tickers:
         symbol = t.get("symbol", "")
 
@@ -114,6 +120,8 @@ def _filter_usdt_perpetuals(tickers: List[Dict], min_volume_usdt: float = 50_000
             volume_usdt = float(t.get("quoteVolume", 0))
             price_change_pct = float(t.get("priceChangePercent", 0))
             last_price = float(t.get("lastPrice", 0))
+            high_price = float(t.get("highPrice", 0))
+            low_price = float(t.get("lowPrice", 0))
         except (ValueError, TypeError):
             continue
 
@@ -125,19 +133,39 @@ def _filter_usdt_perpetuals(tickers: List[Dict], min_volume_usdt: float = 50_000
         if last_price <= 0:
             continue
 
-        # Filtrar símbolos sem trades (settling/delisted)
+        # Filtrar símbolos sem trades suficientes (micro-caps têm poucos trades)
         trade_count = int(t.get("count", 0))
-        if trade_count < 100:
+        if trade_count < MIN_TRADE_COUNT:
             continue
+
+        # NOVO: Filtrar volatilidade extrema — tokens com variação 24h > 40%
+        # são pump/dumps, não oportunidades de trading sustentáveis
+        if abs(price_change_pct) > MAX_PRICE_CHANGE_24H:
+            rejected_volatile += 1
+            continue
+
+        # NOVO: Filtrar range high-low extremo
+        # Se high-low range > 50% do preço, é um token extremamente volátil
+        if high_price > 0 and low_price > 0 and last_price > 0:
+            range_pct = ((high_price - low_price) / last_price) * 100
+            if range_pct > MAX_HIGH_LOW_RANGE_PCT:
+                rejected_volatile += 1
+                continue
 
         filtered.append({
             "symbol": symbol,
             "price_change_pct": price_change_pct,
             "volume_usdt": volume_usdt,
             "last_price": last_price,
-            "high_price": float(t.get("highPrice", 0)),
-            "low_price": float(t.get("lowPrice", 0)),
+            "high_price": high_price,
+            "low_price": low_price,
         })
+
+    if rejected_volatile > 0:
+        logger.info(
+            f"[TOP_MOVERS] {rejected_volatile} pares rejeitados por volatilidade extrema "
+            f"(>±{MAX_PRICE_CHANGE_24H}% 24h ou range >{MAX_HIGH_LOW_RANGE_PCT}%)"
+        )
 
     return filtered
 

@@ -24,6 +24,7 @@ def calculate_technical_sl_tp(
     direction: str,  # "BUY" or "SELL"
     analysis_data: Dict[str, Any],
     operation_type: str = "DAY_TRADE",
+    optimized_params: Dict = None,
 ) -> Dict[str, Any]:
     """
     Calcula SL, TP1 e TP2 baseados em niveis tecnicos reais.
@@ -34,13 +35,14 @@ def calculate_technical_sl_tp(
     3. EMAs importantes (20, 50, 200)
     4. Bollinger Bands
     5. Volume POC
-    6. Fallback: ATR-based (ultimo recurso)
+    6. Fallback: ATR-based (ultimo recurso) — usa params otimizados se disponíveis
 
     Args:
         entry_price: Preco de entrada
         direction: BUY ou SELL
         analysis_data: Dados completos da analise (de prepare_analysis_for_llm)
         operation_type: SCALP, DAY_TRADE, SWING_TRADE, POSITION_TRADE
+        optimized_params: Params otimizados do optimizer (sl_atr_multiplier, tp1_atr_multiplier, etc.)
 
     Returns:
         Dict com stop_loss, take_profit_1, take_profit_2, metodo usado, e detalhes
@@ -52,9 +54,9 @@ def calculate_technical_sl_tp(
     levels = _collect_all_levels(entry_price, analysis_data)
 
     if direction == "BUY":
-        result = _calculate_buy_levels(entry_price, levels, operation_type)
+        result = _calculate_buy_levels(entry_price, levels, operation_type, optimized_params)
     else:
-        result = _calculate_sell_levels(entry_price, levels, operation_type)
+        result = _calculate_sell_levels(entry_price, levels, operation_type, optimized_params)
 
     # Validar risk:reward minimo
     result = _validate_risk_reward(entry_price, direction, result)
@@ -184,8 +186,10 @@ def _collect_all_levels(
     atr = volatility.get("atr_value", volatility.get("atr", 0))
     if not atr or atr <= 0:
         atr = current_price * 0.015  # fallback 1.5%
-    # Cap ATR at 5% of price to prevent absurd SL distances for low-priced tokens
-    max_atr = current_price * 0.05
+    # Cap ATR: MAX_SL_DISTANCE_PCT (15%) já limita o SL nos helpers,
+    # mas aqui limitamos a 10% para evitar outliers extremos de ATR.
+    # Antigo cap de 5% era muito restritivo para altcoins voláteis.
+    max_atr = current_price * 0.10
     if atr > max_atr:
         atr = max_atr
 
@@ -225,6 +229,7 @@ def _calculate_buy_levels(
     entry: float,
     levels: Dict,
     operation_type: str,
+    optimized_params: Dict = None,
 ) -> Dict[str, Any]:
     """
     Para BUY:
@@ -237,13 +242,13 @@ def _calculate_buy_levels(
     atr = levels["atr"]
 
     # === STOP LOSS ===
-    sl, sl_method = _find_buy_sl(entry, supports, atr, operation_type)
+    sl, sl_method = _find_buy_sl(entry, supports, atr, operation_type, optimized_params)
 
     # === TAKE PROFIT 1 ===
-    tp1, tp1_method = _find_buy_tp1(entry, resistances, atr, sl, operation_type)
+    tp1, tp1_method = _find_buy_tp1(entry, resistances, atr, sl, operation_type, optimized_params)
 
     # === TAKE PROFIT 2 ===
-    tp2, tp2_method = _find_buy_tp2(entry, resistances, atr, tp1, operation_type)
+    tp2, tp2_method = _find_buy_tp2(entry, resistances, atr, tp1, operation_type, optimized_params)
 
     sl_distance = abs(entry - sl) / entry * 100
     tp1_distance = abs(tp1 - entry) / entry * 100
@@ -272,6 +277,7 @@ def _calculate_sell_levels(
     entry: float,
     levels: Dict,
     operation_type: str,
+    optimized_params: Dict = None,
 ) -> Dict[str, Any]:
     """
     Para SELL:
@@ -284,13 +290,13 @@ def _calculate_sell_levels(
     atr = levels["atr"]
 
     # === STOP LOSS (acima da resistencia) ===
-    sl, sl_method = _find_sell_sl(entry, resistances, atr, operation_type)
+    sl, sl_method = _find_sell_sl(entry, resistances, atr, operation_type, optimized_params)
 
     # === TAKE PROFIT 1 (no suporte) ===
-    tp1, tp1_method = _find_sell_tp1(entry, supports, atr, sl, operation_type)
+    tp1, tp1_method = _find_sell_tp1(entry, supports, atr, sl, operation_type, optimized_params)
 
     # === TAKE PROFIT 2 (no segundo suporte) ===
-    tp2, tp2_method = _find_sell_tp2(entry, supports, atr, tp1, operation_type)
+    tp2, tp2_method = _find_sell_tp2(entry, supports, atr, tp1, operation_type, optimized_params)
 
     sl_distance = abs(sl - entry) / entry * 100
     tp1_distance = abs(entry - tp1) / entry * 100
@@ -318,7 +324,8 @@ def _calculate_sell_levels(
 # ===== BUY SL/TP helpers =====
 
 def _find_buy_sl(
-    entry: float, supports: List[Dict], atr: float, op_type: str
+    entry: float, supports: List[Dict], atr: float, op_type: str,
+    optimized_params: Dict = None,
 ) -> Tuple[float, str]:
     """SL para BUY: abaixo do suporte mais proximo, com margem ATR."""
     # Margem de seguranca abaixo do suporte (para nao ser stopado no pavio)
@@ -336,8 +343,9 @@ def _find_buy_sl(
 
         return sl_candidate, f"abaixo_{s['source']}"
 
-    # Fallback: usar ATR se nenhum suporte valido encontrado
-    sl_atr = entry - (atr * _sl_atr_multiplier(op_type))
+    # Fallback: usar ATR com multiplicador do optimizer (se disponível)
+    sl_mult = _sl_atr_multiplier(op_type, optimized_params)
+    sl_atr = entry - (atr * sl_mult)
     # Clamp ATR fallback to respect MAX_SL_DISTANCE_PCT
     sl_distance_pct = (entry - sl_atr) / entry * 100 if entry > 0 else 0
     if sl_distance_pct > MAX_SL_DISTANCE_PCT:
@@ -347,11 +355,13 @@ def _find_buy_sl(
     # Never allow SL <= 0
     if sl_atr <= 0:
         sl_atr = entry * (1 - min(MAX_SL_DISTANCE_PCT, 5.0) / 100)
-    return sl_atr, "ATR_fallback"
+    method = f"ATR_x{sl_mult:.1f}" if optimized_params else "ATR_fallback"
+    return sl_atr, method
 
 
 def _find_buy_tp1(
-    entry: float, resistances: List[Dict], atr: float, sl: float, op_type: str
+    entry: float, resistances: List[Dict], atr: float, sl: float, op_type: str,
+    optimized_params: Dict = None,
 ) -> Tuple[float, str]:
     """TP1 para BUY: na resistencia mais proxima."""
     sl_distance = entry - sl
@@ -361,15 +371,18 @@ def _find_buy_tp1(
         if r["price"] > min_tp1:
             return r["price"], f"em_{r['source']}"
 
-    # Se nenhuma resistencia atende o R:R minimo, usar 2x ATR
-    tp1_atr = entry + (atr * _tp1_atr_multiplier(op_type))
+    # Se nenhuma resistencia atende o R:R minimo, usar ATR com multiplicador otimizado
+    tp1_mult = _tp1_atr_multiplier(op_type, optimized_params)
+    tp1_atr = entry + (atr * tp1_mult)
     if tp1_atr > min_tp1:
-        return tp1_atr, "ATR_fallback"
+        method = f"ATR_x{tp1_mult:.1f}" if optimized_params else "ATR_fallback"
+        return tp1_atr, method
     return min_tp1, "min_RR_1.5"
 
 
 def _find_buy_tp2(
-    entry: float, resistances: List[Dict], atr: float, tp1: float, op_type: str
+    entry: float, resistances: List[Dict], atr: float, tp1: float, op_type: str,
+    optimized_params: Dict = None,
 ) -> Tuple[float, str]:
     """TP2 para BUY: na segunda resistencia acima de TP1."""
     for r in resistances:
@@ -386,7 +399,8 @@ def _find_buy_tp2(
 # ===== SELL SL/TP helpers =====
 
 def _find_sell_sl(
-    entry: float, resistances: List[Dict], atr: float, op_type: str
+    entry: float, resistances: List[Dict], atr: float, op_type: str,
+    optimized_params: Dict = None,
 ) -> Tuple[float, str]:
     """SL para SELL: acima da resistencia mais proxima, com margem ATR."""
     margin = atr * _sl_margin_multiplier(op_type)
@@ -402,19 +416,22 @@ def _find_sell_sl(
 
         return sl_candidate, f"acima_{r['source']}"
 
-    # Fallback ATR
-    sl_atr = entry + (atr * _sl_atr_multiplier(op_type))
+    # Fallback ATR com multiplicador do optimizer (se disponível)
+    sl_mult = _sl_atr_multiplier(op_type, optimized_params)
+    sl_atr = entry + (atr * sl_mult)
     # Clamp ATR fallback to respect MAX_SL_DISTANCE_PCT
     sl_distance_pct = (sl_atr - entry) / entry * 100 if entry > 0 else 0
     if sl_distance_pct > MAX_SL_DISTANCE_PCT:
         sl_atr = entry * (1 + MAX_SL_DISTANCE_PCT / 100)
     elif sl_distance_pct < MIN_SL_DISTANCE_PCT:
         sl_atr = entry * (1 + MIN_SL_DISTANCE_PCT / 100)
-    return sl_atr, "ATR_fallback"
+    method = f"ATR_x{sl_mult:.1f}" if optimized_params else "ATR_fallback"
+    return sl_atr, method
 
 
 def _find_sell_tp1(
-    entry: float, supports: List[Dict], atr: float, sl: float, op_type: str
+    entry: float, supports: List[Dict], atr: float, sl: float, op_type: str,
+    optimized_params: Dict = None,
 ) -> Tuple[float, str]:
     """TP1 para SELL: no suporte mais proximo."""
     sl_distance = sl - entry
@@ -424,9 +441,11 @@ def _find_sell_tp1(
         if s["price"] < min_tp1:
             return s["price"], f"em_{s['source']}"
 
-    tp1_atr = entry - (atr * _tp1_atr_multiplier(op_type))
+    tp1_mult = _tp1_atr_multiplier(op_type, optimized_params)
+    tp1_atr = entry - (atr * tp1_mult)
     if tp1_atr < min_tp1 and tp1_atr > 0:
-        return tp1_atr, "ATR_fallback"
+        method = f"ATR_x{tp1_mult:.1f}" if optimized_params else "ATR_fallback"
+        return tp1_atr, method
     # Ensure TP never goes negative
     if min_tp1 <= 0:
         min_tp1 = entry * 0.97  # Fallback: 3% below entry
@@ -434,7 +453,8 @@ def _find_sell_tp1(
 
 
 def _find_sell_tp2(
-    entry: float, supports: List[Dict], atr: float, tp1: float, op_type: str
+    entry: float, supports: List[Dict], atr: float, tp1: float, op_type: str,
+    optimized_params: Dict = None,
 ) -> Tuple[float, str]:
     """TP2 para SELL: no segundo suporte abaixo de TP1."""
     for s in supports:
@@ -461,8 +481,12 @@ def _sl_margin_multiplier(op_type: str) -> float:
     }.get(op_type, 0.3)
 
 
-def _sl_atr_multiplier(op_type: str) -> float:
-    """Multiplicador ATR para SL fallback."""
+def _sl_atr_multiplier(op_type: str, optimized_params: Dict = None) -> float:
+    """Multiplicador ATR para SL fallback. Usa params otimizados se disponíveis."""
+    if optimized_params:
+        opt_sl = optimized_params.get("sl_atr_multiplier")
+        if opt_sl and opt_sl > 0:
+            return float(opt_sl)
     return {
         "SCALP": 1.0,
         "DAY_TRADE": 1.5,
@@ -471,8 +495,12 @@ def _sl_atr_multiplier(op_type: str) -> float:
     }.get(op_type, 1.5)
 
 
-def _tp1_atr_multiplier(op_type: str) -> float:
-    """Multiplicador ATR para TP1 fallback (reduzido para alvos realistas)."""
+def _tp1_atr_multiplier(op_type: str, optimized_params: Dict = None) -> float:
+    """Multiplicador ATR para TP1 fallback. Usa params otimizados se disponíveis."""
+    if optimized_params:
+        opt_tp1 = optimized_params.get("tp1_atr_multiplier")
+        if opt_tp1 and opt_tp1 > 0:
+            return float(opt_tp1)
     return {
         "SCALP": 1.0,
         "DAY_TRADE": 2.0,
