@@ -1161,6 +1161,34 @@ Responda APENAS com JSON:
             is_sideways = market_regime and market_regime.get("base_regime") == "SIDEWAYS"
 
             if llm_signal_dir in ["BUY", "SELL"] and "error" not in analysis_data:
+                # ========================================
+                # HARD FILTER: Bloquear sinais contra RSI extremo
+                # SELL com RSI < 25 (oversold extremo) ou BUY com RSI > 75 (overbought extremo)
+                # São erros técnicos fundamentais que nenhuma confluência deveria aprovar
+                # ========================================
+                _rsi_val = analysis_data.get("key_indicators", {}).get("rsi", {}).get("value", 50)
+                RSI_EXTREME_OVERSOLD = 25  # Abaixo disso, NUNCA vender
+                RSI_EXTREME_OVERBOUGHT = 75  # Acima disso, NUNCA comprar
+
+                if llm_signal_dir == "SELL" and _rsi_val < RSI_EXTREME_OVERSOLD:
+                    logger.warning(
+                        f"[HARD BLOCK] {symbol}: SELL bloqueado — RSI={_rsi_val:.1f} < {RSI_EXTREME_OVERSOLD} "
+                        f"(oversold extremo, risco de bounce). Sinal cancelado."
+                    )
+                    agno_signal["signal"] = "NO_SIGNAL"
+                    agno_signal["block_reason"] = f"RSI oversold extremo ({_rsi_val:.1f}): SELL proibido"
+                elif llm_signal_dir == "BUY" and _rsi_val > RSI_EXTREME_OVERBOUGHT:
+                    logger.warning(
+                        f"[HARD BLOCK] {symbol}: BUY bloqueado — RSI={_rsi_val:.1f} > {RSI_EXTREME_OVERBOUGHT} "
+                        f"(overbought extremo, risco de pullback). Sinal cancelado."
+                    )
+                    agno_signal["signal"] = "NO_SIGNAL"
+                    agno_signal["block_reason"] = f"RSI overbought extremo ({_rsi_val:.1f}): BUY proibido"
+
+            # Re-check after hard filter
+            llm_signal_dir = agno_signal.get("signal", "NO_SIGNAL")
+
+            if llm_signal_dir in ["BUY", "SELL"] and "error" not in analysis_data:
                 # Drift check: pausar ML se drift severo detectado
                 _ml_paused_by_drift = False
                 try:
@@ -1533,11 +1561,22 @@ Responda APENAS com JSON:
                     if needs_calc and "error" not in analysis_data:
                         try:
                             from src.analysis.technical_levels_calculator import calculate_technical_sl_tp
+                            # Carregar params otimizados para SL/TP (sl_atr_multiplier, tp1_atr_multiplier)
+                            _opt_params_for_sl = None
+                            try:
+                                from src.backtesting.continuous_optimizer import load_best_config
+                                _opt_config = load_best_config(symbol, "1h", mover_type=mover_type)
+                                if _opt_config:
+                                    from dataclasses import asdict
+                                    _opt_params_for_sl = asdict(_opt_config)
+                            except Exception:
+                                pass
                             tech_levels = calculate_technical_sl_tp(
                                 entry_price=entry,
                                 direction=direction,
                                 analysis_data=analysis_data,
                                 operation_type=op_type,
+                                optimized_params=_opt_params_for_sl,
                             )
                             if "error" not in tech_levels:
                                 # Sempre usar SL/TP técnicos — são baseados em niveis reais
@@ -1587,14 +1626,23 @@ Responda APENAS com JSON:
                     tp2 = agno_signal.get("take_profit_2", 0) or 0
                     if sl <= 0 or tp1 <= 0 or tp2 <= 0:
                         atr_value = agno_signal.get("atr", 0)
+                        # Usar multiplicadores otimizados se disponíveis
+                        _sl_mult = 1.5
+                        _tp1_mult = 3.0
+                        _tp2_mult = 5.0
+                        if _opt_params_for_sl:
+                            _sl_mult = _opt_params_for_sl.get("sl_atr_multiplier", 1.5)
+                            _tp1_mult = _opt_params_for_sl.get("tp1_atr_multiplier", 3.0)
+                            _tp2_mult = _opt_params_for_sl.get("tp2_atr_multiplier", 5.0)
                         if atr_value and atr_value > 0:
-                            sl_dist = atr_value * 1.5
-                            tp1_dist = atr_value * 3.0
-                            tp2_dist = atr_value * 5.0
+                            sl_dist = atr_value * _sl_mult
+                            tp1_dist = atr_value * _tp1_mult
+                            tp2_dist = atr_value * _tp2_mult
                         else:
-                            sl_dist = entry * 0.015
-                            tp1_dist = entry * 0.03
-                            tp2_dist = entry * 0.05
+                            # Fallback percentual: 2.5% SL (antigo 1.5% era muito apertado)
+                            sl_dist = entry * 0.025
+                            tp1_dist = entry * 0.05
+                            tp2_dist = entry * 0.08
                         logger.warning("[FALLBACK SL/TP] Calculador técnico não cobriu todos os níveis, usando ATR/percentual")
                         if sl <= 0:
                             sl = (entry - sl_dist) if direction == "BUY" else (entry + sl_dist)
@@ -1815,6 +1863,7 @@ Responda APENAS com JSON:
                                 direction=local_signal_dir,
                                 analysis_data=analysis_data,
                                 operation_type=op_type,
+                                optimized_params=locals().get('_opt_params_for_sl'),
                             )
                             if "error" not in tech_levels:
                                 local_signal["stop_loss"] = tech_levels["stop_loss"]
