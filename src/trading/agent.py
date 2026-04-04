@@ -1015,10 +1015,10 @@ Responda APENAS com JSON:
                         if trend_data:
                             ds_dir = deepseek_signal.get("signal")
                             if ds_dir == "BUY" and not trend_data.get("allow_long", True):
-                                logger.warning(f"╔══ [BLOQUEADO] DEEPSEEK BUY {symbol} — Tendência de baixa no 4h")
+                                logger.warning(f"╔══ [BLOQUEADO] DEEPSEEK BUY {symbol} — {trend_data.get('description', 'Confluência MTF bearish')}")
                                 deepseek_signal["signal"] = "NO_SIGNAL"
                             elif ds_dir == "SELL" and not trend_data.get("allow_short", True):
-                                logger.warning(f"╔══ [BLOQUEADO] DEEPSEEK SELL {symbol} — Tendência de alta no 4h")
+                                logger.warning(f"╔══ [BLOQUEADO] DEEPSEEK SELL {symbol} — {trend_data.get('description', 'Confluência MTF bullish')}")
                                 deepseek_signal["signal"] = "NO_SIGNAL"
 
                     # Validar SL/TP1/TP2 obrigatórios antes de executar
