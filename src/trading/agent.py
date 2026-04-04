@@ -223,6 +223,38 @@ class AgnoTradingAgent:
                     "ml_class_accuracy": None, "lstm_accuracy": None, "lstm_trained_accuracy": None,
                     "lstm_operational_accuracy": None}
 
+    def _trigger_drift_retrain(self):
+        """Trigger ML retrain em background thread quando drift é detectado."""
+        if getattr(self, '_retrain_in_progress', False):
+            return  # Já tem um retrain rodando
+        import threading
+
+        def _do_retrain():
+            self._retrain_in_progress = True
+            try:
+                logger.info("[ML-RETRAIN] Drift detectado — iniciando retrain automático...")
+                from src.ml.online_learning import seed_from_evaluated_signals
+                result = seed_from_evaluated_signals(force_retrain=True)
+                if result.get("success"):
+                    rt = result.get("retrain_result", {})
+                    if rt and rt.get("success"):
+                        logger.info(
+                            f"[ML-RETRAIN] OK! Accuracy={rt.get('new_accuracy', 0):.1%}, "
+                            f"F1={rt.get('new_f1', 0):.3f}, Amostras={rt.get('samples_used', 0)}"
+                        )
+                    else:
+                        logger.info(f"[ML-RETRAIN] Sinais alimentados: {result.get('signals_added', 0)}, "
+                                    f"mas retrain não executou (buffer insuficiente?)")
+                else:
+                    logger.warning(f"[ML-RETRAIN] Falhou: {result.get('error', 'unknown')}")
+            except Exception as e:
+                logger.error(f"[ML-RETRAIN] Erro: {e}")
+            finally:
+                self._retrain_in_progress = False
+
+        t = threading.Thread(target=_do_retrain, daemon=True, name="drift-retrain")
+        t.start()
+
     def _check_ml_prediction_bias(self) -> bool:
         """
         Verifica se o modelo ML está viciado (predizendo >70% como mesma classe).
@@ -1215,11 +1247,14 @@ Responda APENAS com JSON:
                 _ml_paused_by_drift = False
                 try:
                     from src.analysis.drift_detector import get_drift_detector
-                    if get_drift_detector().should_pause_ml():
+                    detector = get_drift_detector()
+                    if detector.should_pause_ml():
                         _ml_paused_by_drift = True
-                        logger.warning("[DRIFT] ML pausado — drift severo detectado, aguardando retreino")
-                except Exception:
-                    pass
+                        logger.warning("[DRIFT] ML pausado — drift severo detectado, triggering retrain...")
+                        # Trigger retrain assíncrono em background (não bloqueia o ciclo)
+                        self._trigger_drift_retrain()
+                except Exception as e:
+                    logger.warning(f"[DRIFT] Erro no drift detector: {e}")
 
                 # VALIDAÇÃO ML: obter voto ML ANTES da confluência
                 # Accuracy gate: ML só vota se accuracy >= 55% (mesmo critério do LSTM)

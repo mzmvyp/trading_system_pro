@@ -1,18 +1,17 @@
 """
-Filtro de Tendência Dinâmico baseado em EMA 50/200 no timeframe DIÁRIO (1d).
+Filtro de Tendência Dinâmico baseado em EMA 20/50 no timeframe 4h.
 
 Lógica:
-- Busca klines 1d da Binance PRODUCTION (fapi.binance.com)
-- Calcula EMA 50 e EMA 200 (50 dias e 200 dias — padrão institucional)
-- Determina tendência: BULLISH (EMA50 > EMA200), BEARISH (EMA50 < EMA200), NEUTRAL (cruzamento recente)
-- Filtra sinais contra-tendência (ex: bloqueia BUY em tendência BEARISH)
-- Zona neutra: quando EMAs estão muito próximas (<0.5%), permite ambas as direções
-- Cache de 1h para não sobrecarregar a API
+- Busca klines 4h da Binance PRODUCTION (fapi.binance.com)
+- Calcula EMA 20 e EMA 50 (3.3 dias e 8.3 dias — adequado para day trades)
+- Determina tendência: BULLISH (EMA20 > EMA50), BEARISH (EMA20 < EMA50), NEUTRAL
+- Filtra sinais contra-tendência (ex: bloqueia BUY em tendência BEARISH forte)
+- Zona neutra ampla: quando EMAs estão próximas (<1%) ou cruzamento recente → permite tudo
+- Cache de 30min para acompanhar mudanças no 4h
 
-NOTA: Usa timeframe diário (não 4h) para capturar a tendência MACRO real.
-No 4h, um bounce de curto prazo fazia EMA50>EMA200 e o sistema achava
-que ETH (caiu 55% de $4957 para $2199) estava em tendência de alta.
-Com 1d, EMA50=50 dias e EMA200=200 dias — captura a tendência real.
+NOTA: Usa 4h (não 1d) porque os trades têm alvos curtos (day trade / scalp).
+O 1d bloqueava BUY em AVAX/DOT/LINK que estão em bear macro há meses,
+mesmo quando no 4h havia tendência de alta clara com bons setups.
 """
 import time
 from typing import Any, Dict, Optional
@@ -24,17 +23,17 @@ from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Cache: {symbol: {"trend": str, "ema50": float, "ema200": float, "timestamp": float, "strength": float}}
+# Cache: {symbol: {"data": Dict, "timestamp": float}}
 _trend_cache: Dict[str, Dict[str, Any]] = {}
-CACHE_TTL_SECONDS = 3600  # 1 hora de cache (candle diário muda 1x/dia)
+CACHE_TTL_SECONDS = 1800  # 30min de cache (candle 4h = mais dinâmico que 1d)
 
 
-async def _fetch_klines_1d(symbol: str, limit: int = 250) -> Optional[pd.DataFrame]:
-    """Busca klines diários diretamente da Binance PRODUCTION."""
+async def _fetch_klines_4h(symbol: str, limit: int = 100) -> Optional[pd.DataFrame]:
+    """Busca klines 4h diretamente da Binance PRODUCTION."""
     url = "https://fapi.binance.com/fapi/v1/klines"
     params = {
         "symbol": symbol,
-        "interval": "1d",
+        "interval": "4h",
         "limit": limit
     }
 
@@ -42,7 +41,7 @@ async def _fetch_klines_1d(symbol: str, limit: int = 250) -> Optional[pd.DataFra
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status != 200:
-                    logger.warning(f"[TREND] Erro ao buscar klines 1d de {symbol}: HTTP {resp.status}")
+                    logger.warning(f"[TREND] Erro ao buscar klines 4h de {symbol}: HTTP {resp.status}")
                     return None
                 data = await resp.json()
 
@@ -58,7 +57,7 @@ async def _fetch_klines_1d(symbol: str, limit: int = 250) -> Optional[pd.DataFra
         return df
 
     except Exception as e:
-        logger.warning(f"[TREND] Erro ao buscar klines 1d de {symbol}: {e}")
+        logger.warning(f"[TREND] Erro ao buscar klines 4h de {symbol}: {e}")
         return None
 
 
@@ -69,18 +68,18 @@ def _calculate_ema(series: pd.Series, period: int) -> pd.Series:
 
 async def get_trend(symbol: str) -> Dict[str, Any]:
     """
-    Retorna a tendência atual do símbolo baseada em EMA 50/200 no DIÁRIO.
+    Retorna a tendência atual do símbolo baseada em EMA 20/50 no 4h.
 
-    EMA50 = média de 50 dias, EMA200 = média de 200 dias.
-    Padrão institucional para determinar tendência macro.
+    EMA20 = ~3.3 dias, EMA50 = ~8.3 dias.
+    Adequado para day trades com alvos curtos.
 
     Returns:
         {
             "trend": "BULLISH" | "BEARISH" | "NEUTRAL",
             "ema50": float,
-            "ema200": float,
+            "ema200": float,  # mantido para compatibilidade (agora é EMA50)
             "price": float,
-            "strength": float,  # 0-1, quão forte é a tendência
+            "strength": float,
             "description": str,
             "allow_long": bool,
             "allow_short": bool
@@ -93,11 +92,10 @@ async def get_trend(symbol: str) -> Dict[str, Any]:
         if now - cached["timestamp"] < CACHE_TTL_SECONDS:
             return cached["data"]
 
-    # Buscar dados diários
-    df = await _fetch_klines_1d(symbol, limit=250)
+    # Buscar dados 4h
+    df = await _fetch_klines_4h(symbol, limit=100)
 
-    if df is None or len(df) < 200:
-        # Sem dados suficientes: permitir tudo (fail-open)
+    if df is None or len(df) < 55:
         logger.warning(f"[TREND] Dados insuficientes para {symbol}, permitindo todos os sinais")
         result = {
             "trend": "UNKNOWN",
@@ -113,73 +111,69 @@ async def get_trend(symbol: str) -> Dict[str, Any]:
 
     close = df['close']
     current_price = float(close.iloc[-1])
+    ema20 = _calculate_ema(close, 20)
     ema50 = _calculate_ema(close, 50)
-    ema200 = _calculate_ema(close, 200)
 
+    ema20_val = float(ema20.iloc[-1])
     ema50_val = float(ema50.iloc[-1])
-    ema200_val = float(ema200.iloc[-1])
 
-    # Calcular distância percentual entre EMAs
-    ema_distance_pct = abs(ema50_val - ema200_val) / ema200_val * 100
+    # Distância percentual entre EMAs
+    ema_distance_pct = abs(ema20_val - ema50_val) / ema50_val * 100
 
-    # Verificar se houve cruzamento recente (últimas 5 velas = 5 dias)
+    # Cruzamento recente (últimas 3 velas = 12h)
     recent_cross = False
-    for i in range(-5, 0):
-        if i - 1 >= -len(ema50):
-            prev_diff = float(ema50.iloc[i - 1]) - float(ema200.iloc[i - 1])
-            curr_diff = float(ema50.iloc[i]) - float(ema200.iloc[i])
-            if prev_diff * curr_diff < 0:  # Mudou de sinal
+    for i in range(-3, 0):
+        if i - 1 >= -len(ema20):
+            prev_diff = float(ema20.iloc[i - 1]) - float(ema50.iloc[i - 1])
+            curr_diff = float(ema20.iloc[i]) - float(ema50.iloc[i])
+            if prev_diff * curr_diff < 0:
                 recent_cross = True
                 break
 
-    # Verificar posição do preço em relação às EMAs
+    # Posição do preço em relação às EMAs
+    price_above_ema20 = current_price > ema20_val
     price_above_ema50 = current_price > ema50_val
-    price_above_ema200 = current_price > ema200_val
 
-    # Determinar tendência
-    # Zona neutra mais ampla (0.5%) para diário — evita flip-flop em consolidação
-    if ema_distance_pct < 0.5 or recent_cross:
-        # EMAs muito próximas ou cruzamento recente = NEUTRO
+    # Zona neutra ampla (1%) — EMAs próximas ou cruzamento recente
+    if ema_distance_pct < 1.0 or recent_cross:
         trend = "NEUTRAL"
-        strength = ema_distance_pct / 0.5 if ema_distance_pct < 0.5 else 0.5
+        strength = ema_distance_pct / 1.0 if ema_distance_pct < 1.0 else 0.5
         allow_long = True
         allow_short = True
-        description = f"Tendência NEUTRA - EMAs 1d muito próximas ({ema_distance_pct:.2f}%)"
+        description = f"Tendência NEUTRA 4h — EMAs próximas ({ema_distance_pct:.2f}%)"
         if recent_cross:
-            description += " - Cruzamento recente detectado"
+            description += " — cruzamento recente"
 
-    elif ema50_val > ema200_val:
-        # EMA 50 acima da 200 no DIÁRIO = BULLISH macro
+    elif ema20_val > ema50_val:
         trend = "BULLISH"
-        strength = min(ema_distance_pct / 5.0, 1.0)
+        strength = min(ema_distance_pct / 3.0, 1.0)
         allow_long = True
         allow_short = False
 
-        if price_above_ema50 and price_above_ema200:
-            description = f"Tendência ALTA forte 1d - preço acima de EMA50 e EMA200 ({ema_distance_pct:.2f}%)"
-        elif price_above_ema200:
-            description = f"Tendência ALTA 1d - preço corrigindo entre EMAs ({ema_distance_pct:.2f}%)"
+        if price_above_ema20 and price_above_ema50:
+            description = f"Tendência ALTA 4h — preço acima de EMA20 e EMA50 ({ema_distance_pct:.2f}%)"
+        elif price_above_ema50:
+            description = f"Tendência ALTA 4h — preço entre EMAs ({ema_distance_pct:.2f}%)"
         else:
-            description = f"Tendência ALTA 1d - preço testando suporte ({ema_distance_pct:.2f}%)"
+            description = f"Tendência ALTA 4h — preço testando suporte ({ema_distance_pct:.2f}%)"
 
     else:
-        # EMA 50 abaixo da 200 no DIÁRIO = BEARISH macro
         trend = "BEARISH"
-        strength = min(ema_distance_pct / 5.0, 1.0)
+        strength = min(ema_distance_pct / 3.0, 1.0)
         allow_long = False
         allow_short = True
 
-        if not price_above_ema50 and not price_above_ema200:
-            description = f"Tendência BAIXA forte 1d - preço abaixo de EMA50 e EMA200 ({ema_distance_pct:.2f}%)"
-        elif not price_above_ema200:
-            description = f"Tendência BAIXA 1d - preço corrigindo entre EMAs ({ema_distance_pct:.2f}%)"
+        if not price_above_ema20 and not price_above_ema50:
+            description = f"Tendência BAIXA 4h — preço abaixo de EMA20 e EMA50 ({ema_distance_pct:.2f}%)"
+        elif not price_above_ema50:
+            description = f"Tendência BAIXA 4h — preço entre EMAs ({ema_distance_pct:.2f}%)"
         else:
-            description = f"Tendência BAIXA 1d - preço testando resistência ({ema_distance_pct:.2f}%)"
+            description = f"Tendência BAIXA 4h — preço testando resistência ({ema_distance_pct:.2f}%)"
 
     result = {
         "trend": trend,
-        "ema50": ema50_val,
-        "ema200": ema200_val,
+        "ema50": ema20_val,   # EMA rápida (era EMA50 no 1d, agora EMA20 no 4h)
+        "ema200": ema50_val,  # EMA lenta (era EMA200 no 1d, agora EMA50 no 4h)
         "price": current_price,
         "strength": strength,
         "description": description,
@@ -193,16 +187,8 @@ async def get_trend(symbol: str) -> Dict[str, Any]:
         "timestamp": now
     }
 
-    logger.info(f"[TREND 1d] {symbol}: {trend} (EMA50={ema50_val:.2f}, EMA200={ema200_val:.2f}, "
+    logger.info(f"[TREND 4h] {symbol}: {trend} (EMA20={ema20_val:.2f}, EMA50={ema50_val:.2f}, "
                 f"Preço={current_price:.2f}, Força={strength:.2f}) -> "
                 f"Long={'SIM' if allow_long else 'NÃO'}, Short={'SIM' if allow_short else 'NÃO'}")
 
     return result
-
-
-def clear_cache(symbol: str = None):
-    """Limpa o cache de tendência."""
-    if symbol:
-        _trend_cache.pop(symbol, None)
-    else:
-        _trend_cache.clear()
