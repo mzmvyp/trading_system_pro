@@ -241,13 +241,21 @@ async def main():
             # Roda a cada N horas em thread daemon separada
             # ============================================================
             try:
-                _ml_train_hours = int(os.getenv("ML_AUTO_TRAIN_HOURS", "12"))
+                _ml_train_hours = int(os.getenv("ML_AUTO_TRAIN_HOURS", "6"))
                 if _ml_train_hours > 0:
                     import threading
 
                     def _auto_train_ml_loop(interval_hours: int):
                         """Thread daemon que treina ML/LSTM periodicamente."""
                         import time as _time
+                        import traceback as _tb
+
+                        # Garantir diretórios existem
+                        import pathlib
+                        pathlib.Path("data/drift").mkdir(parents=True, exist_ok=True)
+                        pathlib.Path("data/ml").mkdir(parents=True, exist_ok=True)
+                        pathlib.Path("logs").mkdir(parents=True, exist_ok=True)
+
                         logger.info(f"[ML-AUTO] Treino automático iniciado. Ciclo: {interval_hours}h")
                         while True:
                             _time.sleep(interval_hours * 3600)
@@ -289,7 +297,7 @@ async def main():
                                     logger.warning(f"[ML-AUTO] LSTM treino falhou: {lstm_err}")
 
                             except Exception as e:
-                                logger.error(f"[ML-AUTO] Erro no treino automático: {e}")
+                                logger.error(f"[ML-AUTO] Erro no treino automático: {e}\n{_tb.format_exc()}")
 
                     ml_thread = threading.Thread(
                         target=_auto_train_ml_loop,

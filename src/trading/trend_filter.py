@@ -1,21 +1,26 @@
 """
-Filtro de Tendência Dinâmico baseado em EMA 50/200 no timeframe DIÁRIO (1d).
+Filtro de Tendência Multi-Timeframe com Confluência.
 
 Lógica:
-- Busca klines 1d da Binance PRODUCTION (fapi.binance.com)
-- Calcula EMA 50 e EMA 200 (50 dias e 200 dias — padrão institucional)
-- Determina tendência: BULLISH (EMA50 > EMA200), BEARISH (EMA50 < EMA200), NEUTRAL (cruzamento recente)
-- Filtra sinais contra-tendência (ex: bloqueia BUY em tendência BEARISH)
-- Zona neutra: quando EMAs estão muito próximas (<0.5%), permite ambas as direções
-- Cache de 1h para não sobrecarregar a API
+- Busca klines de múltiplos timeframes (15m, 1h, 4h, 1d) da Binance PRODUCTION
+- Calcula EMA 20 e EMA 50 em cada timeframe
+- Determina tendência por TF: BULLISH (EMA20 > EMA50), BEARISH, NEUTRAL
+- Usa pesos por timeframe para confluência:
+    15m = 1.0, 1h = 1.5, 4h = 2.0, 1d = 1.0
+  (4h tem peso máximo pois é o sweet spot para day trades;
+   1d tem peso reduzido para não vetar sinais curtos em bear macro)
+- Decisão final baseada em score ponderado:
+    Score > 0 → tendência bullish, Score < 0 → tendência bearish
+    |Score| < threshold → neutro (permite tudo)
+- Bloqueio só acontece quando há forte confluência contra a direção do trade
+- Cache de 15min por símbolo
 
-NOTA: Usa timeframe diário (não 4h) para capturar a tendência MACRO real.
-No 4h, um bounce de curto prazo fazia EMA50>EMA200 e o sistema achava
-que ETH (caiu 55% de $4957 para $2199) estava em tendência de alta.
-Com 1d, EMA50=50 dias e EMA200=200 dias — captura a tendência real.
+NOTA: Substituiu o filtro single-timeframe (4h) que não cruzava tendências.
+O usuário pediu cruzamento entre 1d, 4h, 30m, 15m para confluência.
 """
+import asyncio
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 import pandas as pd
@@ -24,17 +29,42 @@ from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Cache: {symbol: {"trend": str, "ema50": float, "ema200": float, "timestamp": float, "strength": float}}
+# Cache: {symbol: {"data": Dict, "timestamp": float}}
 _trend_cache: Dict[str, Dict[str, Any]] = {}
-CACHE_TTL_SECONDS = 3600  # 1 hora de cache (candle diário muda 1x/dia)
+CACHE_TTL_SECONDS = 900  # 15min — mais responsivo com múltiplos TFs
+
+# Timeframes e seus pesos para day trading
+# 4h é o sweet spot: captura tendência intraday sem ruído do 5m/15m
+# 1d informa mas NÃO veta (peso reduzido) — evita bloquear BUY em bear macro
+# 15m/1h capturam momentum de curto prazo
+TIMEFRAME_CONFIG: List[Tuple[str, float, int]] = [
+    # (interval, weight, min_candles_needed)
+    ("15m", 1.0, 55),
+    ("1h",  1.5, 55),
+    ("4h",  2.0, 55),
+    ("1d",  1.0, 55),
+]
+
+# Threshold para bloqueio — score ponderado precisa ser forte para bloquear
+# Score máximo possível: 1.0+1.5+2.0+1.0 = 5.5 (todos TFs alinhados)
+# Bloqueia apenas quando score >= 3.0 (>54% do máximo)
+BLOCK_THRESHOLD = 3.0
+
+# Zona neutra por TF: se EMAs estão dentro deste % uma da outra, TF é neutro
+NEUTRAL_ZONE_PCT = {
+    "15m": 0.15,   # 15m é mais ruidoso, zona neutra menor
+    "1h":  0.3,
+    "4h":  0.8,
+    "1d":  1.2,    # 1d precisa de mais separação para ser significativo
+}
 
 
-async def _fetch_klines_1d(symbol: str, limit: int = 250) -> Optional[pd.DataFrame]:
-    """Busca klines diários diretamente da Binance PRODUCTION."""
+async def _fetch_klines(symbol: str, interval: str, limit: int = 100) -> Optional[pd.DataFrame]:
+    """Busca klines diretamente da Binance PRODUCTION."""
     url = "https://fapi.binance.com/fapi/v1/klines"
     params = {
         "symbol": symbol,
-        "interval": "1d",
+        "interval": interval,
         "limit": limit
     }
 
@@ -42,7 +72,7 @@ async def _fetch_klines_1d(symbol: str, limit: int = 250) -> Optional[pd.DataFra
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status != 200:
-                    logger.warning(f"[TREND] Erro ao buscar klines 1d de {symbol}: HTTP {resp.status}")
+                    logger.warning(f"[TREND-MTF] Erro ao buscar klines {interval} de {symbol}: HTTP {resp.status}")
                     return None
                 data = await resp.json()
 
@@ -58,7 +88,7 @@ async def _fetch_klines_1d(symbol: str, limit: int = 250) -> Optional[pd.DataFra
         return df
 
     except Exception as e:
-        logger.warning(f"[TREND] Erro ao buscar klines 1d de {symbol}: {e}")
+        logger.warning(f"[TREND-MTF] Erro ao buscar klines {interval} de {symbol}: {e}")
         return None
 
 
@@ -67,23 +97,83 @@ def _calculate_ema(series: pd.Series, period: int) -> pd.Series:
     return series.ewm(span=period, adjust=False).mean()
 
 
-async def get_trend(symbol: str) -> Dict[str, Any]:
+def _analyze_single_tf(df: pd.DataFrame, interval: str) -> Dict[str, Any]:
     """
-    Retorna a tendência atual do símbolo baseada em EMA 50/200 no DIÁRIO.
-
-    EMA50 = média de 50 dias, EMA200 = média de 200 dias.
-    Padrão institucional para determinar tendência macro.
+    Analisa tendência de um único timeframe usando EMA20/50.
 
     Returns:
         {
             "trend": "BULLISH" | "BEARISH" | "NEUTRAL",
+            "ema20": float,
             "ema50": float,
-            "ema200": float,
             "price": float,
-            "strength": float,  # 0-1, quão forte é a tendência
+            "distance_pct": float,  # distância entre EMAs em %
+            "recent_cross": bool,
+        }
+    """
+    close = df['close']
+    current_price = float(close.iloc[-1])
+    ema20 = _calculate_ema(close, 20)
+    ema50 = _calculate_ema(close, 50)
+
+    ema20_val = float(ema20.iloc[-1])
+    ema50_val = float(ema50.iloc[-1])
+
+    # Distância percentual entre EMAs
+    if ema50_val > 0:
+        distance_pct = abs(ema20_val - ema50_val) / ema50_val * 100
+    else:
+        distance_pct = 0
+
+    # Cruzamento recente (últimas 3 candles)
+    recent_cross = False
+    for i in range(-3, 0):
+        if i - 1 >= -len(ema20):
+            prev_diff = float(ema20.iloc[i - 1]) - float(ema50.iloc[i - 1])
+            curr_diff = float(ema20.iloc[i]) - float(ema50.iloc[i])
+            if prev_diff * curr_diff < 0:
+                recent_cross = True
+                break
+
+    # Determinar tendência do TF
+    neutral_zone = NEUTRAL_ZONE_PCT.get(interval, 0.5)
+
+    if distance_pct < neutral_zone or recent_cross:
+        trend = "NEUTRAL"
+    elif ema20_val > ema50_val:
+        trend = "BULLISH"
+    else:
+        trend = "BEARISH"
+
+    return {
+        "trend": trend,
+        "ema20": ema20_val,
+        "ema50": ema50_val,
+        "price": current_price,
+        "distance_pct": distance_pct,
+        "recent_cross": recent_cross,
+    }
+
+
+async def get_trend(symbol: str) -> Dict[str, Any]:
+    """
+    Retorna a tendência atual baseada em confluência multi-timeframe.
+
+    Analisa 15m, 1h, 4h, 1d e calcula score ponderado.
+    Só bloqueia trades quando há forte confluência contra a direção.
+
+    Returns:
+        {
+            "trend": "BULLISH" | "BEARISH" | "NEUTRAL",
+            "ema50": float,       # EMA rápida do 4h (compatibilidade)
+            "ema200": float,      # EMA lenta do 4h (compatibilidade)
+            "price": float,
+            "strength": float,    # 0.0 a 1.0
             "description": str,
             "allow_long": bool,
-            "allow_short": bool
+            "allow_short": bool,
+            "timeframes": dict,   # detalhes por TF
+            "confluence_score": float,
         }
     """
     # Verificar cache
@@ -93,12 +183,49 @@ async def get_trend(symbol: str) -> Dict[str, Any]:
         if now - cached["timestamp"] < CACHE_TTL_SECONDS:
             return cached["data"]
 
-    # Buscar dados diários
-    df = await _fetch_klines_1d(symbol, limit=250)
+    # Buscar todos os timeframes em paralelo
+    fetch_tasks = []
+    for interval, weight, min_candles in TIMEFRAME_CONFIG:
+        fetch_tasks.append(_fetch_klines(symbol, interval, limit=100))
 
-    if df is None or len(df) < 200:
-        # Sem dados suficientes: permitir tudo (fail-open)
-        logger.warning(f"[TREND] Dados insuficientes para {symbol}, permitindo todos os sinais")
+    klines_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+    # Analisar cada timeframe
+    tf_analyses = {}
+    bullish_score = 0.0
+    bearish_score = 0.0
+    total_weight = 0.0
+    ema20_4h = 0.0
+    ema50_4h = 0.0
+    current_price = 0.0
+
+    for idx, (interval, weight, min_candles) in enumerate(TIMEFRAME_CONFIG):
+        df = klines_results[idx]
+
+        if isinstance(df, Exception) or df is None or len(df) < min_candles:
+            logger.debug(f"[TREND-MTF] {symbol} {interval}: dados insuficientes, ignorando")
+            continue
+
+        analysis = _analyze_single_tf(df, interval)
+        tf_analyses[interval] = analysis
+
+        if analysis["trend"] == "BULLISH":
+            bullish_score += weight
+        elif analysis["trend"] == "BEARISH":
+            bearish_score += weight
+        # NEUTRAL contribui 0 para ambos
+
+        total_weight += weight
+        current_price = analysis["price"]
+
+        # Guardar EMAs do 4h para compatibilidade
+        if interval == "4h":
+            ema20_4h = analysis["ema20"]
+            ema50_4h = analysis["ema50"]
+
+    # Se não conseguiu dados de nenhum TF, permitir tudo
+    if total_weight == 0:
+        logger.warning(f"[TREND-MTF] Sem dados para {symbol}, permitindo todos os sinais")
         result = {
             "trend": "UNKNOWN",
             "ema50": 0,
@@ -107,84 +234,65 @@ async def get_trend(symbol: str) -> Dict[str, Any]:
             "strength": 0,
             "description": "Dados insuficientes para determinar tendência",
             "allow_long": True,
-            "allow_short": True
+            "allow_short": True,
+            "timeframes": {},
+            "confluence_score": 0,
         }
         return result
 
-    close = df['close']
-    current_price = float(close.iloc[-1])
-    ema50 = _calculate_ema(close, 50)
-    ema200 = _calculate_ema(close, 200)
+    # Calcular score de confluência
+    # Positivo = bullish, negativo = bearish
+    confluence_score = bullish_score - bearish_score
+    max_possible = sum(w for _, w, _ in TIMEFRAME_CONFIG)
+    strength = abs(confluence_score) / max_possible  # 0.0 a 1.0
 
-    ema50_val = float(ema50.iloc[-1])
-    ema200_val = float(ema200.iloc[-1])
-
-    # Calcular distância percentual entre EMAs
-    ema_distance_pct = abs(ema50_val - ema200_val) / ema200_val * 100
-
-    # Verificar se houve cruzamento recente (últimas 5 velas = 5 dias)
-    recent_cross = False
-    for i in range(-5, 0):
-        if i - 1 >= -len(ema50):
-            prev_diff = float(ema50.iloc[i - 1]) - float(ema200.iloc[i - 1])
-            curr_diff = float(ema50.iloc[i]) - float(ema200.iloc[i])
-            if prev_diff * curr_diff < 0:  # Mudou de sinal
-                recent_cross = True
-                break
-
-    # Verificar posição do preço em relação às EMAs
-    price_above_ema50 = current_price > ema50_val
-    price_above_ema200 = current_price > ema200_val
-
-    # Determinar tendência
-    # Zona neutra mais ampla (0.5%) para diário — evita flip-flop em consolidação
-    if ema_distance_pct < 0.5 or recent_cross:
-        # EMAs muito próximas ou cruzamento recente = NEUTRO
-        trend = "NEUTRAL"
-        strength = ema_distance_pct / 0.5 if ema_distance_pct < 0.5 else 0.5
-        allow_long = True
-        allow_short = True
-        description = f"Tendência NEUTRA - EMAs 1d muito próximas ({ema_distance_pct:.2f}%)"
-        if recent_cross:
-            description += " - Cruzamento recente detectado"
-
-    elif ema50_val > ema200_val:
-        # EMA 50 acima da 200 no DIÁRIO = BULLISH macro
+    # Determinar tendência geral e permissões
+    if confluence_score >= BLOCK_THRESHOLD:
         trend = "BULLISH"
-        strength = min(ema_distance_pct / 5.0, 1.0)
         allow_long = True
         allow_short = False
-
-        if price_above_ema50 and price_above_ema200:
-            description = f"Tendência ALTA forte 1d - preço acima de EMA50 e EMA200 ({ema_distance_pct:.2f}%)"
-        elif price_above_ema200:
-            description = f"Tendência ALTA 1d - preço corrigindo entre EMAs ({ema_distance_pct:.2f}%)"
-        else:
-            description = f"Tendência ALTA 1d - preço testando suporte ({ema_distance_pct:.2f}%)"
-
-    else:
-        # EMA 50 abaixo da 200 no DIÁRIO = BEARISH macro
+    elif confluence_score <= -BLOCK_THRESHOLD:
         trend = "BEARISH"
-        strength = min(ema_distance_pct / 5.0, 1.0)
         allow_long = False
         allow_short = True
-
-        if not price_above_ema50 and not price_above_ema200:
-            description = f"Tendência BAIXA forte 1d - preço abaixo de EMA50 e EMA200 ({ema_distance_pct:.2f}%)"
-        elif not price_above_ema200:
-            description = f"Tendência BAIXA 1d - preço corrigindo entre EMAs ({ema_distance_pct:.2f}%)"
+    else:
+        # Confluência insuficiente para bloquear — permite tudo
+        if confluence_score > 0:
+            trend = "NEUTRAL_BULLISH"
+        elif confluence_score < 0:
+            trend = "NEUTRAL_BEARISH"
         else:
-            description = f"Tendência BAIXA 1d - preço testando resistência ({ema_distance_pct:.2f}%)"
+            trend = "NEUTRAL"
+        allow_long = True
+        allow_short = True
+
+    # Montar descrição
+    tf_summary = []
+    for interval, _, _ in TIMEFRAME_CONFIG:
+        if interval in tf_analyses:
+            t = tf_analyses[interval]["trend"]
+            d = tf_analyses[interval]["distance_pct"]
+            emoji = {"BULLISH": "ALTA", "BEARISH": "BAIXA", "NEUTRAL": "NEUTRA"}[t]
+            tf_summary.append(f"{interval}={emoji}({d:.1f}%)")
+
+    description = f"MTF Confluência: {' | '.join(tf_summary)} → Score={confluence_score:+.1f}/{max_possible:.1f}"
+
+    if not allow_long:
+        description += " [BLOQUEIA LONG]"
+    if not allow_short:
+        description += " [BLOQUEIA SHORT]"
 
     result = {
         "trend": trend,
-        "ema50": ema50_val,
-        "ema200": ema200_val,
+        "ema50": ema20_4h,    # EMA rápida 4h (compatibilidade)
+        "ema200": ema50_4h,   # EMA lenta 4h (compatibilidade)
         "price": current_price,
         "strength": strength,
         "description": description,
         "allow_long": allow_long,
-        "allow_short": allow_short
+        "allow_short": allow_short,
+        "timeframes": tf_analyses,
+        "confluence_score": confluence_score,
     }
 
     # Salvar cache
@@ -193,16 +301,15 @@ async def get_trend(symbol: str) -> Dict[str, Any]:
         "timestamp": now
     }
 
-    logger.info(f"[TREND 1d] {symbol}: {trend} (EMA50={ema50_val:.2f}, EMA200={ema200_val:.2f}, "
-                f"Preço={current_price:.2f}, Força={strength:.2f}) -> "
-                f"Long={'SIM' if allow_long else 'NÃO'}, Short={'SIM' if allow_short else 'NÃO'}")
+    # Log detalhado
+    tf_log = " | ".join(
+        f"{tf}:{a['trend']}({a['distance_pct']:.1f}%)"
+        for tf, a in tf_analyses.items()
+    )
+    logger.info(
+        f"[TREND-MTF] {symbol}: {trend} (Score={confluence_score:+.1f}, "
+        f"Força={strength:.2f}) [{tf_log}] → "
+        f"Long={'SIM' if allow_long else 'NÃO'}, Short={'SIM' if allow_short else 'NÃO'}"
+    )
 
     return result
-
-
-def clear_cache(symbol: str = None):
-    """Limpa o cache de tendência."""
-    if symbol:
-        _trend_cache.pop(symbol, None)
-    else:
-        _trend_cache.clear()
