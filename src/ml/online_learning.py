@@ -205,23 +205,17 @@ class OnlineLearningManager:
         signal_type = signal.get('signal', 'NO_SIGNAL')
         signal_encoded = 1 if signal_type == 'BUY' else (-1 if signal_type == 'SELL' else 0)
 
-        # 4. risk_distance_pct e reward_distance_pct
+        # 4. Features de mercado independentes (substituem risk/reward derivados do SL/TP)
         entry_price = signal.get('entry_price', 0)
-        stop_loss = signal.get('stop_loss', 0)
-        take_profit_1 = signal.get('take_profit_1', 0)
+        atr_val = signal.get('atr', indicators.get('atr', 0))
+        atr_pct = (atr_val / entry_price * 100) if entry_price > 0 and atr_val > 0 else 2.0
+        candle_body_pct = signal.get('candle_body_pct', 0.5)
+        volume_ratio = signal.get('volume_ratio', indicators.get('volume_ratio', 1.0))
 
-        if entry_price > 0 and stop_loss > 0:
-            risk_distance_pct = abs(entry_price - stop_loss) / entry_price * 100
-        else:
-            risk_distance_pct = 2.0  # Default 2%
-
-        if entry_price > 0 and take_profit_1 > 0:
-            reward_distance_pct = abs(take_profit_1 - entry_price) / entry_price * 100
-        else:
-            reward_distance_pct = 2.0  # Default 2%
-
-        # 5. risk_reward_ratio
-        risk_reward_ratio = reward_distance_pct / risk_distance_pct if risk_distance_pct > 0 else 1.0
+        # Nomes mantidos para compatibilidade com feature_columns existentes
+        risk_distance_pct = atr_pct
+        reward_distance_pct = candle_body_pct
+        risk_reward_ratio = volume_ratio
 
         # Construir data point com TODAS as 16 features
         data_point = {

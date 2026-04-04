@@ -80,7 +80,11 @@ class SimpleSignalValidator:
         return train_df, test_df
 
     def prepare_features(self, df: pd.DataFrame, fit_scaler: bool = False) -> Tuple[np.ndarray, np.ndarray]:
-        """Prepara features com tratamento robusto"""
+        """Prepara features com tratamento robusto.
+
+        Quando fit_scaler=True (treino), calcula e armazena medians/clip stats.
+        Quando fit_scaler=False (teste/produção), reutiliza stats do treino.
+        """
         # Features
         self.feature_columns = [
             'rsi', 'macd_histogram', 'adx', 'atr', 'bb_position',
@@ -99,19 +103,38 @@ class SimpleSignalValidator:
         # 1. Substituir infinitos por NaN
         X = X.replace([np.inf, -np.inf], np.nan)
 
-        # 2. Preencher NaN com mediana
-        for col in X.columns:
-            median_val = X[col].median()
-            if pd.isna(median_val):
-                median_val = 0
-            X[col] = X[col].fillna(median_val)
+        # 2. Preencher NaN com mediana (do TREINO)
+        if fit_scaler:
+            # Calcular e salvar medianas do treino
+            self._train_medians = {}
+            for col in X.columns:
+                median_val = X[col].median()
+                if pd.isna(median_val):
+                    median_val = 0
+                self._train_medians[col] = median_val
+                X[col] = X[col].fillna(median_val)
+        else:
+            # Reutilizar medianas do treino
+            for col in X.columns:
+                median_val = getattr(self, '_train_medians', {}).get(col, 0)
+                X[col] = X[col].fillna(median_val)
 
-        # 3. Clip valores extremos (3 desvios padrao)
-        for col in X.columns:
-            mean = X[col].mean()
-            std = X[col].std()
-            if std > 0:
-                X[col] = X[col].clip(mean - 3*std, mean + 3*std)
+        # 3. Clip valores extremos usando stats do TREINO
+        if fit_scaler:
+            # Calcular e salvar bounds do treino
+            self._train_clip_bounds = {}
+            for col in X.columns:
+                mean = X[col].mean()
+                std = X[col].std()
+                if std > 0:
+                    self._train_clip_bounds[col] = (mean - 3*std, mean + 3*std)
+                    X[col] = X[col].clip(mean - 3*std, mean + 3*std)
+        else:
+            # Reutilizar bounds do treino
+            for col in X.columns:
+                bounds = getattr(self, '_train_clip_bounds', {}).get(col)
+                if bounds:
+                    X[col] = X[col].clip(bounds[0], bounds[1])
 
         X = X.values
 
@@ -440,8 +463,10 @@ class SimpleSignalValidator:
             'trend_encoded': deepseek_signal.get('trend_encoded', 0),
             'sentiment_encoded': deepseek_signal.get('sentiment_encoded', 0),
             'signal_encoded': 1 if deepseek_signal.get('signal') == 'BUY' else (-1 if deepseek_signal.get('signal') == 'SELL' else 0),
+            # Features de mercado (atr_pct, candle_body_pct, volume_ratio)
+            # mantidas nos nomes originais para compatibilidade com feature_columns
             'risk_distance_pct': deepseek_signal.get('risk_distance_pct', 2),
-            'reward_distance_pct': deepseek_signal.get('reward_distance_pct', 2),
+            'reward_distance_pct': deepseek_signal.get('reward_distance_pct', 0.5),
             'risk_reward_ratio': deepseek_signal.get('risk_reward_ratio', 1),
         }
 
