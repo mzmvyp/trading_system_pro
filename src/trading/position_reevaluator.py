@@ -43,7 +43,7 @@ class PositionReevaluator:
         self._last_check: Dict[str, datetime] = {}
         self._breakeven_moved: Dict[str, bool] = {}
         self._partial_closed: Dict[str, bool] = {}
-        self.min_hours_between_checks = 0.5  # 30 min
+        self.min_hours_between_checks = 0.083  # ~5 min (antes era 30min — muito lento para alta alavancagem)
         self.min_hours_open = 1.0  # mínimo 1h aberta antes de reavaliar
 
     async def reevaluate(self, position: Dict[str, Any]) -> Dict[str, Any]:
@@ -140,9 +140,10 @@ class PositionReevaluator:
             return result
 
         # ============================================
-        # REGRA 2: Trailing Stop — lucro >= 75% do TP1 e ADX forte
+        # REGRA 2: Trailing Stop — lucro >= 75% do TP1
+        # ADX removido: altcoins voláteis têm ADX baixo mas PRECISAM de trailing
         # ============================================
-        if tp1_progress >= 0.75 and pnl_pct > 0 and adx > 25:
+        if tp1_progress >= 0.75 and pnl_pct > 0:
             if signal_type == "BUY":
                 new_sl = entry_price + (current_price - entry_price) * 0.5
             else:
@@ -200,7 +201,7 @@ class PositionReevaluator:
         # ============================================
         # REGRA 4: MACD inverteu + prejuízo → fechar
         # ============================================
-        if signal_type == "BUY" and macd_hist < 0 and pnl_pct < -1.0 and hours_open > 4:
+        if signal_type == "BUY" and macd_hist < 0 and pnl_pct < -1.0 and hours_open > 1:
             result.update({
                 "action": "CLOSE",
                 "reason": (
@@ -211,7 +212,7 @@ class PositionReevaluator:
             self._log_action(result)
             return result
 
-        if signal_type == "SELL" and macd_hist > 0 and pnl_pct < -1.0 and hours_open > 4:
+        if signal_type == "SELL" and macd_hist > 0 and pnl_pct < -1.0 and hours_open > 1:
             result.update({
                 "action": "CLOSE",
                 "reason": (

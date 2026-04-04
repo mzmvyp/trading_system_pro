@@ -952,7 +952,7 @@ class BinanceFuturesExecutor:
                 "signal": signal_type,
                 "entry_price": entry_price,
                 "position_size": position_size,
-                "leverage": self.default_leverage,
+                "leverage": calculated_leverage,
                 "stop_loss": stop_loss,
                 "take_profit_1": take_profit_1,
                 "take_profit_2": take_profit_2,

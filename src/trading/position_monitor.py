@@ -30,8 +30,10 @@ class PositionMonitor:
     """Monitora e reavalia posições abertas na Binance"""
 
     # Circuit breaker: fecha posição se prejuízo no PREÇO atingir esse limite
-    # Usa variação do preço (não ROI da margem) para ser independente da alavancagem
-    MAX_LOSS_PRICE_PERCENT = -5.0  # -5% de variação do preço contra a posição = fechar
+    # Agora DINÂMICO baseado na alavancagem: quanto maior a alavancagem, menor o limite
+    MAX_LOSS_PRICE_PERCENT = -5.0  # Default para baixa alavancagem (1-5x)
+    # Com alta alavancagem: limite reduzido para evitar liquidação
+    # 10x → -3%, 20x → -2%, 40x → -1.5%
 
     # Trailing stop: níveis progressivos de proteção
     # Quando o preço atinge X% de lucro, mover SL para garantir Y% de lucro
@@ -102,14 +104,15 @@ class PositionMonitor:
                 results["checked"] += 1
 
                 try:
-                    # 1. CIRCUIT BREAKER: verificar variação do PREÇO (não ROI margem)
-                    # ROI margem com alavancagem alta dispara circuit breaker com variações minúsculas
+                    # 1. CIRCUIT BREAKER: verificar variação do PREÇO ajustada pela alavancagem
+                    # Com alta alavancagem, limites mais apertados para evitar liquidação
                     entry_price = pos.get("entry_price", 0)
                     mark_price = pos.get("mark_price", 0)
                     position_amt = abs(pos.get("position_amt", 0))
                     side = pos.get("side", "LONG")
+                    leverage = int(pos.get("leverage", 1)) or 1
 
-                    # Calcular variação do preço (independente da alavancagem)
+                    # Calcular variação do preço
                     if entry_price > 0 and mark_price > 0:
                         if side == "LONG":
                             price_change_pct = ((mark_price - entry_price) / entry_price) * 100
@@ -118,9 +121,19 @@ class PositionMonitor:
                     else:
                         price_change_pct = 0
 
-                    if price_change_pct < self.MAX_LOSS_PRICE_PERCENT:
+                    # Limite dinâmico baseado na alavancagem:
+                    # Liquidação acontece em ~(100/leverage)% de movimento
+                    # Circuit breaker fecha em 60% do caminho até liquidação
+                    if leverage >= 10:
+                        max_loss = -(100.0 / leverage) * 0.6  # 60% do caminho até liquidação
+                        max_loss = max(max_loss, -3.0)  # Nunca menos que -3%
+                    else:
+                        max_loss = self.MAX_LOSS_PRICE_PERCENT  # -5% para baixa alavancagem
+
+                    if price_change_pct < max_loss:
                         logger.warning(
-                            f"[CIRCUIT BREAKER] {symbol}: Preço variou {price_change_pct:.1f}% contra (limite: {self.MAX_LOSS_PRICE_PERCENT}%) - FECHANDO!"
+                            f"[CIRCUIT BREAKER] {symbol}: Preço variou {price_change_pct:.1f}% contra "
+                            f"(limite: {max_loss:.1f}%, leverage={leverage}x) - FECHANDO!"
                         )
                         try:
                             close_result = await executor.close_position(symbol)
