@@ -354,7 +354,7 @@ def generate_bootstrap_signals(symbol: str, df: pd.DataFrame,
             'confidence': confidence,
             'trend_encoded': int(trend),
             'sentiment_encoded': int(row.get('sentiment_encoded', 0)),
-            'signal_encoded': 1 if signal_type == 'BUY' else 0,
+            'signal_encoded': 1 if signal_type == 'BUY' else -1,
             'risk_distance_pct': risk_distance_pct,
             'reward_distance_pct': reward_distance_pct,
             'risk_reward_ratio': rr_ratio,
@@ -544,7 +544,7 @@ def enrich_signal_with_klines(signal: Dict) -> Optional[Dict]:
         'confidence': signal.get('confidence', 5),
         'trend_encoded': int(last.get('trend_encoded', 0)),
         'sentiment_encoded': int(last.get('sentiment_encoded', 0)),
-        'signal_encoded': 1 if signal_type == 'BUY' else 0,
+        'signal_encoded': 1 if signal_type == 'BUY' else -1,
         'risk_distance_pct': risk_dist,
         'reward_distance_pct': reward_dist,
         'risk_reward_ratio': rr_ratio,
@@ -787,7 +787,9 @@ def train_models(df: pd.DataFrame) -> Dict:
                 "best_params": search.best_params_,
             }
 
-            combined_score = 0.5 * f1 + 0.3 * search.best_score_ + 0.2 * auc
+            # Model selection uses ONLY CV score (never test metrics)
+            # to keep test set as unbiased final evaluation
+            combined_score = search.best_score_
 
             print(f"    Best params: {search.best_params_}")
             print(f"    Test Acc:  {acc:.4f}")
@@ -816,14 +818,15 @@ def train_models(df: pd.DataFrame) -> Dict:
 
     best_model = trained_models[best_name]
 
-    # Calibrar probabilidades para que prob=65% signifique realmente 65%
+    # Calibrar probabilidades usando CV no TREINO (nunca no test set)
     try:
         print(f"\n  Calibrando probabilidades ({best_name})...")
-        calibrated = CalibratedClassifierCV(best_model, cv='prefit', method='isotonic')
-        calibrated.fit(X_test_scaled, y_test)
+        calibrated = CalibratedClassifierCV(best_model, method='isotonic', cv=3)
+        calibrated.fit(X_train_scaled, y_train,
+                       sample_weight=sample_weights if model_configs[best_name]["use_sample_weight"] else None)
         trained_models[best_name] = calibrated
         best_model = calibrated
-        print("  Calibração aplicada com sucesso")
+        print("  Calibração aplicada com sucesso (cv=3 no treino)")
     except Exception as e:
         print(f"  Calibração falhou (usando modelo sem calibração): {e}")
 

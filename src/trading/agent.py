@@ -314,7 +314,7 @@ class AgnoTradingAgent:
                 'confidence': signal.get('confidence', 5),
                 'trend_encoded': self._encode_trend(signal.get('trend', 'neutral')),
                 'sentiment_encoded': self._encode_sentiment(signal.get('sentiment', 'neutral')),
-                'signal_encoded': 1 if signal.get('signal') == 'BUY' else 0,
+                'signal_encoded': 1 if signal.get('signal') == 'BUY' else (-1 if signal.get('signal') == 'SELL' else 0),
                 'risk_distance_pct': self._calc_risk_distance(signal),
                 'reward_distance_pct': self._calc_reward_distance(signal),
                 'risk_reward_ratio': self._calc_risk_reward(signal),
@@ -636,7 +636,7 @@ class AgnoTradingAgent:
         try:
             from src.optimizer.setup_validator import validate_signal_before_trade
             symbol = analysis_data.get("symbol", "")
-            rsi_val = rsi_data.get("rsi", 50)
+            rsi_val = indicators.get("rsi", {}).get("rsi", 50)
             adx_val = trend_data.get("adx", 25)
             atr_val = trend_data.get("atr", 0)
             entry_price = analysis_data.get("price", {}).get("current", 1)
@@ -673,8 +673,9 @@ class AgnoTradingAgent:
             else:
                 voter_votes["setup_validator"] = 0
                 details.append(f"Setup neutro ({sv_rec}, n={sv_samples})")
-        except Exception:
+        except Exception as e:
             voter_votes["setup_validator"] = 0
+            logger.debug(f"[CONFLUENCE] setup_validator falhou: {e}")
 
         # Contrarian inversion REMOVIDO — com parâmetros dinâmicos do optimizer,
         # os voters devem melhorar naturalmente. A inversão mascarava o problema
@@ -1229,6 +1230,7 @@ Responda APENAS com JSON:
                     pass
 
                 # VALIDAÇÃO ML: obter voto ML ANTES da confluência
+                # Accuracy gate: ML só vota se accuracy >= 55% (mesmo critério do LSTM)
                 if _ml_paused_by_drift:
                     ml_validation = {"probability": 0.5, "prediction": 0, "ml_vote": 0}
                 else:
@@ -1236,6 +1238,14 @@ Responda APENAS com JSON:
                 ml_prob = ml_validation.get('probability', 0)
                 ml_pred = ml_validation.get('prediction', 0)
                 ml_vote = ml_validation.get("ml_vote", 0)
+
+                # Gate: se accuracy do ML for < 55%, forçar voto neutro
+                _ml_accuracies = self._get_model_accuracies()
+                _ml_acc = _ml_accuracies.get("ml_accuracy")
+                if _ml_acc is not None and _ml_acc < 55.0:
+                    if ml_vote != 0:
+                        logger.info(f"[ML GATE] ML accuracy={_ml_acc:.1f}% < 55% — voto forçado a neutro (era {ml_vote})")
+                        ml_vote = 0
 
                 # Salvar probabilidade ML no arquivo do sinal
                 filepath = agno_signal.get("_signal_file")

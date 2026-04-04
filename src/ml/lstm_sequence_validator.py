@@ -134,25 +134,23 @@ class LSTMSequenceValidator:
 
         X_train, X_test, y_train, y_test = self.load_dataset()
 
-        # Normalizar features por candle (StandardScaler por feature)
+        # Normalizar features — fit APENAS no train (evita data leakage)
         from sklearn.preprocessing import StandardScaler
 
-        # Reshape para 2D, normalizar, reshape de volta
         n_train = X_train.shape[0]
         n_test = X_test.shape[0]
 
-        X_all = np.vstack([
-            X_train.reshape(-1, self.n_features),
-            X_test.reshape(-1, self.n_features),
-        ])
+        X_train_flat = X_train.reshape(-1, self.n_features)
+        X_test_flat = X_test.reshape(-1, self.n_features)
 
         self.scaler = StandardScaler()
-        X_all_scaled = self.scaler.fit_transform(X_all)
+        X_train_scaled_flat = self.scaler.fit_transform(X_train_flat)
+        X_test_scaled_flat = self.scaler.transform(X_test_flat)
 
-        X_train_scaled = X_all_scaled[: n_train * self.sequence_length].reshape(
+        X_train_scaled = X_train_scaled_flat.reshape(
             n_train, self.sequence_length, self.n_features
         )
-        X_test_scaled = X_all_scaled[n_train * self.sequence_length :].reshape(
+        X_test_scaled = X_test_scaled_flat.reshape(
             n_test, self.sequence_length, self.n_features
         )
 

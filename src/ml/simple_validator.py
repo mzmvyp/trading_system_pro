@@ -34,7 +34,7 @@ from sklearn.metrics import (  # noqa: E402
     f1_score,
     roc_auc_score,
 )
-from sklearn.model_selection import cross_val_score  # noqa: E402
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score  # noqa: E402
 from sklearn.neural_network import MLPClassifier  # noqa: E402
 from sklearn.preprocessing import StandardScaler  # noqa: E402
 from sklearn.utils.class_weight import compute_sample_weight  # noqa: E402
@@ -194,8 +194,10 @@ class SimpleSignalValidator:
                 else:
                     model.fit(X_train, y_train)
 
-                # Cross-validation no treino
-                cv_scores = cross_val_score(model, X_train, y_train, cv=3, scoring='f1')
+                # Walk-forward cross-validation (TimeSeriesSplit for financial data)
+                n_splits = min(3, max(2, len(X_train) // 20))
+                tscv = TimeSeriesSplit(n_splits=n_splits)
+                cv_scores = cross_val_score(model, X_train, y_train, cv=tscv, scoring='f1')
 
                 # Avaliar no teste
                 if X_test is not None and len(X_test) > 0:
@@ -437,7 +439,7 @@ class SimpleSignalValidator:
             'confidence': deepseek_signal.get('confidence', 5),
             'trend_encoded': deepseek_signal.get('trend_encoded', 0),
             'sentiment_encoded': deepseek_signal.get('sentiment_encoded', 0),
-            'signal_encoded': 1 if deepseek_signal.get('signal') == 'BUY' else 0,
+            'signal_encoded': 1 if deepseek_signal.get('signal') == 'BUY' else (-1 if deepseek_signal.get('signal') == 'SELL' else 0),
             'risk_distance_pct': deepseek_signal.get('risk_distance_pct', 2),
             'reward_distance_pct': deepseek_signal.get('reward_distance_pct', 2),
             'risk_reward_ratio': deepseek_signal.get('risk_reward_ratio', 1),

@@ -201,9 +201,9 @@ class OnlineLearningManager:
         sentiment_map = {'bullish': 1, 'neutral': 0, 'bearish': -1}
         sentiment_encoded = sentiment_map.get(str(sentiment).lower(), 0)
 
-        # 3. signal_encoded
+        # 3. signal_encoded (BUY=1, SELL=-1, other=0)
         signal_type = signal.get('signal', 'NO_SIGNAL')
-        signal_encoded = 1 if signal_type == 'BUY' else 0
+        signal_encoded = 1 if signal_type == 'BUY' else (-1 if signal_type == 'SELL' else 0)
 
         # 4. risk_distance_pct e reward_distance_pct
         entry_price = signal.get('entry_price', 0)
@@ -837,6 +837,14 @@ def seed_from_evaluated_signals(force_retrain: bool = True, max_signals: int = 0
                 enriched_data = enrich_signal_with_klines(ev)
                 if enriched_data:
                     # enrich_signal_with_klines retorna dict com features reais + target
+                    # Map numeric trend_encoded back to string labels
+                    # that add_signal_result's trend_map expects
+                    _te = enriched_data.get('trend_encoded', 0)
+                    _trend_rmap = {2: 'strong_bullish', 1: 'bullish', 0: 'neutral',
+                                   -1: 'bearish', -2: 'strong_bearish'}
+                    _se = enriched_data.get('sentiment_encoded', 0)
+                    _sent_rmap = {1: 'bullish', 0: 'neutral', -1: 'bearish'}
+
                     signal_data = {
                         'symbol': ev.get('symbol', ''),
                         'signal': ev.get('signal', ''),
@@ -844,7 +852,6 @@ def seed_from_evaluated_signals(force_retrain: bool = True, max_signals: int = 0
                         'stop_loss': ev.get('stop_loss', 0),
                         'take_profit_1': ev.get('take_profit_1', 0),
                         'confidence': ev.get('confidence', 5),
-                        # Indicadores REAIS do enriquecimento
                         'rsi': enriched_data.get('rsi', 50),
                         'macd_histogram': enriched_data.get('macd_histogram', 0),
                         'adx': enriched_data.get('adx', 25),
@@ -854,8 +861,8 @@ def seed_from_evaluated_signals(force_retrain: bool = True, max_signals: int = 0
                         'orderbook_imbalance': enriched_data.get('orderbook_imbalance', 0.5),
                         'bullish_tf_count': enriched_data.get('bullish_tf_count', 5),
                         'bearish_tf_count': enriched_data.get('bearish_tf_count', 5),
-                        'trend': str(enriched_data.get('trend_encoded', 0)),
-                        'sentiment': str(enriched_data.get('sentiment_encoded', 0)),
+                        'trend': _trend_rmap.get(int(_te), 'neutral'),
+                        'sentiment': _sent_rmap.get(int(_se), 'neutral'),
                         'indicators': {},
                     }
                     pnl = ev.get('pnl_percent', 0)

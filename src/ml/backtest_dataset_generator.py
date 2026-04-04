@@ -101,11 +101,14 @@ class BacktestDatasetGenerator:
                     logger.warning(f"[DATASET] Dados insuficientes para {symbol}: {len(df)} candles")
                     continue
 
-                # 2. Rodar backtest com múltiplas variações de parâmetros
-                # Cada variação gera trades diferentes = mais dados de treino
+                # 2. Rodar backtest com parâmetros DEFAULT fixos
+                # Usar mesmos params que produção para evitar mismatch treino/inferência.
+                # Várias variações apenas mudam confluência mínima e SL/TP multipliers
+                # para gerar mais trades, mas indicadores (RSI/EMA/MACD/BB/ADX periods)
+                # ficam iguais ao default do BacktestEngine.
                 symbol_trades = 0
                 for variation in range(self.n_param_variations):
-                    params = self._random_params()
+                    params = self._production_compatible_params()
                     engine_var = BacktestEngine(params=params)
 
                     # Calcular indicadores e gerar sinais
@@ -147,25 +150,33 @@ class BacktestDatasetGenerator:
 
         return stats
 
-    def _random_params(self) -> BacktestParams:
-        """Gera parâmetros aleatórios para diversificar os trades."""
+    def _production_compatible_params(self) -> BacktestParams:
+        """
+        Gera parâmetros com indicator periods FIXOS (mesmos que produção/default)
+        mas varia SL/TP/confluência para diversificar trades gerados.
+        Isso garante que as features (RSI, MACD, etc.) têm a mesma semântica
+        no treino e na inferência em produção.
+        """
         import random
 
+        defaults = BacktestParams()
         return BacktestParams(
-            rsi_period=random.choice([10, 14, 21]),
-            rsi_oversold=random.uniform(20, 35),
-            rsi_overbought=random.uniform(65, 80),
-            ema_fast=random.choice([9, 12, 20]),
-            ema_slow=random.choice([26, 50, 100]),
-            macd_fast=random.choice([8, 12, 16]),
-            macd_slow=random.choice([21, 26, 30]),
-            macd_signal=random.choice([7, 9, 12]),
-            bb_period=random.choice([15, 20, 25]),
-            bb_std=random.uniform(1.5, 2.5),
-            adx_period=random.choice([10, 14, 20]),
-            adx_min_strength=random.uniform(15, 30),
-            volume_ma_period=random.choice([14, 20, 30]),
-            volume_surge_multiplier=random.uniform(1.2, 2.0),
+            # Indicator periods: SEMPRE default (match produção)
+            rsi_period=defaults.rsi_period,
+            rsi_oversold=random.uniform(25, 35),
+            rsi_overbought=random.uniform(65, 75),
+            ema_fast=defaults.ema_fast,
+            ema_slow=defaults.ema_slow,
+            macd_fast=defaults.macd_fast,
+            macd_slow=defaults.macd_slow,
+            macd_signal=defaults.macd_signal,
+            bb_period=defaults.bb_period,
+            bb_std=random.uniform(1.8, 2.2),
+            adx_period=defaults.adx_period,
+            adx_min_strength=random.uniform(20, 30),
+            volume_ma_period=defaults.volume_ma_period,
+            volume_surge_multiplier=random.uniform(1.3, 1.8),
+            # Trade management: varies to generate diverse trades
             min_confluence=random.choice([2, 3, 4]),
             sl_atr_multiplier=random.uniform(1.0, 2.0),
             tp1_atr_multiplier=random.uniform(2.0, 4.0),
@@ -274,11 +285,14 @@ class BacktestDatasetGenerator:
         if len(valid) < len(sequences):
             logger.warning(f"[DATASET] {len(sequences) - len(valid)} sequências descartadas por shape inconsistente")
 
+        # Sort by entry_time for proper temporal split
+        valid.sort(key=lambda v: v[2].get("entry_time", ""))
+
         X = np.array([v[0] for v in valid], dtype=np.float32)
         y = np.array([v[1] for v in valid], dtype=np.int32)
         meta = [v[2] for v in valid]
 
-        # Split temporal (80/20) - NÃO aleatório para evitar leakage
+        # Split temporal (80/20) — sorted by time above so train=past, test=future
         split_idx = int(len(X) * 0.8)
         X_train, X_test = X[:split_idx], X[split_idx:]
         y_train, y_test = y[:split_idx], y[split_idx:]
