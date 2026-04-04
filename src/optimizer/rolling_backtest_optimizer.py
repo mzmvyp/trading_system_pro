@@ -223,7 +223,8 @@ class RollingBacktestOptimizer:
         from src.backtesting.continuous_optimizer import save_best_config
         for symbol in self.symbols:
             sym_metrics = per_symbol.get(symbol, metrics)
-            save_best_config(symbol, self.interval, params, score, sym_metrics)
+            save_best_config(symbol, self.interval, params, score, sym_metrics,
+                            origin="rolling_backtest_optimizer")
 
         logger.info(f"[OPTIMIZER] Params GLOBAIS salvos: score={score:.4f}")
 
