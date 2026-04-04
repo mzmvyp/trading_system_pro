@@ -188,6 +188,7 @@ class DriftDetector:
                 "p25": float(np.percentile(values, 25)),
                 "p50": float(np.percentile(values, 50)),
                 "p75": float(np.percentile(values, 75)),
+                "raw_values": values.tolist()[-200:],  # Últimos 200 valores reais
             }
 
         self.baseline = baseline
@@ -220,10 +221,23 @@ class DriftDetector:
             bl = self.baseline["features"][feat]
             bl_mean, bl_std = bl["mean"], max(bl["std"], 0.001)
 
-            # Simular distribuição baseline
-            np.random.seed(42)
-            baseline_vals = np.random.normal(bl_mean, bl_std, 1000)
-            baseline_vals = np.clip(baseline_vals, bl["min"], bl["max"])
+            # Usar valores reais do baseline se disponíveis, senão usar estatísticas
+            if "raw_values" in bl and len(bl["raw_values"]) >= 10:
+                baseline_vals = np.array(bl["raw_values"], dtype=float)
+            else:
+                # Fallback: gerar distribuição sintética a partir das estatísticas
+                # Usar percentis para criar distribuição mais realista
+                percentiles = [bl.get("min", bl_mean - 2*bl_std)]
+                percentiles.append(bl.get("p25", bl_mean - 0.67*bl_std))
+                percentiles.append(bl.get("p50", bl_mean))
+                percentiles.append(bl.get("p75", bl_mean + 0.67*bl_std))
+                percentiles.append(bl.get("max", bl_mean + 2*bl_std))
+                # Interpolar entre percentis para criar distribuição
+                n_per_segment = max(len(current_vals) // 4, 10)
+                baseline_vals = np.concatenate([
+                    np.linspace(percentiles[i], percentiles[i+1], n_per_segment)
+                    for i in range(4)
+                ])
 
             psi = self.calculate_psi(baseline_vals, current_vals)
             ks_stat, ks_pval = self.calculate_ks_test(baseline_vals, current_vals)
@@ -437,29 +451,49 @@ class DriftDetector:
     def should_pause_ml(self) -> bool:
         """Retorna True se drift é severo o suficiente para pausar ML.
 
-        Time-limited: ML pause expires after 12h to prevent permanent lockout.
-        When expired, auto-rebuilds baseline from recent signals.
+        Lógica:
+        - Só pausa se HIGH severity nas últimas N avaliações (maioria)
+        - Pausa expira após 12h desde a PRIMEIRA detecção HIGH consecutiva
+        - Auto-rebuild baseline quando pausa expira
         """
         if not self.drift_history:
             return False
+
         last = self.drift_history[-1]
         if last.get("overall_severity") != "HIGH":
+            # Last report was not HIGH — ML is fine
+            self._pause_started_at = None
             return False
 
-        # Time-based expiry: don't pause ML forever
-        try:
-            last_ts = datetime.fromisoformat(last.get("timestamp", ""))
-            hours_since = (datetime.now(timezone.utc) - last_ts).total_seconds() / 3600
-            if hours_since > 12:
-                logger.info(
-                    f"[DRIFT] Pausa ML expirada ({hours_since:.1f}h > 12h). "
-                    f"ML reativado — baseline será recriado no próximo ciclo."
-                )
-                # Auto-rebuild baseline from recent signals
-                self._auto_rebuild_baseline()
-                return False
-        except (ValueError, TypeError):
-            pass
+        # Verificar se maioria das últimas 3 avaliações são HIGH
+        # (evita pausar por um único ciclo com drift transitório)
+        recent = self.drift_history[-3:]
+        high_count = sum(1 for r in recent if r.get("overall_severity") == "HIGH")
+        if high_count < 2:
+            return False
+
+        # Rastrear quando a pausa começou (primeira HIGH consecutiva)
+        if not hasattr(self, '_pause_started_at') or self._pause_started_at is None:
+            # Encontrar timestamp da primeira HIGH consecutiva
+            self._pause_started_at = datetime.now(timezone.utc)
+            for entry in reversed(self.drift_history):
+                if entry.get("overall_severity") != "HIGH":
+                    break
+                try:
+                    self._pause_started_at = datetime.fromisoformat(entry["timestamp"])
+                except (ValueError, TypeError, KeyError):
+                    pass
+
+        # Time-based expiry: pausa máxima de 12h
+        hours_paused = (datetime.now(timezone.utc) - self._pause_started_at).total_seconds() / 3600
+        if hours_paused > 12:
+            logger.info(
+                f"[DRIFT] Pausa ML expirada ({hours_paused:.1f}h > 12h). "
+                f"ML reativado — rebuild baseline."
+            )
+            self._auto_rebuild_baseline()
+            self._pause_started_at = None
+            return False
 
         return True
 

@@ -58,7 +58,8 @@ def _load_config_file(filepath: Path, label: str) -> Optional[BacktestParams]:
 
         logger.info(
             f"[OPTIMIZER] Loaded {label} config: "
-            f"score={data.get('score', 0):.4f}, age={age_hours:.1f}h"
+            f"score={data.get('score', 0):.4f}, age={age_hours:.1f}h, "
+            f"origin={data.get('origin', 'unknown')}"
         )
         return params
     except Exception as e:
@@ -113,10 +114,35 @@ def load_best_config(symbol: str, interval: str = "1h", mover_type: Optional[str
 
 
 def save_best_config(symbol: str, interval: str, params: BacktestParams,
-                     score: float, metrics: Dict) -> str:
-    """Salva o melhor config encontrado."""
+                     score: float, metrics: Dict, origin: str = "continuous_optimizer") -> str:
+    """Salva o melhor config encontrado.
+
+    Só sobrescreve se o novo score for >= ao existente (evita que um optimizer
+    com score inferior apague o resultado de outro).
+    """
     BEST_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     filepath = get_best_config_path(symbol, interval)
+
+    # Verificar se config existente tem score superior
+    if filepath.exists():
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                existing = json.load(f)
+            existing_score = existing.get("score", 0)
+            existing_origin = existing.get("origin", "unknown")
+            age_hours = (datetime.now(timezone.utc) - datetime.fromisoformat(
+                existing.get("updated_at", "2020-01-01T00:00:00+00:00")
+            )).total_seconds() / 3600
+
+            # Manter config existente se: score maior E não muito antiga (<48h)
+            if existing_score > score and age_hours < 48:
+                logger.info(
+                    f"[OPTIMIZER] Config existente mantida para {symbol}: "
+                    f"existing={existing_score:.4f} ({existing_origin}) > new={score:.4f} ({origin})"
+                )
+                return str(filepath)
+        except Exception:
+            pass
 
     data = {
         "symbol": symbol,
@@ -126,13 +152,13 @@ def save_best_config(symbol: str, interval: str, params: BacktestParams,
         "score_formula": "30% win_rate + 30% return + 20% sharpe + 20% (1-drawdown)",
         "metrics": metrics,
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "origin": "continuous_optimizer (inspired by sinais/optimization_engine.py)",
+        "origin": origin,
     }
 
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False, default=str)
 
-    logger.info(f"[OPTIMIZER] Best config saved: {filepath} (score={score:.4f})")
+    logger.info(f"[OPTIMIZER] Best config saved: {filepath} (score={score:.4f}, origin={origin})")
     return str(filepath)
 
 
@@ -272,6 +298,7 @@ class ContinuousOptimizer:
                             "max_drawdown_pct": round(best.metrics.max_drawdown_pct, 2),
                             "profit_factor": round(best.metrics.profit_factor, 2),
                         },
+                        origin="continuous_optimizer",
                     )
                     self._status["best_scores"][symbol] = best.score
                 else:
