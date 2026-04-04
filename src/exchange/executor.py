@@ -764,6 +764,12 @@ class BinanceFuturesExecutor:
             risk_percent = settings.risk_percent_per_trade / 100.0
             risk_amount = capital_base * risk_percent
 
+            # Position size factor: reduzir risco para trades de alto risco (pump/dump reversals)
+            _pos_factor = signal.get("position_size_factor", 1.0)
+            if _pos_factor and 0 < _pos_factor < 1.0:
+                risk_amount *= _pos_factor
+                logger.info(f"[RISCO] Position size factor={_pos_factor:.1f}x → risco reduzido: ${risk_amount:.2f}")
+
             # Garantir risco minimo viavel (evitar posicoes microscopicas)
             if risk_amount < 1.0:
                 logger.warning(f"[RISCO] Risco calculado muito baixo: ${risk_amount:.2f} (disponivel: ${available:.2f})")

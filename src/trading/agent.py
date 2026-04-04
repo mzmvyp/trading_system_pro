@@ -811,14 +811,16 @@ Responda APENAS com JSON:
 {"signal":"BUY/SELL","operation_type":"SCALP/DAY_TRADE/SWING_TRADE","entry_price":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":0,"confidence":7,"reasoning":"Regras X,Y,Z confirmadas. Conflitos: nenhum/ABC"}
 ```"""
 
-    async def analyze(self, symbol: str = "BTCUSDT", mover_type: Optional[str] = None) -> Dict[str, Any]:
+    async def analyze(self, symbol: str = "BTCUSDT", mover_type: Optional[str] = None,
+                     price_change_24h: float = 0) -> Dict[str, Any]:
         """
         Executa análise completa usando o AGNO Agent.
-        CORRIGIDO: Verifica posição existente antes de analisar.
+        Para pares dinâmicos (gainers/losers): usa pump/dump scanner em paralelo.
 
         Args:
             symbol: Símbolo para analisar
             mover_type: "gainer", "loser" ou None - para config de categoria
+            price_change_24h: Variação % nas últimas 24h (para dynamic pairs)
 
         Returns:
             Sinal de trading estruturado
@@ -1031,6 +1033,33 @@ Responda APENAS com JSON:
                             logger.info(f"[DEEPSEEK] Não executado: {validation.get('reason', '')}")
             else:
                 logger.info("[DEEPSEEK] Sinais DEEPSEEK desabilitados. Pulando analise DeepSeek direta.")
+
+            # ========================================
+            # PUMP/DUMP REVERSAL SCANNER (apenas para pares dinâmicos)
+            # Se detecta exaustão de pump/dump, gera sinal de reversão direto
+            # sem passar pelo pipeline completo de LLM + 13 voters
+            # ========================================
+            pump_dump_signal = None
+            if mover_type and abs(price_change_24h) >= 12.0:
+                try:
+                    from src.analysis.pump_dump_scanner import scan_for_reversal
+                    pump_dump_signal = await scan_for_reversal(
+                        symbol=symbol,
+                        mover_type=mover_type,
+                        price_change_24h=price_change_24h,
+                    )
+                    if pump_dump_signal and pump_dump_signal.get("signal") in ("BUY", "SELL"):
+                        logger.info(
+                            f"[PUMP_DUMP] ✓ {symbol}: Sinal de reversão detectado! "
+                            f"{pump_dump_signal['signal']} @ ${pump_dump_signal['entry_price']:.4f}"
+                        )
+                    else:
+                        skip = pump_dump_signal.get("skip_reason", "Sem setup") if pump_dump_signal else "Scanner falhou"
+                        logger.info(f"[PUMP_DUMP] {symbol}: Sem reversão — {skip}")
+                        pump_dump_signal = None  # Continuar com análise normal
+                except Exception as e:
+                    logger.warning(f"[PUMP_DUMP] Erro no scanner para {symbol}: {e}")
+                    pump_dump_signal = None
 
             # 2. SINAL AGNO - OTIMIZADO: Coleta dados localmente + 1 única chamada DeepSeek
             # ANTES: AGNO agent chamava ferramentas via DeepSeek (5+ API calls por símbolo)
@@ -1696,6 +1725,47 @@ Responda APENAS com JSON:
                         agno_signal["block_reason"] = f"SL/TP inválidos: SL=${sl}, TP1=${tp1}, TP2=${tp2}"
                     else:
                         logger.info(f"[AGNO] Entry=${entry:.2f}, SL=${sl:.2f}, TP1=${tp1:.2f}, TP2=${tp2:.2f}")
+
+            # ========================================
+            # PUMP/DUMP OVERRIDE: Se scanner encontrou reversão E AGNO não tem sinal,
+            # usar o sinal do scanner. Se AGNO também tem sinal, preferir AGNO
+            # (scanner é fallback para quando AGNO bloqueia por confluência)
+            # ========================================
+            if pump_dump_signal and pump_dump_signal.get("signal") in ("BUY", "SELL"):
+                agno_dir = agno_signal.get("signal", "NO_SIGNAL")
+                if agno_dir == "NO_SIGNAL":
+                    # AGNO não gerou sinal → usar pump/dump scanner
+                    logger.info(
+                        f"[PUMP_DUMP→OVERRIDE] {symbol}: AGNO={agno_dir}, "
+                        f"usando sinal do scanner: {pump_dump_signal['signal']}"
+                    )
+                    # Transferir dados do scanner para agno_signal
+                    agno_signal["signal"] = pump_dump_signal["signal"]
+                    agno_signal["entry_price"] = pump_dump_signal["entry_price"]
+                    agno_signal["stop_loss"] = pump_dump_signal["stop_loss"]
+                    agno_signal["take_profit_1"] = pump_dump_signal["tp1"]
+                    agno_signal["take_profit_2"] = pump_dump_signal["tp2"]
+                    agno_signal["confidence"] = pump_dump_signal.get("confidence", 6)
+                    agno_signal["operation_type"] = "SCALP"
+                    agno_signal["max_duration_hours"] = pump_dump_signal.get("max_duration_hours", 0.5)
+                    agno_signal["position_size_factor"] = pump_dump_signal.get("position_size_factor", 0.5)
+                    agno_signal["sl_method"] = pump_dump_signal.get("sl_method", "pump_dump_scanner")
+                    agno_signal["tp1_method"] = pump_dump_signal.get("tp1_method", "pump_dump_scanner")
+                    agno_signal["tp2_method"] = pump_dump_signal.get("tp2_method", "pump_dump_scanner")
+                    agno_signal["sl_tp_source"] = "pump_dump_reversal"
+                    agno_signal["reasoning"] = pump_dump_signal.get("reasoning", "Reversão de pump/dump detectada")
+                    agno_signal["risk_reward"] = pump_dump_signal.get("risk_reward", 0)
+                    agno_signal["scanner_exhaustion"] = pump_dump_signal.get("exhaustion_details", [])
+                elif agno_dir == pump_dump_signal["signal"]:
+                    logger.info(
+                        f"[PUMP_DUMP] {symbol}: Scanner e AGNO CONCORDAM em {agno_dir} — "
+                        f"usando AGNO (mais completo)"
+                    )
+                else:
+                    logger.info(
+                        f"[PUMP_DUMP] {symbol}: Scanner={pump_dump_signal['signal']} vs AGNO={agno_dir} — "
+                        f"DIVERGEM, mantendo AGNO"
+                    )
 
             # Salvar sinal AGNO
             self._save_signal(agno_signal)
