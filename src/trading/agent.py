@@ -1472,6 +1472,30 @@ Responda APENAS com JSON:
                     agno_signal["block_reason"] = "Sem entry_price válido"
                 else:
                     direction = agno_signal["signal"]
+
+                    # ========================================
+                    # HARD BLOCK: Volatilidade extrema para pares dinâmicos
+                    # Se ATR% > 8% do preço, token é instável demais para trading
+                    # ========================================
+                    _atr_val = agno_signal.get("atr", 0) or 0
+                    MAX_ATR_PCT_FOR_TRADE = 8.0  # Máximo 8% de ATR/preço
+                    if _atr_val > 0 and entry > 0:
+                        _atr_pct = (_atr_val / entry) * 100
+                        if _atr_pct > MAX_ATR_PCT_FOR_TRADE:
+                            logger.warning(
+                                f"[HARD BLOCK] {symbol}: Volatilidade extrema — "
+                                f"ATR={_atr_pct:.1f}% do preço (máx {MAX_ATR_PCT_FOR_TRADE}%). "
+                                f"Token instável demais para trade seguro."
+                            )
+                            agno_signal["signal"] = "NO_SIGNAL"
+                            agno_signal["block_reason"] = (
+                                f"Volatilidade extrema: ATR={_atr_pct:.1f}% "
+                                f"(máx {MAX_ATR_PCT_FOR_TRADE}%)"
+                            )
+
+                if agno_signal.get("signal") not in ["BUY", "SELL"]:
+                    pass  # Signal was blocked — skip SL/TP calculation
+                else:
                     sl = agno_signal.get("stop_loss", 0) or 0
                     tp1 = agno_signal.get("take_profit_1", 0) or 0
                     tp2 = agno_signal.get("take_profit_2", 0) or 0

@@ -67,6 +67,34 @@ def _load_config_file(filepath: Path, label: str) -> Optional[BacktestParams]:
         return None
 
 
+def _widen_sl_for_dynamic_pair(params: BacktestParams, mover_type: str) -> BacktestParams:
+    """
+    Amplia multiplicadores de SL/TP para pares dinâmicos (gainers/losers).
+
+    Os category configs são média de BTC/ETH/SOL — pares fixos com volatilidade baixa.
+    Micro-cap altcoins (top movers) têm 3-10x mais volatilidade, então precisam de SL
+    mais largo para não serem stopados no ruído normal do candle.
+
+    Fator: 1.5x para SL, 1.3x para TP (TP não precisa tanto ajuste).
+    """
+    SL_WIDEN_FACTOR = 1.5   # SL 50% mais largo
+    TP_WIDEN_FACTOR = 1.3   # TP 30% mais largo (para compensar R:R)
+
+    from dataclasses import replace
+    widened = replace(
+        params,
+        sl_atr_multiplier=round(params.sl_atr_multiplier * SL_WIDEN_FACTOR, 2),
+        tp1_atr_multiplier=round(params.tp1_atr_multiplier * TP_WIDEN_FACTOR, 2),
+        tp2_atr_multiplier=round(params.tp2_atr_multiplier * TP_WIDEN_FACTOR, 2),
+    )
+    logger.info(
+        f"[OPTIMIZER] SL ampliado para par dinâmico ({mover_type}): "
+        f"SL_ATR={params.sl_atr_multiplier} → {widened.sl_atr_multiplier}, "
+        f"TP1_ATR={params.tp1_atr_multiplier} → {widened.tp1_atr_multiplier}"
+    )
+    return widened
+
+
 def load_best_config(symbol: str, interval: str = "1h", mover_type: Optional[str] = None) -> Optional[BacktestParams]:
     """
     Carrega o melhor config com fallback por categoria.
@@ -91,6 +119,8 @@ def load_best_config(symbol: str, interval: str = "1h", mover_type: Optional[str
         return result
 
     # 2. Config da categoria (gainer/loser)
+    # Para pares dinâmicos: ampliar SL porque são mais voláteis que os pares fixos
+    # de onde os params foram derivados (BTC/ETH/SOL → micro-caps)
     if mover_type:
         category = "_GAINERS_" if mover_type == "gainer" else "_LOSERS_"
         result = _load_config_file(
@@ -98,6 +128,7 @@ def load_best_config(symbol: str, interval: str = "1h", mover_type: Optional[str
             f"{category} {interval}"
         )
         if result:
+            result = _widen_sl_for_dynamic_pair(result, mover_type)
             return result
 
     # 3. Config default genérica (otimizada multi-par)
@@ -106,6 +137,8 @@ def load_best_config(symbol: str, interval: str = "1h", mover_type: Optional[str
         f"_DEFAULT_ {interval}"
     )
     if result:
+        if mover_type:
+            result = _widen_sl_for_dynamic_pair(result, mover_type)
         return result
 
     # 4. Nenhuma config encontrada
