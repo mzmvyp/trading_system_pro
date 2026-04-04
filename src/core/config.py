@@ -135,8 +135,8 @@ class Settings(BaseSettings):
     # REAVALIAÇÃO DE SINAIS ATIVOS
     # ========================================
     reevaluation_enabled: bool = True
-    reevaluation_interval_hours: float = 1.0  # Reavaliar a cada 1h
-    reevaluation_min_time_open_hours: float = 1.0  # Primeira reavaliação após 1h aberta
+    reevaluation_interval_hours: float = 0.5  # Reavaliar a cada 30min (antes 1h)
+    reevaluation_min_time_open_hours: float = 0.25  # Primeira reavaliação após 15min (antes 1h)
     reevaluation_min_confidence: int = 7  # Confiança mínima para agir na reavaliação
     reevaluation_require_tp1_hit: bool = False  # Se True, só reavalia após TP1 ser atingido
 

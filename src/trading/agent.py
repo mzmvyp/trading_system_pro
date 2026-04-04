@@ -1018,7 +1018,7 @@ Responda APENAS com JSON:
                         except Exception as e:
                             logger.error(f"[CAPITAL] Falha ao obter saldo da Binance: {e}")
 
-                        validation = validate_risk_and_position(deepseek_signal, symbol, _trend_data=trend_data, _capital=_ds_capital)
+                        validation = validate_risk_and_position(deepseek_signal, symbol, _trend_data=trend_data, account_balance=_ds_capital)
                         if validation.get("can_execute"):
                             logger.info(f"[DEEPSEEK] Executando sinal {deepseek_signal.get('signal')} para {symbol}")
                             position_size = validation.get("recommended_position_size", validation.get("position_size"))
@@ -1196,8 +1196,8 @@ Responda APENAS com JSON:
                 # São erros técnicos fundamentais que nenhuma confluência deveria aprovar
                 # ========================================
                 _rsi_val = analysis_data.get("key_indicators", {}).get("rsi", {}).get("value", 50)
-                RSI_EXTREME_OVERSOLD = 25  # Abaixo disso, NUNCA vender
-                RSI_EXTREME_OVERBOUGHT = 75  # Acima disso, NUNCA comprar
+                RSI_EXTREME_OVERSOLD = 30  # Abaixo disso, NUNCA vender
+                RSI_EXTREME_OVERBOUGHT = 70  # Acima disso, NUNCA comprar
 
                 if llm_signal_dir == "SELL" and _rsi_val < RSI_EXTREME_OVERSOLD:
                     logger.warning(
@@ -1266,7 +1266,7 @@ Responda APENAS com JSON:
                 # LLM conta como 1 voto a favor (peso ~20% do total, como no sinais)
                 # Confidence da LLM (1-10) modula o peso: alta confiança = voto forte
                 llm_confidence = agno_signal.get("confidence", 5)
-                llm_vote_weight = 1 if llm_confidence >= 5 else 0.5
+                llm_vote_weight = 1 if llm_confidence >= 5 else 0
 
                 # Bi-LSTM sequence vote (se modelo treinado)
                 # Mesma lógica calibrada do ML: confiar no SKIP, exigir alta prob para FOR
@@ -1431,13 +1431,10 @@ Responda APENAS com JSON:
                 # Sistema de votos (9 técnicos + ML + LSTM + LLM + Regime):
                 # Mínimo 5 votos a favor OU score >= 55%
                 # Se score >= 80% (forte concordância), aceitar com 4 votos
-                # Em mercado LATERAL: exigir mais votos (mín 6) para filtrar ruído
+                # Nota: em sideways, o regime voter já vota -1 (penalidade automática),
+                # então NÃO precisamos de threshold extra — era double-penalty
                 MIN_COMBINED_SCORE = 0.55
-                if is_sideways:
-                    MIN_VOTES_FOR = 6  # Lateral: exigir mais confirmação
-                    MIN_COMBINED_SCORE = 0.60  # Lateral: score mínimo mais alto
-                else:
-                    MIN_VOTES_FOR = 4 if combined_score >= 0.80 else 5
+                MIN_VOTES_FOR = 4 if combined_score >= 0.80 else 5
 
                 agno_signal["confluence_score"] = round(combined_score, 3)
                 agno_signal["confluence_details"] = confluence["details"]
@@ -1810,7 +1807,7 @@ Responda APENAS com JSON:
                 except Exception as e:
                     logger.error(f"[CAPITAL] Falha ao obter saldo da Binance: {e}")
 
-                validation = validate_risk_and_position(agno_signal, symbol, _trend_data=trend_data, _capital=_capital_value)
+                validation = validate_risk_and_position(agno_signal, symbol, _trend_data=trend_data, account_balance=_capital_value)
                 if validation.get("can_execute"):
                     _pos_size = validation.get("recommended_position_size", validation.get("position_size", "?"))
                     _leverage = validation.get("implied_leverage", "?")
