@@ -600,9 +600,15 @@ class PositionMonitor:
 
     async def reevaluate_paper_positions(self, agent) -> Dict[str, Any]:
         """
-        Reavalia posições abertas em paper trading.
-        Mesma lógica do modo real, com ajuste de SL no state.json.
+        DESATIVADO: Reavaliação de paper positions agora é feita APENAS pelo
+        paper_trading._monitor_positions() com trailing stop integrado.
+        Este método era DUPLICADO e escrevia diretamente no state.json sem
+        coordenação com o paper_trading, causando corrupção de estado e
+        fechamentos prematuros.
         """
+        return {"skipped": True, "reason": "Unified in paper_trading monitor (avoid state.json race)"}
+
+        # === CÓDIGO ABAIXO DESATIVADO ===
         from src.core.config import settings
 
         if not settings.reevaluation_enabled:

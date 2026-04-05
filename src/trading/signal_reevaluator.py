@@ -739,10 +739,15 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                 return {"executed": True, "action": "HOLD", "message": "Posicao mantida"}
 
             elif action == "CLOSE":
-                return await self._execute_close(position)
+                # DESATIVADO: Reavaliação NÃO fecha posições — SL/TP são a proteção
+                # Signal reevaluator era o 3º módulo fechando trades prematuramente
+                logger.warning(f"[REEVALUATOR] {position_key}: LLM sugeriu CLOSE mas DESATIVADO — SL protege")
+                return {"executed": False, "action": "HOLD", "message": "CLOSE desativado — SL protege posição"}
 
             elif action == "CLOSE_PARTIAL":
-                return await self._execute_close_partial(position, 0.5)
+                # DESATIVADO: mesma razão — TP1/TP2 na exchange fazem o parcial
+                logger.warning(f"[REEVALUATOR] {position_key}: LLM sugeriu CLOSE_PARTIAL mas DESATIVADO")
+                return {"executed": False, "action": "HOLD", "message": "CLOSE_PARTIAL desativado"}
 
             elif action in ["MOVE_STOP_BREAKEVEN", "TRAILING_STOP", "ADJUST_STOP"]:
                 # OPCIONAL: So ajustar stop se TP1 ja foi atingido (se configurado)
@@ -1227,11 +1232,12 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                             })
                             continue
                         elif auto_execute and time_action == "CLOSE":
-                            close_result = await self._execute_close(position)
+                            # DESATIVADO: Time exit não fecha — o timeout do paper_trading já cuida
+                            logger.warning(f"[TIME EXIT] {position_key}: CLOSE sugerido mas DESATIVADO — timeout do monitor cuida")
                             results.append({
                                 "position_key": position_key,
-                                "action": "TIME_EXIT_CLOSE",
-                                "executed": close_result.get("executed", False),
+                                "action": "TIME_EXIT_SKIPPED",
+                                "executed": False,
                                 "pnl_percent": self._calculate_pnl_percent(position, await self._get_current_price(symbol))
                             })
                             continue
