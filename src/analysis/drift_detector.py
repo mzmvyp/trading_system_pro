@@ -19,7 +19,7 @@ import json
 import os
 import warnings
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -455,8 +455,14 @@ class DriftDetector:
         - Só pausa se HIGH severity nas últimas N avaliações (maioria)
         - Pausa expira após 12h desde a PRIMEIRA detecção HIGH consecutiva
         - Auto-rebuild baseline quando pausa expira
+        - Cooldown de 4h após retrain (evita loop drift→retrain→drift)
         """
         if not self.drift_history:
+            return False
+
+        # Cooldown pós-retrain: não detectar drift por 4h após retrain
+        cooldown_until = getattr(self, '_retrain_cooldown_until', None)
+        if cooldown_until and datetime.now(timezone.utc) < cooldown_until:
             return False
 
         last = self.drift_history[-1]
@@ -530,6 +536,31 @@ class DriftDetector:
 
     def get_last_report(self) -> Optional[Dict]:
         return self.drift_history[-1] if self.drift_history else None
+
+    def notify_retrain_completed(self):
+        """Chamado após retrain do ML concluir com sucesso.
+
+        Reseta o estado de drift para evitar loop infinito:
+        drift → retrain → drift → retrain → ...
+
+        Ações:
+        1. Rebuild baseline com sinais recentes (alinha com novo modelo)
+        2. Insere report NONE no histórico (limpa estado HIGH)
+        3. Reseta pause tracker
+        4. Define cooldown de 4h (não re-detectar drift imediatamente)
+        """
+        logger.info("[DRIFT] Retrain concluído — resetando baseline e estado de drift")
+
+        # 1. Rebuild baseline para alinhar com o novo modelo
+        self._auto_rebuild_baseline()
+
+        # 2. Resetar pause tracker
+        self._pause_started_at = None
+
+        # 3. Cooldown: não detectar drift por 4h após retrain
+        self._retrain_cooldown_until = datetime.now(timezone.utc) + timedelta(hours=12)
+        logger.info("[DRIFT] Cooldown de 12h ativado — drift detector pausado até "
+                     f"{self._retrain_cooldown_until.strftime('%H:%M UTC')}")
 
 
 # Instância global

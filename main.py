@@ -272,6 +272,12 @@ async def main():
                                             f"[ML-AUTO] ML retreinado! Accuracy={rt.get('new_accuracy', 0):.1%}, "
                                             f"F1={rt.get('new_f1', 0):.3f}, Amostras={rt.get('samples_used', 0)}"
                                         )
+                                        # Notificar drift detector — reseta baseline + cooldown 4h
+                                        try:
+                                            from src.analysis.drift_detector import get_drift_detector
+                                            get_drift_detector().notify_retrain_completed()
+                                        except Exception as _drift_err:
+                                            logger.warning(f"[ML-AUTO] Erro ao notificar drift: {_drift_err}")
                                     else:
                                         logger.info(f"[ML-AUTO] Sinais alimentados: {seed_result.get('signals_added', 0)}")
                                 else:
