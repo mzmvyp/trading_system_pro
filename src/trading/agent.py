@@ -242,6 +242,13 @@ class AgnoTradingAgent:
                             f"[ML-RETRAIN] OK! Accuracy={rt.get('new_accuracy', 0):.1%}, "
                             f"F1={rt.get('new_f1', 0):.3f}, Amostras={rt.get('samples_used', 0)}"
                         )
+                        # Notificar drift detector que retrain concluiu
+                        # Isso reseta o baseline e ativa cooldown de 4h
+                        try:
+                            from src.analysis.drift_detector import get_drift_detector
+                            get_drift_detector().notify_retrain_completed()
+                        except Exception as notify_err:
+                            logger.warning(f"[ML-RETRAIN] Erro ao notificar drift detector: {notify_err}")
                     else:
                         logger.info(f"[ML-RETRAIN] Sinais alimentados: {result.get('signals_added', 0)}, "
                                     f"mas retrain não executou (buffer insuficiente?)")
