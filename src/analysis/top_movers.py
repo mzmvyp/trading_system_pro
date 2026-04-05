@@ -99,9 +99,9 @@ def _filter_usdt_perpetuals(tickers: List[Dict], min_volume_usdt: float = 50_000
     Exclui pares de baixa liquidez, tokens de nicho e micro-caps extremamente voláteis.
     """
     # Limites de segurança para dynamic pairs
-    MAX_PRICE_CHANGE_24H = 40.0  # Rejeitar tokens com ±40%+ em 24h (pump/dump)
-    MAX_HIGH_LOW_RANGE_PCT = 50.0  # Rejeitar se range High-Low 24h > 50% do preço
-    MIN_TRADE_COUNT = 1000  # Mínimo 1000 trades (antes era 100 — muito baixo)
+    MAX_PRICE_CHANGE_24H = 15.0  # Rejeitar tokens com ±15%+ em 24h (pump/dump) — antes 40% trazia lixo
+    MAX_HIGH_LOW_RANGE_PCT = 20.0  # Rejeitar se range High-Low 24h > 20% do preço — antes 50%
+    MIN_TRADE_COUNT = 10_000  # Mínimo 10k trades (antes 1000 — micro-caps passavam)
 
     filtered = []
     rejected_volatile = 0

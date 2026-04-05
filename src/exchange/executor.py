@@ -853,8 +853,9 @@ class BinanceFuturesExecutor:
                 calculated_leverage = int(position_value / desired_margin)
                 # Cap: usar limite do par na Binance (nunca exceder o que a exchange permite)
                 symbol_max_leverage = symbol_info.get("max_leverage", 20) if symbol_info else 20
-                # Cap adicional: NUNCA mais que 15x para evitar liquidações
-                calculated_leverage = max(1, min(calculated_leverage, symbol_max_leverage, 15))
+                # Cap adicional: NUNCA mais que 7x para evitar liquidações
+                # Antes era 15x — causava ROIs de -17% a -43% nos trades perdedores
+                calculated_leverage = max(1, min(calculated_leverage, symbol_max_leverage, 7))
             else:
                 calculated_leverage = self.default_leverage
 
