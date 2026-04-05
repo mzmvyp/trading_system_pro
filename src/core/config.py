@@ -113,11 +113,6 @@ class Settings(BaseSettings):
         "SIRENUSDT",   # SL > 22% - volatilidade extrema
         "LYNUSDT",     # 0% Win Rate - consistentemente perdedor
         "UAIUSDT",     # 16.7% Win Rate - consistentemente perdedor
-        "PIPPINUSDT",  # -38% ROI - meme coin volátil
-        "NIGHTUSDT",   # -23% ROI - micro-cap sem liquidez
-        "EDGEUSDT",    # -43% ROI - pump & dump
-        "SKYAIUSDT",   # -33% ROI - micro-cap especulativo
-        "RIVERUSDT",   # Micro-cap - volatilidade extrema
     ]
 
     # ========================================
@@ -140,8 +135,8 @@ class Settings(BaseSettings):
     # REAVALIAÇÃO DE SINAIS ATIVOS
     # ========================================
     reevaluation_enabled: bool = True
-    reevaluation_interval_hours: float = 0.5  # Reavaliar a cada 30min (antes 1h)
-    reevaluation_min_time_open_hours: float = 0.25  # Primeira reavaliação após 15min (antes 1h)
+    reevaluation_interval_hours: float = 2.0  # Reavaliar a cada 2h (antes 30min — fechava prematuramente)
+    reevaluation_min_time_open_hours: float = 1.0  # Primeira reavaliação após 1h (antes 15min)
     reevaluation_min_confidence: int = 7  # Confiança mínima para agir na reavaliação
     reevaluation_require_tp1_hit: bool = False  # Se True, só reavalia após TP1 ser atingido
 

@@ -617,8 +617,9 @@ class RealPaperTradingSystem:
                                 _details_str = ", ".join(_details) if _details else "nenhum"
 
                                 # DECISÃO baseada em análise técnica
-                                if _against >= 3 and pnl_percent < 0:
-                                    # 3/3 indicadores contra + em prejuízo → FECHAR
+                                if _against >= 3 and pnl_percent < -3.0:
+                                    # 3/3 indicadores contra + perda significativa (>3%) → FECHAR
+                                    # Antes: fechava com qualquer PnL negativo (-0.01%) — muito agressivo
                                     logger.warning(
                                         f"[REEVAL FECHAR] {clean_symbol} {signal_type}: "
                                         f"3/3 indicadores contra ({_details_str}) + PnL={pnl_percent:.2f}% — "
@@ -648,29 +649,14 @@ class RealPaperTradingSystem:
                                             self._save_state()
 
                                 elif _against >= 2 and pnl_percent < -0.5:
-                                    # 2/3 contra + perdendo > 0.5% → apertar SL (50% entre entry e SL)
-                                    old_sl = position.get("stop_loss", 0)
-                                    if old_sl:
-                                        if signal_type == "BUY":
-                                            new_sl = entry_price - abs(entry_price - old_sl) * 0.5
-                                            if new_sl > old_sl:
-                                                position["stop_loss"] = new_sl
-                                                logger.info(
-                                                    f"[REEVAL TIGHTEN] {clean_symbol}: "
-                                                    f"SL apertado ${old_sl:.4f} → ${new_sl:.4f} "
-                                                    f"({_against}/3 contra, PnL={pnl_percent:.2f}%)"
-                                                )
-                                                self._save_state()
-                                        else:
-                                            new_sl = entry_price + abs(old_sl - entry_price) * 0.5
-                                            if new_sl < old_sl:
-                                                position["stop_loss"] = new_sl
-                                                logger.info(
-                                                    f"[REEVAL TIGHTEN] {clean_symbol}: "
-                                                    f"SL apertado ${old_sl:.4f} → ${new_sl:.4f} "
-                                                    f"({_against}/3 contra, PnL={pnl_percent:.2f}%)"
-                                                )
-                                                self._save_state()
+                                    # 2/3 contra + perdendo > 0.5% → apenas logar, NÃO apertar SL
+                                    # DESATIVADO: apertar SL para 50% matava trades antes do SL original
+                                    # O SL original já foi calculado com ATR, deixar ele funcionar
+                                    logger.info(
+                                        f"[REEVAL WATCH] {clean_symbol}: "
+                                        f"{_against}/3 contra, PnL={pnl_percent:.2f}% — "
+                                        f"mantendo SL original (sem apertar)"
+                                    )
                                 else:
                                     logger.debug(
                                         f"[REEVAL OK] {clean_symbol}: {_against}/3 contra, "

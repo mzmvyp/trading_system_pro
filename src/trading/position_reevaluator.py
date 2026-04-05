@@ -201,27 +201,20 @@ class PositionReevaluator:
         # ============================================
         # REGRA 4: MACD inverteu + prejuízo → fechar
         # ============================================
+        # REGRA 4: MACD inverteu — apenas logar, NÃO fechar
+        # DESATIVADO: MACD inverte facilmente em crypto e fechava trades prematuramente
+        # O stop loss original deve ser a proteção principal
         if signal_type == "BUY" and macd_hist < 0 and pnl_pct < -1.0 and hours_open > 1:
-            result.update({
-                "action": "CLOSE",
-                "reason": (
-                    f"MACD inverteu ({macd_hist:.4f}) + prejuízo {pnl_pct:.1f}% "
-                    f"há {hours_open:.0f}h — fechar posição"
-                ),
-            })
-            self._log_action(result)
-            return result
+            logger.info(
+                f"[REEVAL WATCH] {pos_key}: MACD inverteu ({macd_hist:.4f}) + "
+                f"PnL={pnl_pct:.1f}% há {hours_open:.0f}h — mantendo (SL protege)"
+            )
 
         if signal_type == "SELL" and macd_hist > 0 and pnl_pct < -1.0 and hours_open > 1:
-            result.update({
-                "action": "CLOSE",
-                "reason": (
-                    f"MACD inverteu ({macd_hist:.4f}) + prejuízo {pnl_pct:.1f}% "
-                    f"há {hours_open:.0f}h — fechar posição"
-                ),
-            })
-            self._log_action(result)
-            return result
+            logger.info(
+                f"[REEVAL WATCH] {pos_key}: MACD inverteu ({macd_hist:.4f}) + "
+                f"PnL={pnl_pct:.1f}% há {hours_open:.0f}h — mantendo (SL protege)"
+            )
 
         # ============================================
         # REGRA 5: Timeout — posição aberta > 48h sem TP

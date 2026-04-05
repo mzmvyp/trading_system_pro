@@ -126,7 +126,7 @@ class PositionMonitor:
                     # Circuit breaker fecha em 60% do caminho até liquidação
                     if leverage >= 10:
                         max_loss = -(100.0 / leverage) * 0.6  # 60% do caminho até liquidação
-                        max_loss = max(max_loss, -3.0)  # Nunca menos que -3%
+                        max_loss = max(max_loss, -5.0)  # Nunca menos que -5% (antes -3% era muito agressivo)
                     else:
                         max_loss = self.MAX_LOSS_PRICE_PERCENT  # -5% para baixa alavancagem
 
@@ -376,9 +376,11 @@ class PositionMonitor:
         all_against = against_count == 3
 
         # ============================================================
-        # POSIÇÃO EM PREJUÍZO + REVERSÃO COMPLETA (3/3) = FECHAR
+        # POSIÇÃO EM PREJUÍZO SIGNIFICATIVO + REVERSÃO COMPLETA (3/3) = FECHAR
+        # Antes: qualquer PnL negativo fechava — agora exige perda > $1.50
+        # O SL é a proteção principal, não a reavaliação
         # ============================================================
-        if pnl < 0 and all_against:
+        if pnl < -1.50 and all_against:
             reason = f"REVERSAO COMPLETA {side} (PnL: ${pnl:.2f}): {', '.join(against_details)}"
             return "close", reason, against_details
 
@@ -393,13 +395,16 @@ class PositionMonitor:
             return "move_sl_breakeven", reason, against_details
 
         # ============================================================
-        # POSIÇÃO EM LUCRO + 2/3 SINAIS CONTRA = APERTAR SL
-        # Aperta SL para 50% entre entry e preço atual (garante parte do lucro)
+        # POSIÇÃO EM LUCRO + 2/3 SINAIS CONTRA = APENAS LOGAR
+        # DESATIVADO: apertar SL por reavaliação matava trades antes do TP
+        # O trailing stop já protege lucro quando ativado
         # ============================================================
         if pnl > 0 and against_count >= 2 and entry_price > 0 and current_price > 0:
-            reason = (f"APERTANDO SL {side} (PnL: ${pnl:.2f}): "
-                      f"{against_count}/3 sinais contra ({', '.join(against_details)})")
-            return "tighten_sl", reason, against_details
+            logger.info(
+                f"[REAVALIACAO] {side}: {against_count}/3 contra com lucro ${pnl:.2f} — "
+                f"mantendo (trailing stop protege)"
+            )
+            return None, "", []
 
         # ============================================================
         # SINAIS PARCIAIS (prejuízo ou lucro insuficiente) = MANTER
