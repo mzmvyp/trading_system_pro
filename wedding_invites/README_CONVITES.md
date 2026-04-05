@@ -1,4 +1,4 @@
-# 💒 Sistema de Convites de Casamento via WhatsApp
+# 💒 Convites de Casamento - Will e Jaque
 
 ## Como usar
 
@@ -7,34 +7,26 @@
 pip install -r wedding_invites/requirements.txt
 ```
 
-### 2. Editar suas informações
-- **`config.py`** - Dados do casamento (nomes, data, local, cores, etc.)
-- **`convidados.csv`** - Lista de convidados (telefone + nome)
+### 2. Preparar os arquivos
+- **`convidados.csv`** - Preencha com telefone e nome de cada convidado
+- **`convite_will_jaque.pdf`** - Coloque o PDF da arte do convite nesta pasta
+- **`config.py`** - Ajuste o nome do PDF e o intervalo entre envios se necessário
 
 ### 3. Formato do CSV
 ```
 telefone,nome
-5511999990001,João e Maria Silva
-5511999990002,Pedro e Ana Santos
+5511999990001,Priscila e Lucas
+5511999990002,Carlos
+5511999990003,Família Silva
 ```
-- Telefone: com DDD, sem espaços (ex: `5511999990001`)
-- Nome: nome completo ou do casal
 
-### 4. Gerar os PDFs
+### 4. Testar (sem enviar nada)
 ```bash
 cd wedding_invites
-python gerar_pdf.py
-```
-Os PDFs ficam na pasta `convites_pdf/`.
-
-### 5. Enviar pelo WhatsApp
-
-**Modo teste** (não envia nada, só mostra):
-```bash
 python enviar_whatsapp.py --teste
 ```
 
-**Envio real:**
+### 5. Enviar de verdade
 ```bash
 python enviar_whatsapp.py
 ```
@@ -42,5 +34,5 @@ python enviar_whatsapp.py
 ### ⚠️ Importante
 - Faça login no **WhatsApp Web** no navegador antes de enviar
 - Não mexa no computador durante os envios
-- O intervalo entre envios é de 45s (configurável em `config.py`)
-- Um log de envios é salvo em `log_envios.csv`
+- Intervalo de 45s entre envios (configurável em `config.py`)
+- Log de envios salvo em `log_envios.csv`

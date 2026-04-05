@@ -14,60 +14,43 @@ import os
 import time
 import pywhatkit as kit
 
-from config import (
-    NOIVA, NOIVO, DATA_CASAMENTO, HORARIO_CERIMONIA, HORARIO_FESTA,
-    LOCAL_CERIMONIA, ENDERECO_CERIMONIA, LOCAL_FESTA, ENDERECO_FESTA,
-    MENSAGEM_ESPECIAL, DRESS_CODE, LINK_PRESENTES, LINK_CONFIRMACAO,
-    INTERVALO_ENVIO_SEGUNDOS,
-)
+from config import PDF_CONVITE, INTERVALO_ENVIO_SEGUNDOS
 
 ARQUIVO_CSV = os.path.join(os.path.dirname(__file__), "convidados.csv")
-PASTA_PDF = os.path.join(os.path.dirname(__file__), "convites_pdf")
 LOG_ENVIO = os.path.join(os.path.dirname(__file__), "log_envios.csv")
 
 
 def montar_mensagem(nome_convidado):
-    """Monta a mensagem de texto do convite para WhatsApp."""
-    msg = (
-        f"💒 *CONVITE DE CASAMENTO* 💒\n"
+    """Monta a mensagem personalizada do convite."""
+    return (
+        f"{nome_convidado}, é com muita alegria que convidamos vocês para participar do nosso casamento! ✨\n"
+        f"Estamos vivendo um momento único e nossa felicidade só será completa com a presença de vocês. "
+        f"Abaixo, deixamos as informações mais importantes para o nosso grande dia:\n"
         f"\n"
-        f"Querido(a) *{nome_convidado}*,\n"
+        f"📅 DATA: 25 de julho de 2026 (Sábado)\n"
+        f"🕒 HORÁRIO: 17h (A festa vai até às 2h, então preparem-se!)\n"
+        f"📍 LOCAL: Casa do Ator (Grupo Bisutti)\n"
+        f"🏠 ENDEREÇO: Rua Casa do Ator, 642 - Vila Olímpia, São Paulo\n"
         f"\n"
-        f"Com imensa alegria, convidamos você para celebrar o casamento de\n"
+        f"✅ CONFIRMAÇÃO DE PRESENÇA:\n"
+        f"Para nos ajudar com os preparativos, pedimos a gentileza de confirmar sua presença pelo link abaixo:\n"
+        f"👉 https://noivos.casar.com/jaqueline-e-willian-2026-07-25#/rsvp\n"
         f"\n"
-        f"✨ *{NOIVA} & {NOIVO}* ✨\n"
+        f"⚠️ DICA IMPORTANTE: Beba com moderação, mas se não moderar, não dirija! 😂 "
+        f"Recomendamos o uso de aplicativos de transporte para que todos voltem em segurança. 🚗💨\n"
+        f"🅿️ PARA QUEM FIZER QUESTÃO DE IR DE CARRO: Informamos que o local não possui serviço de valet na porta, "
+        f"mas deixamos as opções de estacionamentos mais próximos no nosso site para te ajudar.\n"
         f"\n"
-        f"{MENSAGEM_ESPECIAL}\n"
+        f"🎁 LISTA DE PRESENTES E MENSAGENS: Nossa 'Lista de Presentes' e a seção de 'Recados' estão disponíveis "
+        f"no link oficial. Vamos amar ler cada palavra de carinho de vocês! 😍\n"
+        f"🔗 https://noivos.casar.com/jaqueline-e-willian-2026-07-25#/home\n"
         f"\n"
-        f"📅 *Data:* {DATA_CASAMENTO}\n"
+        f"Contamos com a presença de vocês para tornar este dia ainda mais especial e cheio de energia! ✨🙌\n"
         f"\n"
-        f"⛪ *Cerimônia:* {HORARIO_CERIMONIA}\n"
-        f"📍 {LOCAL_CERIMONIA}\n"
-        f"    {ENDERECO_CERIMONIA}\n"
+        f"Mal podemos esperar pelo nosso grande dia! 💍\n"
         f"\n"
-        f"🎉 *Festa:* {HORARIO_FESTA}\n"
-        f"📍 {LOCAL_FESTA}\n"
-        f"    {ENDERECO_FESTA}\n"
+        f"Will e Jaque"
     )
-
-    if DRESS_CODE:
-        msg += f"\n👔 *Traje:* {DRESS_CODE}\n"
-
-    if LINK_PRESENTES:
-        msg += f"\n🎁 *Lista de presentes:* {LINK_PRESENTES}\n"
-
-    if LINK_CONFIRMACAO:
-        msg += f"\n✅ *Confirme sua presença:* {LINK_CONFIRMACAO}\n"
-
-    msg += (
-        f"\n"
-        f"Com carinho,\n"
-        f"*{NOIVA} & {NOIVO}* 💕\n"
-        f"\n"
-        f"_O convite em PDF segue em seguida!_"
-    )
-
-    return msg
 
 
 def formatar_telefone(telefone):
@@ -88,7 +71,7 @@ def registrar_log(telefone, nome, status, erro=""):
         if not existe:
             f.write("telefone,nome,status,erro,timestamp\n")
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        f.write(f"{telefone},{nome},{status},{erro},{timestamp}\n")
+        f.write(f'"{telefone}","{nome}","{status}","{erro}","{timestamp}"\n')
 
 
 def enviar_convites(modo_teste=False):
@@ -98,6 +81,13 @@ def enviar_convites(modo_teste=False):
     Args:
         modo_teste: Se True, apenas mostra as mensagens sem enviar.
     """
+    # Validar que o PDF existe
+    if not modo_teste and not os.path.exists(PDF_CONVITE):
+        print(f"❌ ERRO: PDF do convite não encontrado!")
+        print(f"   Esperado em: {PDF_CONVITE}")
+        print(f"   Coloque o PDF na pasta wedding_invites/ e atualize o nome em config.py")
+        return
+
     with open(ARQUIVO_CSV, "r", encoding="utf-8") as f:
         leitor = csv.DictReader(f)
         convidados = [
@@ -107,12 +97,13 @@ def enviar_convites(modo_teste=False):
         ]
 
     total = len(convidados)
-    print(f"\n{'='*50}")
-    print(f"  ENVIO DE CONVITES DE CASAMENTO - WhatsApp")
-    print(f"  {NOIVA} & {NOIVO}")
-    print(f"  Total de convidados: {total}")
-    print(f"  Intervalo entre envios: {INTERVALO_ENVIO_SEGUNDOS}s")
-    print(f"{'='*50}\n")
+    print(f"\n{'='*55}")
+    print(f"  💒 ENVIO DE CONVITES - Will e Jaque")
+    print(f"  📋 Total de convidados: {total}")
+    print(f"  ⏱️  Intervalo entre envios: {INTERVALO_ENVIO_SEGUNDOS}s")
+    if not modo_teste:
+        print(f"  📄 PDF: {PDF_CONVITE}")
+    print(f"{'='*55}\n")
 
     if modo_teste:
         print("⚠️  MODO TESTE - Nenhuma mensagem será enviada\n")
@@ -123,14 +114,12 @@ def enviar_convites(modo_teste=False):
     for i, (telefone, nome) in enumerate(convidados, 1):
         tel_formatado = formatar_telefone(telefone)
         mensagem = montar_mensagem(nome)
-        pdf_path = os.path.join(PASTA_PDF, f"convite_{telefone}.pdf")
 
-        print(f"[{i}/{total}] Enviando para {nome} ({tel_formatado})...")
+        print(f"[{i}/{total}] {nome} ({tel_formatado})")
 
         if modo_teste:
-            print(f"  Mensagem:\n{mensagem[:100]}...")
-            print(f"  PDF: {pdf_path}")
-            print(f"  [TESTE] Pular envio\n")
+            print(f"  📝 Mensagem (início): {mensagem[:80]}...")
+            print(f"  ✅ [TESTE] OK\n")
             registrar_log(tel_formatado, nome, "TESTE")
             continue
 
@@ -142,43 +131,41 @@ def enviar_convites(modo_teste=False):
                 wait_time=15,
                 tab_close=True,
             )
-            print(f"  [OK] Mensagem de texto enviada!")
+            print(f"  ✅ Mensagem enviada!")
 
-            # Aguarda um pouco antes de enviar o PDF
+            # Aguarda antes de enviar o PDF
             time.sleep(5)
 
-            # Envia o PDF se existir
-            if os.path.exists(pdf_path):
-                kit.sendwhats_image(
-                    receiver=tel_formatado,
-                    img_path=pdf_path,
-                    caption="Convite de Casamento 💒",
-                    wait_time=15,
-                    tab_close=True,
-                )
-                print(f"  [OK] PDF do convite enviado!")
-            else:
-                print(f"  [!] PDF não encontrado: {pdf_path}")
+            # Envia o PDF do convite
+            kit.sendwhats_image(
+                receiver=tel_formatado,
+                img_path=PDF_CONVITE,
+                caption="Convite de Casamento 💒💍",
+                wait_time=15,
+                tab_close=True,
+            )
+            print(f"  ✅ PDF enviado!")
 
             registrar_log(tel_formatado, nome, "ENVIADO")
             enviados += 1
 
         except Exception as e:
-            print(f"  [ERRO] Falha ao enviar: {e}")
+            print(f"  ❌ ERRO: {e}")
             registrar_log(tel_formatado, nome, "ERRO", str(e))
             erros += 1
 
         # Intervalo entre envios
         if i < total:
-            print(f"  Aguardando {INTERVALO_ENVIO_SEGUNDOS}s antes do próximo envio...")
+            print(f"  ⏳ Aguardando {INTERVALO_ENVIO_SEGUNDOS}s...\n")
             time.sleep(INTERVALO_ENVIO_SEGUNDOS)
 
-    print(f"\n{'='*50}")
-    print(f"  RESULTADO FINAL")
-    print(f"  Enviados: {enviados}/{total}")
-    print(f"  Erros: {erros}")
-    print(f"  Log salvo em: {LOG_ENVIO}")
-    print(f"{'='*50}\n")
+    print(f"\n{'='*55}")
+    print(f"  📊 RESULTADO FINAL")
+    print(f"  ✅ Enviados: {enviados}/{total}")
+    if erros:
+        print(f"  ❌ Erros: {erros}")
+    print(f"  📄 Log salvo em: {LOG_ENVIO}")
+    print(f"{'='*55}\n")
 
 
 if __name__ == "__main__":
@@ -187,11 +174,11 @@ if __name__ == "__main__":
     if "--teste" in sys.argv:
         enviar_convites(modo_teste=True)
     else:
-        print("⚠️  ATENÇÃO: Este script vai enviar mensagens reais no WhatsApp!")
+        print("\n⚠️  ATENÇÃO: Este script vai enviar mensagens reais no WhatsApp!")
         print("   Certifique-se de que:")
-        print("   1. Você está logado no WhatsApp Web")
-        print("   2. O CSV de convidados está correto")
-        print("   3. Os PDFs foram gerados (rode gerar_pdf.py primeiro)")
+        print("   1. Você está logado no WhatsApp Web no navegador")
+        print("   2. O arquivo convidados.csv está preenchido corretamente")
+        print(f"   3. O PDF do convite existe: {PDF_CONVITE}")
         print()
         resposta = input("Deseja continuar? (sim/nao): ").strip().lower()
         if resposta in ("sim", "s", "yes", "y"):

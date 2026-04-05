@@ -1,2 +1,1 @@
 pywhatkit>=5.4
-reportlab>=4.0
