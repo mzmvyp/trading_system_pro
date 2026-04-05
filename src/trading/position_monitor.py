@@ -556,17 +556,16 @@ class PositionMonitor:
                     )
 
                     if action == "close":
-                        logger.warning(f"[REAVALIACAO] {symbol} ({side}): {reason} - FECHANDO!")
-                        try:
-                            close_result = await executor.close_position(symbol)
-                            if isinstance(close_result, dict) and "error" not in close_result:
-                                results["closed_by_reversal"] += 1
-                            else:
-                                results["errors"].append(f"Close {symbol}: {close_result}")
-                        except Exception as e:
-                            results["errors"].append(f"Close {symbol}: {e}")
+                        # DESATIVADO: Reavaliação NÃO fecha posições na exchange
+                        # O SL/TP já estão colocados na Binance — são a proteção principal
+                        # Fechar por reavaliação matava trades que depois atingiriam TP
+                        logger.warning(
+                            f"[REAVALIACAO] {symbol} ({side}): {reason} — "
+                            f"NÃO fechando (SL na exchange protege)"
+                        )
+                        results["kept"] += 1
 
-                    elif action in ("move_sl_breakeven", "tighten_sl"):
+                    elif action in ("move_sl_breakeven",):
                         new_sl = self._calculate_new_sl(action, side, entry_price, current_price)
                         if new_sl:
                             logger.info(f"[REAVALIACAO] {symbol} ({side}): {reason} - SL -> ${new_sl:.4f}")
@@ -746,8 +745,14 @@ class PositionMonitor:
 
                     elif reeval_action == "CLOSE" or action == "close":
                         close_reason = reeval_result.get("reason", reason)
-                        logger.warning(f"[REAVALIACAO PAPER] {symbol} ({normalized_side}): {close_reason} - FECHANDO!")
-                        try:
+                        # DESATIVADO: Reavaliação NÃO fecha posições — SL/TP são a proteção
+                        # Antes: fechava posições prematuramente, impedindo que atingissem TP
+                        logger.warning(
+                            f"[REAVALIACAO PAPER] {symbol} ({normalized_side}): {close_reason} — "
+                            f"NÃO fechando (SL protege, reavaliação apenas monitora)"
+                        )
+                        results["kept"] += 1
+                        if False:  # DESATIVADO
                             if hasattr(agent, 'paper_system') and agent.paper_system:
                                 cp = await agent.paper_system.get_current_price(symbol)
                                 if cp:

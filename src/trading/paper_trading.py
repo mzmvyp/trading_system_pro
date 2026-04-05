@@ -508,7 +508,69 @@ class RealPaperTradingSystem:
                         # Salvar estado quando atinge novo mínimo
                         self._save_state()
 
-                    # NOVO: Verificar timeout baseado no tipo de operação
+                    # ============================================================
+                    # TRAILING STOP PROFISSIONAL — SÓ move SL quando em LUCRO
+                    # Estratégia: Chandelier Exit simplificado
+                    # 1. Lucro >= 1.5% → SL vai para breakeven (entry + 0.1%)
+                    # 2. Lucro >= 2.5% → SL trava 40% do lucro máximo
+                    # 3. Lucro >= 5.0% → SL trava 50% do lucro máximo
+                    # 4. Lucro >= 8.0% → SL trava 60% do lucro máximo
+                    # NUNCA move SL quando em prejuízo
+                    # ============================================================
+                    from src.core.config import settings as _ts_cfg
+                    if _ts_cfg.auto_breakeven_enabled or _ts_cfg.auto_trailing_stop_enabled:
+                        old_sl = position.get("stop_loss", 0)
+                        max_profit_pct = position.get("max_profit_reached_percent", 0)
+
+                        if pnl_percent > 0 and max_profit_pct > 0:
+                            new_sl = None
+
+                            if max_profit_pct >= 8.0:
+                                # Trava 60% do lucro máximo
+                                lock_pct = max_profit_pct * 0.60
+                                if signal_type == "BUY":
+                                    new_sl = entry_price * (1 + lock_pct / 100)
+                                else:
+                                    new_sl = entry_price * (1 - lock_pct / 100)
+                            elif max_profit_pct >= 5.0:
+                                # Trava 50% do lucro máximo
+                                lock_pct = max_profit_pct * 0.50
+                                if signal_type == "BUY":
+                                    new_sl = entry_price * (1 + lock_pct / 100)
+                                else:
+                                    new_sl = entry_price * (1 - lock_pct / 100)
+                            elif max_profit_pct >= 2.5:
+                                # Trava 40% do lucro máximo
+                                lock_pct = max_profit_pct * 0.40
+                                if signal_type == "BUY":
+                                    new_sl = entry_price * (1 + lock_pct / 100)
+                                else:
+                                    new_sl = entry_price * (1 - lock_pct / 100)
+                            elif max_profit_pct >= 1.5:
+                                # Breakeven: SL = entry + 0.1% (cobre taxas)
+                                if signal_type == "BUY":
+                                    new_sl = entry_price * 1.001
+                                else:
+                                    new_sl = entry_price * 0.999
+
+                            # Só mover SL se for MELHOR que o atual (nunca piorar)
+                            if new_sl is not None:
+                                sl_is_better = False
+                                if signal_type == "BUY" and new_sl > old_sl:
+                                    sl_is_better = True
+                                elif signal_type == "SELL" and (old_sl == 0 or new_sl < old_sl):
+                                    sl_is_better = True
+
+                                if sl_is_better:
+                                    position["stop_loss"] = new_sl
+                                    self._save_state()
+                                    logger.info(
+                                        f"[TRAILING STOP] {clean_symbol} {signal_type}: "
+                                        f"SL ${old_sl:.4f} → ${new_sl:.4f} "
+                                        f"(max_lucro={max_profit_pct:.1f}%, atual={pnl_percent:.1f}%)"
+                                    )
+
+                    # Verificar timeout baseado no tipo de operação
                     operation_type = position.get("operation_type", "SWING_TRADE")
                     entry_time_str = position.get("timestamp", datetime.now(timezone.utc).isoformat())
                     try:
@@ -618,15 +680,14 @@ class RealPaperTradingSystem:
 
                                 # DECISÃO baseada em análise técnica
                                 if _against >= 3 and pnl_percent < -3.0:
-                                    # 3/3 indicadores contra + perda significativa (>3%) → FECHAR
-                                    # Antes: fechava com qualquer PnL negativo (-0.01%) — muito agressivo
+                                    # 3/3 indicadores contra + perda significativa
+                                    # DESATIVADO: NÃO fechar — o SL é a proteção principal
+                                    # Antes fechava aqui e o trade perdia chance de recuperar
                                     logger.warning(
-                                        f"[REEVAL FECHAR] {clean_symbol} {signal_type}: "
+                                        f"[REEVAL ALERTA] {clean_symbol} {signal_type}: "
                                         f"3/3 indicadores contra ({_details_str}) + PnL={pnl_percent:.2f}% — "
-                                        f"fechando antes que piore"
+                                        f"mantendo (SL protege, não fechar prematuramente)"
                                     )
-                                    await self._close_position_auto(position_key, current_price, "REEVAL_CONTRA")
-                                    continue
 
                                 elif _against >= 2 and pnl_percent > 0.3:
                                     # 2+ indicadores contra mas em lucro → mover SL para breakeven
@@ -877,6 +938,16 @@ class RealPaperTradingSystem:
 
             # Salvar estado IMEDIATAMENTE (CRÍTICO)
             self._save_state()
+
+            # REGISTRAR COOLDOWN: Evitar reentrada imediata após fechamento
+            try:
+                from src.trading.risk_manager import register_position_closed, register_sl_hit
+                if "STOP_LOSS" in reason.upper() or "SL" in reason.upper():
+                    register_sl_hit(symbol)  # 4h cooldown pós-stop
+                else:
+                    register_position_closed(symbol, signal_type)  # 6h cooldown direcional
+            except Exception as _cooldown_err:
+                logger.warning(f"[COOLDOWN] Erro ao registrar cooldown: {_cooldown_err}")
 
             # Log de fechamento (apenas %)
             source = position.get("source", "UNKNOWN")
