@@ -2104,8 +2104,8 @@ def validate_risk_and_position(
         #
         # Capital OBRIGATÓRIO da API da Binance (saldo real)
         # Sem saldo real = NÃO abre posição
-        # NOTA: capital é passado pelo caller (async) via _capital param
-        capital = _capital
+        # FIX: usar account_balance (que é o que agent.py passa) em vez de _capital
+        capital = account_balance if account_balance else _capital
 
         if not capital or capital <= 0:
             return {
