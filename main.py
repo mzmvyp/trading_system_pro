@@ -513,8 +513,14 @@ async def main():
 
                 except KeyboardInterrupt:
                     raise
+                except asyncio.CancelledError:
+                    logger.error("[MAIN LOOP] Task cancelada — reiniciando ciclo...")
+                    await asyncio.sleep(10)
                 except Exception as e:
                     logger.exception(f"Erro no ciclo de monitoramento: {e}")
+                    await asyncio.sleep(30)
+                except BaseException as e:
+                    logger.error(f"[MAIN LOOP] BaseException não tratada: {type(e).__name__}: {e}")
                     await asyncio.sleep(30)
 
         elif args.mode == 'top5':

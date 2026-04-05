@@ -30,6 +30,11 @@ from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_sample_weight
 
+import threading
+
+# Lock global para evitar retrains concorrentes (drift-retrain + auto-train)
+_retrain_lock = threading.Lock()
+
 try:
     import xgboost as xgb
     XGBOOST_AVAILABLE = True
@@ -759,6 +764,21 @@ def seed_from_evaluated_signals(force_retrain: bool = True, max_signals: int = 0
     Returns:
         Dict com resultado da operacao
     """
+    import time
+
+    # Lock para evitar retrains concorrentes (drift-retrain thread + auto-train thread)
+    if not _retrain_lock.acquire(blocking=False):
+        print("[OL-SEED] Retrain já em andamento em outra thread — pulando.")
+        return {"success": False, "error": "retrain_already_running", "signals_added": 0}
+
+    try:
+        return _seed_from_evaluated_signals_impl(force_retrain, max_signals)
+    finally:
+        _retrain_lock.release()
+
+
+def _seed_from_evaluated_signals_impl(force_retrain: bool = True, max_signals: int = 0) -> Dict:
+    """Implementação real do seed — chamada com lock adquirido."""
     import time
 
     # Se nao existe modelo, preferir bootstrap pipeline (dados de alta qualidade)

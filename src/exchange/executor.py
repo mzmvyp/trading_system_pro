@@ -842,6 +842,13 @@ class BinanceFuturesExecutor:
             # Preço de liquidação fica a ~20% vs ~9% antes
             desired_margin = risk_amount * 2.1  # 2x risco + 10% buffer para taxas
 
+            # Hard cap: margem NUNCA deve exceder 10% do saldo disponível
+            # Isso garante que uma única posição não consume mais que 10% do capital
+            max_margin_allowed = available * 0.10
+            if desired_margin > max_margin_allowed:
+                logger.info(f"[MARGEM CAP] Margem desejada ${desired_margin:.2f} > 10% do disponível (${max_margin_allowed:.2f}). Usando cap.")
+                desired_margin = max_margin_allowed
+
             if desired_margin > 0:
                 calculated_leverage = int(position_value / desired_margin)
                 # Cap: usar limite do par na Binance (nunca exceder o que a exchange permite)
@@ -852,6 +859,20 @@ class BinanceFuturesExecutor:
                 calculated_leverage = self.default_leverage
 
             actual_margin = position_value / calculated_leverage if calculated_leverage > 0 else position_value
+
+            # SAFETY: Se a margem real ainda excede 10% do disponível, reduzir position_size
+            if actual_margin > max_margin_allowed and max_margin_allowed > 0:
+                old_size = position_size
+                # Recalcular: max_margin * leverage = max_position_value
+                max_position_value = max_margin_allowed * calculated_leverage
+                position_size = max_position_value / entry_price
+                position_size = self._round_quantity(position_size, symbol_info.get("quantity_precision", 3))
+                position_value = position_size * entry_price
+                actual_margin = position_value / calculated_leverage
+                logger.warning(
+                    f"[MARGEM REDUZIDA] Posição reduzida de {old_size:.6f} para {position_size:.6f} "
+                    f"para manter margem em ${actual_margin:.2f} (<= 10% de ${available:.2f})"
+                )
 
             # Verificação de segurança: SL distance * leverage deve ser < 80% da margem
             # Se não, a liquidação pode acontecer antes do SL
