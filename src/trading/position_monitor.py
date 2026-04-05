@@ -126,7 +126,7 @@ class PositionMonitor:
                     # Circuit breaker fecha em 60% do caminho até liquidação
                     if leverage >= 10:
                         max_loss = -(100.0 / leverage) * 0.6  # 60% do caminho até liquidação
-                        max_loss = max(max_loss, -3.0)  # Nunca menos que -3%
+                        max_loss = max(max_loss, -5.0)  # Nunca menos que -5% (antes -3% era muito agressivo)
                     else:
                         max_loss = self.MAX_LOSS_PRICE_PERCENT  # -5% para baixa alavancagem
 
@@ -376,9 +376,11 @@ class PositionMonitor:
         all_against = against_count == 3
 
         # ============================================================
-        # POSIÇÃO EM PREJUÍZO + REVERSÃO COMPLETA (3/3) = FECHAR
+        # POSIÇÃO EM PREJUÍZO SIGNIFICATIVO + REVERSÃO COMPLETA (3/3) = FECHAR
+        # Antes: qualquer PnL negativo fechava — agora exige perda > $1.50
+        # O SL é a proteção principal, não a reavaliação
         # ============================================================
-        if pnl < 0 and all_against:
+        if pnl < -1.50 and all_against:
             reason = f"REVERSAO COMPLETA {side} (PnL: ${pnl:.2f}): {', '.join(against_details)}"
             return "close", reason, against_details
 
@@ -393,13 +395,16 @@ class PositionMonitor:
             return "move_sl_breakeven", reason, against_details
 
         # ============================================================
-        # POSIÇÃO EM LUCRO + 2/3 SINAIS CONTRA = APERTAR SL
-        # Aperta SL para 50% entre entry e preço atual (garante parte do lucro)
+        # POSIÇÃO EM LUCRO + 2/3 SINAIS CONTRA = APENAS LOGAR
+        # DESATIVADO: apertar SL por reavaliação matava trades antes do TP
+        # O trailing stop já protege lucro quando ativado
         # ============================================================
         if pnl > 0 and against_count >= 2 and entry_price > 0 and current_price > 0:
-            reason = (f"APERTANDO SL {side} (PnL: ${pnl:.2f}): "
-                      f"{against_count}/3 sinais contra ({', '.join(against_details)})")
-            return "tighten_sl", reason, against_details
+            logger.info(
+                f"[REAVALIACAO] {side}: {against_count}/3 contra com lucro ${pnl:.2f} — "
+                f"mantendo (trailing stop protege)"
+            )
+            return None, "", []
 
         # ============================================================
         # SINAIS PARCIAIS (prejuízo ou lucro insuficiente) = MANTER
@@ -551,17 +556,16 @@ class PositionMonitor:
                     )
 
                     if action == "close":
-                        logger.warning(f"[REAVALIACAO] {symbol} ({side}): {reason} - FECHANDO!")
-                        try:
-                            close_result = await executor.close_position(symbol)
-                            if isinstance(close_result, dict) and "error" not in close_result:
-                                results["closed_by_reversal"] += 1
-                            else:
-                                results["errors"].append(f"Close {symbol}: {close_result}")
-                        except Exception as e:
-                            results["errors"].append(f"Close {symbol}: {e}")
+                        # DESATIVADO: Reavaliação NÃO fecha posições na exchange
+                        # O SL/TP já estão colocados na Binance — são a proteção principal
+                        # Fechar por reavaliação matava trades que depois atingiriam TP
+                        logger.warning(
+                            f"[REAVALIACAO] {symbol} ({side}): {reason} — "
+                            f"NÃO fechando (SL na exchange protege)"
+                        )
+                        results["kept"] += 1
 
-                    elif action in ("move_sl_breakeven", "tighten_sl"):
+                    elif action in ("move_sl_breakeven",):
                         new_sl = self._calculate_new_sl(action, side, entry_price, current_price)
                         if new_sl:
                             logger.info(f"[REAVALIACAO] {symbol} ({side}): {reason} - SL -> ${new_sl:.4f}")
@@ -596,9 +600,15 @@ class PositionMonitor:
 
     async def reevaluate_paper_positions(self, agent) -> Dict[str, Any]:
         """
-        Reavalia posições abertas em paper trading.
-        Mesma lógica do modo real, com ajuste de SL no state.json.
+        DESATIVADO: Reavaliação de paper positions agora é feita APENAS pelo
+        paper_trading._monitor_positions() com trailing stop integrado.
+        Este método era DUPLICADO e escrevia diretamente no state.json sem
+        coordenação com o paper_trading, causando corrupção de estado e
+        fechamentos prematuros.
         """
+        return {"skipped": True, "reason": "Unified in paper_trading monitor (avoid state.json race)"}
+
+        # === CÓDIGO ABAIXO DESATIVADO ===
         from src.core.config import settings
 
         if not settings.reevaluation_enabled:
@@ -741,8 +751,14 @@ class PositionMonitor:
 
                     elif reeval_action == "CLOSE" or action == "close":
                         close_reason = reeval_result.get("reason", reason)
-                        logger.warning(f"[REAVALIACAO PAPER] {symbol} ({normalized_side}): {close_reason} - FECHANDO!")
-                        try:
+                        # DESATIVADO: Reavaliação NÃO fecha posições — SL/TP são a proteção
+                        # Antes: fechava posições prematuramente, impedindo que atingissem TP
+                        logger.warning(
+                            f"[REAVALIACAO PAPER] {symbol} ({normalized_side}): {close_reason} — "
+                            f"NÃO fechando (SL protege, reavaliação apenas monitora)"
+                        )
+                        results["kept"] += 1
+                        if False:  # DESATIVADO
                             if hasattr(agent, 'paper_system') and agent.paper_system:
                                 cp = await agent.paper_system.get_current_price(symbol)
                                 if cp:

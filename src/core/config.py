@@ -52,7 +52,7 @@ class Settings(BaseSettings):
 
     # Porcentagem do capital a arriscar por trade
     # 5% = se o stop loss for atingido, perde 5% do capital
-    risk_percent_per_trade: float = 5.0  # 5% do capital arriscado por trade
+    risk_percent_per_trade: float = 2.0  # 2% do capital arriscado por trade (antes 5% — muito agressivo)
 
     # Como calcular o tamanho da posicao:
     # 1. Risco em $ = capital * (risk_percent_per_trade / 100)
@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # Configurações de Confiança
     # UNIFICADO: Sempre usar escala 0-10
     # Mínimo 6/10 — sinais fracos passam mas são filtrados por ML, confluência, LSTM
-    min_confidence_0_10: int = 6
+    min_confidence_0_10: int = 7  # Mínimo 7/10 (antes 6 — executava sinais fracos)
     # DEPRECATED: min_confidence_0_5 removido - sempre usar escala 0-10
 
     # Configurações de Intervalo de Análise
@@ -98,9 +98,9 @@ class Settings(BaseSettings):
     # ========================================
     # Adiciona pares com maior movimento (gainers + losers) à análise
     top_movers_enabled: bool = True
-    top_movers_n_gainers: int = 5   # Top N que mais subiram (24h)
-    top_movers_n_losers: int = 5    # Top N que mais caíram (24h)
-    top_movers_min_volume_usdt: float = 50_000_000  # Volume mínimo 50M USDT (filtrar liquidez)
+    top_movers_n_gainers: int = 3   # Top N que mais subiram (reduzido de 5 — evitar shitcoins)
+    top_movers_n_losers: int = 2    # Top N que mais caíram (reduzido de 5 — shorts perdem muito)
+    top_movers_min_volume_usdt: float = 200_000_000  # Volume mínimo 200M USDT (antes 50M — trazia lixo)
 
     # ========================================
     # BLACKLIST DE TOKENS (ilíquidos/consistentemente perdedores)
@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     # ========================================
     # Dados mostram SELL com 46% WR vs BUY com 67% WR
     # Shorts precisam de confiança maior para compensar menor acerto
-    sell_min_confidence: int = 6  # Mesmo mínimo que BUY (6/10)
+    sell_min_confidence: int = 8  # Shorts precisam confiança 8/10 (WR 46% vs BUY 67%)
     sell_require_strong_trend: bool = True  # SELL só em tendência forte de baixa
 
     # ========================================
@@ -135,8 +135,8 @@ class Settings(BaseSettings):
     # REAVALIAÇÃO DE SINAIS ATIVOS
     # ========================================
     reevaluation_enabled: bool = True
-    reevaluation_interval_hours: float = 0.5  # Reavaliar a cada 30min (antes 1h)
-    reevaluation_min_time_open_hours: float = 0.25  # Primeira reavaliação após 15min (antes 1h)
+    reevaluation_interval_hours: float = 2.0  # Reavaliar a cada 2h (antes 30min — fechava prematuramente)
+    reevaluation_min_time_open_hours: float = 1.0  # Primeira reavaliação após 1h (antes 15min)
     reevaluation_min_confidence: int = 7  # Confiança mínima para agir na reavaliação
     reevaluation_require_tp1_hit: bool = False  # Se True, só reavalia após TP1 ser atingido
 
