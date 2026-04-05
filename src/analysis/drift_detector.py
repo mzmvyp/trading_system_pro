@@ -558,8 +558,8 @@ class DriftDetector:
         self._pause_started_at = None
 
         # 3. Cooldown: não detectar drift por 4h após retrain
-        self._retrain_cooldown_until = datetime.now(timezone.utc) + timedelta(hours=4)
-        logger.info("[DRIFT] Cooldown de 4h ativado — drift detector pausado até "
+        self._retrain_cooldown_until = datetime.now(timezone.utc) + timedelta(hours=12)
+        logger.info("[DRIFT] Cooldown de 12h ativado — drift detector pausado até "
                      f"{self._retrain_cooldown_until.strftime('%H:%M UTC')}")
 
 
