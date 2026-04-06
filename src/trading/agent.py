@@ -1439,17 +1439,16 @@ Responda APENAS com JSON:
                         agno_signal["_range_quality"] = range_quality
 
                         if range_quality["tradeable"]:
-                            # Range BOM: mean reversion viável — penalidade reduzida
-                            regime_vote = -1 if vol_regime == "SQUEEZE" else 0
-                            if regime_vote != 0:
-                                votes_against += abs(regime_vote)
+                            # Range BOM: mean reversion viável — penalidade moderada
+                            regime_vote = -2 if vol_regime == "SQUEEZE" else -1
+                            votes_against += abs(regime_vote)
                             confluence["details"].append(
-                                f"REGIME LATERAL MEAN-REV ({base_regime}_{vol_regime}) — "
+                                f"REGIME LATERAL MEAN-REV ({base_regime}_{vol_regime}) — voto contra x{abs(regime_vote)} "
                                 f"range quality={range_quality['quality_score']:.2f} ({range_quality['reason']})"
                             )
                         else:
-                            # Range RUIM: sem mean reversion — penalidade normal/extra
-                            regime_vote = -2 if vol_regime == "SQUEEZE" else -1
+                            # Range RUIM: sem mean reversion — penalidade forte
+                            regime_vote = -3 if vol_regime == "SQUEEZE" else -2
                             votes_against += abs(regime_vote)
                             confluence["details"].append(
                                 f"REGIME LATERAL ({base_regime}_{vol_regime}) — voto contra x{abs(regime_vote)} "
@@ -1962,12 +1961,12 @@ Responda APENAS com JSON:
                     local_ml_vote = local_ml.get("ml_vote", 0)
                     local_ml_prob = local_ml.get("probability", 0)
 
-                    # Regime vote
+                    # Regime vote (SIDEWAYS penaliza forte, consistente com AGNO)
                     local_regime_vote = 0
                     if market_regime:
                         br = market_regime.get("base_regime", "SIDEWAYS")
                         if br == "SIDEWAYS":
-                            local_regime_vote = -1
+                            local_regime_vote = -2
                         elif (local_is_buy and br == "BULL") or (not local_is_buy and br == "BEAR"):
                             local_regime_vote = 1
                         elif (local_is_buy and br == "BEAR") or (not local_is_buy and br == "BULL"):
