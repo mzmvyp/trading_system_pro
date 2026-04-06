@@ -2115,8 +2115,8 @@ def validate_risk_and_position(
             }
         logger.info(f"[CAPITAL] Saldo real da Binance: ${capital:.2f}")
 
-        risk_pct = settings.risk_percent_per_trade  # ex: 5%
-        risk_amount = capital * (risk_pct / 100)  # ex: $100 * 5% = $5
+        risk_pct = settings.risk_percent_per_trade  # configurado em config.py (atualmente 2%)
+        risk_amount = capital * (risk_pct / 100)  # ex: $100 * 2% = $2
 
         stop_distance_pct = risk_percentage / 100  # já calculado acima como %
         if stop_distance_pct > 0:

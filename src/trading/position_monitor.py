@@ -758,23 +758,6 @@ class PositionMonitor:
                             f"NÃO fechando (SL protege, reavaliação apenas monitora)"
                         )
                         results["kept"] += 1
-                        if False:  # DESATIVADO
-                            if hasattr(agent, 'paper_system') and agent.paper_system:
-                                cp = await agent.paper_system.get_current_price(symbol)
-                                if cp:
-                                    await agent.paper_system.close_position_manual(pos_key, cp)
-                                    results["closed_by_reversal"] += 1
-                                    # Limpar estado do reevaluator
-                                    try:
-                                        reeval.clear_position(symbol, side)
-                                    except Exception:
-                                        pass
-                                else:
-                                    results["errors"].append(f"Preço não disponível para {symbol}")
-                            else:
-                                results["errors"].append(f"Paper system não disponível para fechar {symbol}")
-                        except Exception as e:
-                            results["errors"].append(f"Close paper {symbol}: {e}")
 
                     elif action in ("move_sl_breakeven", "tighten_sl"):
                         new_sl = self._calculate_new_sl(action, normalized_side, entry_price, current_price)
