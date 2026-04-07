@@ -224,15 +224,16 @@ class AgnoTradingAgent:
                     "lstm_operational_accuracy": None}
 
     def _trigger_drift_retrain(self):
-        """Trigger ML retrain em background thread quando drift é detectado."""
+        """Trigger ML + LSTM retrain em background thread quando drift é detectado."""
         if getattr(self, '_retrain_in_progress', False):
-            return  # Já tem um retrain rodando
+            return
         import threading
 
         def _do_retrain():
             self._retrain_in_progress = True
             try:
-                logger.info("[ML-RETRAIN] Drift detectado — iniciando retrain automático...")
+                # 1. ML retrain (Optuna se disponível)
+                logger.info("[ML-RETRAIN] Drift detectado — iniciando retrain ML...")
                 from src.ml.online_learning import seed_from_evaluated_signals
                 result = seed_from_evaluated_signals(force_retrain=True)
                 if result.get("success"):
@@ -242,8 +243,6 @@ class AgnoTradingAgent:
                             f"[ML-RETRAIN] OK! Accuracy={rt.get('new_accuracy', 0):.1%}, "
                             f"F1={rt.get('new_f1', 0):.3f}, Amostras={rt.get('samples_used', 0)}"
                         )
-                        # Notificar drift detector que retrain concluiu
-                        # Isso reseta o baseline e ativa cooldown de 4h
                         try:
                             from src.analysis.drift_detector import get_drift_detector
                             get_drift_detector().notify_retrain_completed()
@@ -254,8 +253,38 @@ class AgnoTradingAgent:
                                     f"mas retrain não executou (buffer insuficiente?)")
                 else:
                     logger.warning(f"[ML-RETRAIN] Falhou: {result.get('error', 'unknown')}")
+
+                # 2. LSTM-BI retrain (sinais reais)
+                try:
+                    logger.info("[LSTM-RETRAIN] Iniciando retrain Bi-LSTM...")
+                    import asyncio
+                    from src.ml.lstm_sequence_validator import LSTMSequenceValidator
+                    lstm = LSTMSequenceValidator()
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            import concurrent.futures
+                            with concurrent.futures.ThreadPoolExecutor() as pool:
+                                lstm_result = pool.submit(asyncio.run, lstm.train_from_backtest(epochs=50, batch_size=32)).result()
+                        else:
+                            lstm_result = loop.run_until_complete(lstm.train_from_backtest(epochs=50, batch_size=32))
+                    except RuntimeError:
+                        lstm_result = asyncio.run(lstm.train_from_backtest(epochs=50, batch_size=32))
+
+                    if lstm_result.get("success"):
+                        logger.info(
+                            f"[LSTM-RETRAIN] OK! Accuracy={lstm_result.get('test_accuracy', 0):.1%}, "
+                            f"F1={lstm_result.get('test_f1', 0):.3f}, "
+                            f"Amostras={lstm_result.get('total_samples', 0)}, "
+                            f"Fonte={lstm_result.get('data_source', 'unknown')}"
+                        )
+                    else:
+                        logger.warning(f"[LSTM-RETRAIN] Falhou: {lstm_result.get('reason', 'unknown')}")
+                except Exception as e:
+                    logger.error(f"[LSTM-RETRAIN] Erro: {e}")
+
             except Exception as e:
-                logger.error(f"[ML-RETRAIN] Erro: {e}")
+                logger.error(f"[RETRAIN] Erro geral: {e}")
             finally:
                 self._retrain_in_progress = False
 
