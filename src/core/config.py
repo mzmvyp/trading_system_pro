@@ -36,11 +36,11 @@ class Settings(BaseSettings):
     trading_symbol: str = "BTCUSDT"
 
     # Configurações de Risk Management
-    max_risk_per_trade: float = 0.1  # Máximo 2% de risco por trade
+    max_risk_per_trade: float = 0.02  # Máximo 2% de risco por trade
     max_drawdown: float = 0.15  # Máximo 15% de drawdown
     max_exposure: float = 0.50  # Máximo 50% de exposição total
     max_daily_trades: int = 5  # Máximo 5 trades por dia
-    base_risk_percentage: float = 0.1 # 1% base de risco
+    base_risk_percentage: float = 0.01  # 1% base de risco
     max_open_positions: int = 6  # Máximo 6 posições simultâneas
 
     # ========================================
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
 
     # Porcentagem do capital a arriscar por trade
     # 5% = se o stop loss for atingido, perde 5% do capital
-    risk_percent_per_trade: float = 10.0  # 10% do capital arriscado por trade
+    risk_percent_per_trade: float = 2.0  # 2% do capital arriscado por trade (antes 5% — muito agressivo)
 
     # Como calcular o tamanho da posicao:
     # 1. Risco em $ = capital * (risk_percent_per_trade / 100)
