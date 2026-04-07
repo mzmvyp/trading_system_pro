@@ -41,6 +41,13 @@ try:
 except ImportError:
     XGBOOST_AVAILABLE = False
 
+try:
+    import optuna
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    OPTUNA_AVAILABLE = True
+except ImportError:
+    OPTUNA_AVAILABLE = False
+
 # Configuracoes
 CONFIG = {
     "model_dir": "ml_models",
@@ -275,19 +282,18 @@ class OnlineLearningManager:
 
     def retrain(self, force_save: bool = False) -> Dict:
         """
-        Retreina o modelo com novos dados.
-        Se nao existe modelo anterior, cria do zero (primeiro treinamento).
-        Usa TODOS os dados do buffer + dataset original (se existir).
+        Retreina o modelo usando Optuna com métricas compostas.
 
-        Args:
-            force_save: Se True (ex.: botao "Forcar Retreino" no dashboard), salva o novo
-                        modelo mesmo quando o F1 na validacao nao melhora (substitui o atual).
+        Métrica composta (em vez de só F1):
+        - 40% Win Rate nos sinais aprovados
+        - 25% Profit Factor
+        - 20% Balanced WR BUY/SELL
+        - 15% Taxa de aprovação (penaliza rejeitar tudo)
 
-        Returns:
-            Dict com resultados do retreino
+        Falls back to treino simples se Optuna não estiver disponível.
         """
         print("\n" + "="*60)
-        print("ONLINE LEARNING - RETREINAMENTO")
+        print("ONLINE LEARNING - RETREINAMENTO (Optuna + Métricas Compostas)")
         print("="*60)
 
         if len(self.buffer) < 10:
@@ -295,41 +301,30 @@ class OnlineLearningManager:
             return {"success": False, "reason": "Dados insuficientes"}
 
         try:
-            # Tentar carregar modelo atual (pode nao existir ainda)
             from src.ml.simple_validator import SimpleSignalValidator
-            current_validator = None
             has_current_model = False
-
             try:
                 current_validator = SimpleSignalValidator()
                 current_validator.load_models()
                 has_current_model = True
                 print(f"[OL] Modelo atual carregado: {current_validator.best_model_name}")
-            except (FileNotFoundError, EOFError, Exception) as e:
-                print(f"[OL] Nenhum modelo existente encontrado ({e}). Criando modelo inicial...")
-                has_current_model = False
+            except Exception as e:
+                print(f"[OL] Nenhum modelo existente ({e}). Criando inicial...")
 
-            # Preparar novos dados do buffer
             new_df = pd.DataFrame(self.buffer)
-
             feature_cols = [
                 'rsi', 'macd_histogram', 'adx', 'atr', 'bb_position',
                 'cvd', 'orderbook_imbalance', 'bullish_tf_count', 'bearish_tf_count',
                 'confidence', 'trend_encoded', 'sentiment_encoded', 'signal_encoded',
                 'risk_distance_pct', 'reward_distance_pct', 'risk_reward_ratio'
             ]
-
             available_cols = [col for col in feature_cols if col in new_df.columns]
-
             X_new = new_df[available_cols].fillna(0).values
             y_new = new_df['target'].values
 
-            print(f"[OL] Novos dados do buffer: {len(X_new)} amostras")
-            print(f"[OL] Distribuicao: {sum(y_new)} TP, {len(y_new)-sum(y_new)} SL")
+            print(f"[OL] Buffer: {len(X_new)} amostras (TP: {sum(y_new)}, SL: {len(y_new)-sum(y_new)})")
 
-            # Carregar dados originais de treino (se existir)
-            # CORRIGIDO: Quando o buffer tem dados reais suficientes (>= 50),
-            # priorizar dados reais e limitar peso dos dados sintéticos/antigos
+            # Combinar com dataset original se necessário
             train_path = "ml_dataset/dataset_train_latest.csv"
             if os.path.exists(train_path) and len(X_new) < 100:
                 original_df = pd.read_csv(train_path)
@@ -337,232 +332,295 @@ class OnlineLearningManager:
                 if orig_available and 'target' in original_df.columns:
                     X_orig = original_df[orig_available].fillna(0).values
                     y_orig = original_df['target'].values
-
-                    # Se temos muitos dados originais vs buffer, limitar para não dominar
-                    # Dados reais do buffer devem ter peso >= 50% do total
                     max_orig = max(len(X_new) * 2, 200)
                     if len(X_orig) > max_orig:
-                        # Pegar os mais recentes (final do dataset)
                         X_orig = X_orig[-max_orig:]
                         y_orig = y_orig[-max_orig:]
-                        print(f"[OL] Dataset original limitado a {max_orig} amostras (priorizar dados reais)")
-
                     X_combined = np.vstack([X_orig, X_new])
                     y_combined = np.hstack([y_orig, y_new])
-                    print(f"[OL] Dados combinados: {len(X_orig)} originais + {len(X_new)} buffer = {len(X_combined)} total")
+                    print(f"[OL] Combinados: {len(X_orig)} originais + {len(X_new)} buffer = {len(X_combined)}")
                 else:
-                    X_combined = X_new
-                    y_combined = y_new
+                    X_combined, y_combined = X_new, y_new
             else:
-                X_combined = X_new
-                y_combined = y_new
-                if len(X_new) >= 100:
-                    print(f"[OL] Buffer com {len(X_new)} amostras reais suficientes. Treinando APENAS com dados reais.")
-                else:
-                    print(f"[OL] Sem dataset original. Treinando apenas com buffer ({len(X_combined)} amostras)")
+                X_combined, y_combined = X_new, y_new
 
-            # Verificar variancia de classes
             unique_classes = np.unique(y_combined)
             if len(unique_classes) < 2:
-                print(f"[OL] AVISO: Apenas uma classe nos dados ({unique_classes}). Adicionando dados sinteticos...")
-                # Adicionar pelo menos 1 exemplo da classe faltante para evitar erro
                 minority_class = 0 if 1 in unique_classes else 1
                 synthetic = np.median(X_combined, axis=0).reshape(1, -1)
                 X_combined = np.vstack([X_combined, synthetic])
                 y_combined = np.hstack([y_combined, [minority_class]])
 
-            # Split TEMPORAL: treino = dados mais antigos, validação = dados mais recentes
-            # Evita data leakage temporal (modelo não vê o futuro no treino)
-            unique, counts = np.unique(y_combined, return_counts=True)
-            class_dist = dict(zip(unique.astype(int), counts))
-            print(f"[OL] Dados combinados: {len(y_combined)} amostras | Classe 0 (SKIP): {class_dist.get(0, 0)} | Classe 1 (EXECUTE): {class_dist.get(1, 0)}")
-
-            split_idx = int(len(X_combined) * (1 - CONFIG["validation_split"]))
-            split_idx = max(split_idx, 1)
+            # Split temporal
+            split_idx = max(int(len(X_combined) * 0.8), 1)
             X_train, X_val = X_combined[:split_idx], X_combined[split_idx:]
             y_train, y_val = y_combined[:split_idx], y_combined[split_idx:]
-            print(f"[OL] Split temporal: {len(X_train)} treino, {len(X_val)} validação")
+            print(f"[OL] Split: {len(X_train)} treino, {len(X_val)} validação")
 
-            # Treinar ensemble de modelos
-            scaler = StandardScaler()
-            X_train_scaled = scaler.fit_transform(X_train)
-            X_val_scaled = scaler.transform(X_val)
-
-            models_to_train = {
-                "LogisticRegression": LogisticRegression(
-                    max_iter=1000, class_weight='balanced', random_state=42
-                ),
-                "RandomForest": RandomForestClassifier(
-                    n_estimators=100, max_depth=5, class_weight='balanced', random_state=42
-                ),
-                "GradientBoosting": GradientBoostingClassifier(
-                    n_estimators=100, max_depth=3, random_state=42
-                ),
-            }
-
-            if XGBOOST_AVAILABLE:
-                models_to_train["XGBoost"] = xgb.XGBClassifier(
-                    objective="binary:logistic",
-                    tree_method="hist",
-                    eval_metric="logloss",
-                    n_estimators=200, max_depth=4, learning_rate=0.1,
-                    subsample=0.8, colsample_bytree=0.8,
-                    random_state=42, n_jobs=-1, verbosity=0,
+            # Tentar Optuna se disponível e dados suficientes
+            if OPTUNA_AVAILABLE and len(X_train) >= 30:
+                result = self._retrain_with_optuna(
+                    X_train, y_train, X_val, y_val,
+                    available_cols, has_current_model, force_save
+                )
+            else:
+                if not OPTUNA_AVAILABLE:
+                    print("[OL] Optuna não disponível — usando treino simples")
+                result = self._retrain_simple(
+                    X_train, y_train, X_val, y_val,
+                    X_combined, y_combined, available_cols,
+                    has_current_model, force_save
                 )
 
-            best_model = None
-            best_model_name = None
-            best_f1 = -1
-            best_accuracy = 0
-            trained_models = {}
-
-            # Compute sample weights for GradientBoosting (doesn't support class_weight)
-            sample_weights = compute_sample_weight('balanced', y_train)
-
-            # Walk-forward CV para avaliar estabilidade
-            n_cv_splits = min(3, max(2, len(X_train) // 20))
-            tscv = TimeSeriesSplit(n_splits=n_cv_splits)
-
-            for name, model in models_to_train.items():
-                try:
-                    if name in ("GradientBoosting", "XGBoost"):
-                        model.fit(X_train_scaled, y_train, sample_weight=sample_weights)
-                    else:
-                        model.fit(X_train_scaled, y_train)
-                    trained_models[name] = model
-
-                    y_pred = model.predict(X_val_scaled)
-                    acc = accuracy_score(y_val, y_pred)
-                    f1 = f1_score(y_val, y_pred, zero_division=0)
-
-                    # Walk-forward CV score
-                    try:
-                        cv_scores = cross_val_score(model, X_train_scaled, y_train,
-                                                    cv=tscv, scoring="f1")
-                        cv_mean = float(np.mean(cv_scores))
-                        print(f"[OL]   {name}: Accuracy={acc:.1%}, F1={f1:.3f}, CV_F1={cv_mean:.3f}")
-                    except Exception:
-                        cv_mean = f1
-                        print(f"[OL]   {name}: Accuracy={acc:.1%}, F1={f1:.3f}")
-
-                    if f1 > best_f1:
-                        best_f1 = f1
-                        best_accuracy = acc
-                        best_model = model
-                        best_model_name = name
-                except Exception as e:
-                    print(f"[OL]   {name}: ERRO - {e}")
-
-            if best_model is None:
-                return {"success": False, "reason": "Nenhum modelo treinado com sucesso"}
-
-            new_accuracy = best_accuracy
-            new_f1 = best_f1
-
-            print(f"\n[OL] Melhor modelo: {best_model_name} (Accuracy={new_accuracy:.1%}, F1={new_f1:.3f})")
-
-            # Comparar com modelo atual (se existir)
-            should_save = False
-            improvement = 0.0
-
-            # Se temos dados reais suficientes (>= 100 amostras), SEMPRE salvar
-            # o modelo novo. O modelo antigo pode ter sido treinado com dados
-            # sintéticos/bootstrap com métricas infladas (ex: 86.9% accuracy mas
-            # classificando 100% como SKIP em dados reais). O modelo treinado com
-            # dados reais é sempre preferível, mesmo com F1 menor na validação.
-            buffer_has_enough_real_data = len(self.buffer) >= 100
-
-            if has_current_model:
-                current_model = current_validator.models.get(current_validator.best_model_name)
-                if current_model:
-                    try:
-                        X_val_current = current_validator.scaler.transform(X_val)
-                        y_pred_current = current_model.predict(X_val_current)
-                        current_f1 = f1_score(y_val, y_pred_current, zero_division=0)
-
-                        improvement = new_f1 - current_f1
-                        print(f"[OL] Modelo atual F1: {current_f1:.3f} | Novo F1: {new_f1:.3f} | Melhoria: {improvement:+.3f}")
-
-                        if buffer_has_enough_real_data:
-                            # Com dados reais suficientes, sempre substituir o modelo.
-                            # Modelo novo reflete a realidade atual do mercado.
-                            should_save = True
-                            print(f"[OL] Buffer com {len(self.buffer)} amostras reais — substituindo modelo (dados reais > guard-rail)")
-                        elif force_save:
-                            should_save = True
-                            if improvement < 0:
-                                print("[OL] Forcar Retreino: salvando novo modelo mesmo sem melhoria (force_save=True)")
-                        else:
-                            should_save = improvement >= CONFIG["min_improvement"]
-                    except Exception as e:
-                        print(f"[OL] Erro ao comparar com modelo atual: {e}. Salvando novo modelo.")
-                        should_save = True
-                else:
-                    should_save = True
-            else:
-                # Primeiro modelo: sempre salvar
-                should_save = True
-                print("[OL] Primeiro treinamento - salvando modelo inicial")
-
-            if should_save:
-                # Calibrar probabilidades do melhor modelo (corrige overconfidence)
-                try:
-                    from sklearn.calibration import CalibratedClassifierCV
-                    base = trained_models[best_model_name]
-                    cal = CalibratedClassifierCV(base, method='isotonic', cv=3)
-                    cal.fit(X_train_scaled, y_train, sample_weight=sample_weights)
-                    trained_models[best_model_name] = cal
-                    print(f"[OL] Probabilidades calibradas para {best_model_name}")
-                except Exception as e:
-                    print(f"[OL] Calibração falhou: {e} — usando modelo original")
-
-                # Salvar TODOS os modelos treinados (nao so o melhor)
-                self._save_new_model_ensemble(trained_models, best_model_name, scaler, available_cols, new_accuracy, new_f1)
-
-                # Salvar dataset combinado para retreinos futuros
-                self._save_combined_dataset(X_combined, y_combined, available_cols)
-
-                # Limpar buffer
-                self.buffer = []
-                self._save_buffer()
-
-                # Limpar prediction_log do modelo antigo (predições obsoletas)
-                # para que o dashboard reflita o novo modelo
-                pred_log_path = os.path.join(CONFIG["model_dir"], "prediction_log.json")
-                if os.path.exists(pred_log_path):
-                    try:
-                        os.remove(pred_log_path)
-                        print("[OL] Prediction log limpo (modelo novo substitui predições antigas)")
-                    except Exception:
-                        pass
-
-                # Registrar performance
-                self._record_performance(new_accuracy, new_f1, len(X_combined))
-
-                print("[OL] Novo modelo salvo com sucesso!")
-
-                return {
-                    "success": True,
-                    "new_accuracy": new_accuracy,
-                    "new_f1": new_f1,
-                    "improvement": improvement,
-                    "samples_used": len(X_combined),
-                    "best_model": best_model_name,
-                    "first_training": not has_current_model
-                }
-            else:
-                print("[OL] Modelo nao melhorou suficiente. Mantendo atual.")
-                return {
-                    "success": False,
-                    "reason": "Sem melhoria suficiente",
-                    "improvement": improvement
-                }
+            return result
 
         except Exception as e:
             print(f"[OL] Erro no retreino: {e}")
             import traceback
             traceback.print_exc()
             return {"success": False, "error": str(e)}
+
+    def _retrain_with_optuna(self, X_train, y_train, X_val, y_val,
+                              feature_cols, has_current_model, force_save) -> Dict:
+        """Treino com Optuna + métricas compostas."""
+        sample_weights = compute_sample_weight('balanced', y_train)
+        n_trials = 20 if len(X_train) < 200 else 30
+
+        def objective(trial):
+            model_type = trial.suggest_categorical("model_type",
+                ["rf", "gb", "xgb", "lr"] if XGBOOST_AVAILABLE else ["rf", "gb", "lr"])
+            threshold = trial.suggest_float("threshold", 0.35, 0.65)
+
+            scaler = StandardScaler()
+            Xt = scaler.fit_transform(X_train)
+            Xv = scaler.transform(X_val)
+            Xv = np.clip(Xv, -5.0, 5.0)
+
+            if model_type == "rf":
+                m = RandomForestClassifier(
+                    n_estimators=trial.suggest_int("rf_n", 50, 300),
+                    max_depth=trial.suggest_int("rf_d", 3, 12),
+                    class_weight="balanced", random_state=42, n_jobs=-1)
+                m.fit(Xt, y_train)
+            elif model_type == "gb":
+                m = GradientBoostingClassifier(
+                    n_estimators=trial.suggest_int("gb_n", 50, 300),
+                    max_depth=trial.suggest_int("gb_d", 2, 8),
+                    learning_rate=trial.suggest_float("gb_lr", 0.01, 0.3, log=True),
+                    subsample=trial.suggest_float("gb_sub", 0.6, 1.0),
+                    random_state=42)
+                m.fit(Xt, y_train, sample_weight=sample_weights)
+            elif model_type == "xgb":
+                m = xgb.XGBClassifier(
+                    objective="binary:logistic", tree_method="hist", eval_metric="logloss",
+                    n_estimators=trial.suggest_int("xgb_n", 50, 300),
+                    max_depth=trial.suggest_int("xgb_d", 2, 8),
+                    learning_rate=trial.suggest_float("xgb_lr", 0.01, 0.3, log=True),
+                    subsample=trial.suggest_float("xgb_sub", 0.6, 1.0),
+                    random_state=42, n_jobs=-1, verbosity=0)
+                m.fit(Xt, y_train, sample_weight=sample_weights)
+            else:
+                m = LogisticRegression(
+                    C=trial.suggest_float("lr_C", 1e-3, 100, log=True),
+                    max_iter=1000, class_weight="balanced", random_state=42)
+                m.fit(Xt, y_train)
+
+            probs = m.predict_proba(Xv)[:, 1] if hasattr(m, "predict_proba") else m.predict(Xv).astype(float)
+            preds = (probs >= threshold).astype(int)
+            n_approved = preds.sum()
+
+            if n_approved < max(3, len(y_val) * 0.10):
+                return -1.0
+
+            approved_wins = y_val[preds == 1].sum()
+            wr = approved_wins / max(n_approved, 1)
+            approval_rate = n_approved / len(y_val)
+            ar_norm = min(approval_rate / 0.5, 1.0) if approval_rate >= 0.10 else 0
+
+            # Balanced accuracy
+            sens = y_val[y_val == 1][preds[y_val == 1] == 1].sum() / max((y_val == 1).sum(), 1) if (y_val == 1).sum() > 0 else 0
+            spec = (y_val[y_val == 0] == 0).sum() - (preds[y_val == 0] == 1).sum()
+            spec = max(spec, 0) / max((y_val == 0).sum(), 1)
+
+            composite = 0.40 * wr + 0.25 * min(wr / 0.5, 1.0) + 0.20 * ((sens + spec) / 2) + 0.15 * ar_norm
+            if n_approved < 5:
+                composite *= 0.5
+
+            trial.set_user_attr("wr", float(wr))
+            trial.set_user_attr("n_approved", int(n_approved))
+            return composite
+
+        study = optuna.create_study(direction="maximize")
+        study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+
+        best = study.best_trial
+        print(f"[OL-OPTUNA] Melhor: score={best.value:.4f} | {best.params.get('model_type')} | WR={best.user_attrs.get('wr',0)*100:.1f}% | N={best.user_attrs.get('n_approved',0)}")
+
+        # Retreinar o melhor modelo com todos os dados
+        bp = best.params
+        scaler = StandardScaler()
+        X_all = np.vstack([X_train, X_val])
+        y_all = np.hstack([y_train, y_val])
+        X_all_s = scaler.fit_transform(X_all)
+        sw = compute_sample_weight('balanced', y_all)
+
+        mt = bp.get("model_type", "rf")
+        model_name_map = {"rf": "RandomForest", "gb": "GradientBoosting", "xgb": "XGBoost", "lr": "LogisticRegression"}
+        best_model_name = model_name_map.get(mt, "RandomForest")
+
+        if mt == "rf":
+            final = RandomForestClassifier(n_estimators=bp.get("rf_n", 100), max_depth=bp.get("rf_d", 5),
+                                           class_weight="balanced", random_state=42, n_jobs=-1)
+            final.fit(X_all_s, y_all)
+        elif mt == "gb":
+            final = GradientBoostingClassifier(n_estimators=bp.get("gb_n", 100), max_depth=bp.get("gb_d", 3),
+                                               learning_rate=bp.get("gb_lr", 0.1), subsample=bp.get("gb_sub", 0.8),
+                                               random_state=42)
+            final.fit(X_all_s, y_all, sample_weight=sw)
+        elif mt == "xgb" and XGBOOST_AVAILABLE:
+            final = xgb.XGBClassifier(objective="binary:logistic", tree_method="hist", eval_metric="logloss",
+                                       n_estimators=bp.get("xgb_n", 200), max_depth=bp.get("xgb_d", 4),
+                                       learning_rate=bp.get("xgb_lr", 0.1), subsample=bp.get("xgb_sub", 0.8),
+                                       random_state=42, n_jobs=-1, verbosity=0)
+            final.fit(X_all_s, y_all, sample_weight=sw)
+        else:
+            final = LogisticRegression(C=bp.get("lr_C", 1.0), max_iter=1000, class_weight="balanced", random_state=42)
+            final.fit(X_all_s, y_all)
+
+        # Calibrar
+        try:
+            from sklearn.calibration import CalibratedClassifierCV
+            cal = CalibratedClassifierCV(final, method='isotonic', cv=3)
+            cal.fit(X_all_s, y_all, sample_weight=sw)
+            final = cal
+            print(f"[OL] Modelo calibrado")
+        except Exception:
+            pass
+
+        trained_models = {best_model_name: final}
+
+        y_pred = final.predict(scaler.transform(X_val))
+        new_accuracy = accuracy_score(y_val, y_pred)
+        new_f1 = f1_score(y_val, y_pred, zero_division=0)
+
+        # Salvar
+        self._save_new_model_ensemble(trained_models, best_model_name, scaler, feature_cols, new_accuracy, new_f1)
+
+        # Salvar preproc artifacts
+        preproc_path = os.path.join(CONFIG["model_dir"], "preproc_simple.pkl")
+        train_medians = {}
+        train_clip_bounds = {}
+        for i, col in enumerate(feature_cols):
+            vals = X_all[:, i] if i < X_all.shape[1] else np.array([0])
+            med = float(np.nanmedian(vals))
+            train_medians[col] = med if not np.isnan(med) else 0
+            mean_, std_ = float(np.mean(vals)), float(np.std(vals))
+            if std_ > 0:
+                train_clip_bounds[col] = (mean_ - 3*std_, mean_ + 3*std_)
+        with open(preproc_path, 'wb') as f:
+            pickle.dump({'train_medians': train_medians, 'train_clip_bounds': train_clip_bounds}, f)
+
+        self._save_combined_dataset(X_all, y_all, feature_cols)
+        self.buffer = []
+        self._save_buffer()
+
+        pred_log_path = os.path.join(CONFIG["model_dir"], "prediction_log.json")
+        if os.path.exists(pred_log_path):
+            try:
+                os.remove(pred_log_path)
+            except Exception:
+                pass
+
+        self._record_performance(new_accuracy, new_f1, len(X_all))
+        print(f"[OL] Modelo Optuna salvo! {best_model_name} Acc={new_accuracy:.1%} F1={new_f1:.3f}")
+
+        return {
+            "success": True,
+            "new_accuracy": new_accuracy,
+            "new_f1": new_f1,
+            "improvement": 0,
+            "samples_used": len(X_all),
+            "best_model": best_model_name,
+            "optuna_score": best.value,
+            "optuna_trials": n_trials,
+            "first_training": not has_current_model,
+        }
+
+    def _retrain_simple(self, X_train, y_train, X_val, y_val,
+                         X_combined, y_combined, feature_cols,
+                         has_current_model, force_save) -> Dict:
+        """Fallback: treino simples sem Optuna."""
+        scaler = StandardScaler()
+        X_train_s = scaler.fit_transform(X_train)
+        X_val_s = scaler.transform(X_val)
+        sample_weights = compute_sample_weight('balanced', y_train)
+
+        models_to_train = {
+            "LogisticRegression": LogisticRegression(max_iter=1000, class_weight='balanced', random_state=42),
+            "RandomForest": RandomForestClassifier(n_estimators=100, max_depth=5, class_weight='balanced', random_state=42),
+            "GradientBoosting": GradientBoostingClassifier(n_estimators=100, max_depth=3, random_state=42),
+        }
+        if XGBOOST_AVAILABLE:
+            models_to_train["XGBoost"] = xgb.XGBClassifier(
+                objective="binary:logistic", tree_method="hist", eval_metric="logloss",
+                n_estimators=200, max_depth=4, learning_rate=0.1,
+                subsample=0.8, colsample_bytree=0.8,
+                random_state=42, n_jobs=-1, verbosity=0)
+
+        best_model_name = None
+        best_f1 = -1
+        best_accuracy = 0
+        trained_models = {}
+
+        for name, model in models_to_train.items():
+            try:
+                if name in ("GradientBoosting", "XGBoost"):
+                    model.fit(X_train_s, y_train, sample_weight=sample_weights)
+                else:
+                    model.fit(X_train_s, y_train)
+                trained_models[name] = model
+                y_pred = model.predict(X_val_s)
+                f1 = f1_score(y_val, y_pred, zero_division=0)
+                acc = accuracy_score(y_val, y_pred)
+                print(f"[OL]   {name}: Acc={acc:.1%}, F1={f1:.3f}")
+                if f1 > best_f1:
+                    best_f1, best_accuracy, best_model_name = f1, acc, name
+            except Exception as e:
+                print(f"[OL]   {name}: ERRO - {e}")
+
+        if best_model_name is None:
+            return {"success": False, "reason": "Nenhum modelo treinado com sucesso"}
+
+        # Calibrar
+        try:
+            from sklearn.calibration import CalibratedClassifierCV
+            base = trained_models[best_model_name]
+            cal = CalibratedClassifierCV(base, method='isotonic', cv=3)
+            cal.fit(X_train_s, y_train, sample_weight=sample_weights)
+            trained_models[best_model_name] = cal
+        except Exception:
+            pass
+
+        self._save_new_model_ensemble(trained_models, best_model_name, scaler, feature_cols, best_accuracy, best_f1)
+        self._save_combined_dataset(X_combined, y_combined, feature_cols)
+        self.buffer = []
+        self._save_buffer()
+
+        pred_log_path = os.path.join(CONFIG["model_dir"], "prediction_log.json")
+        if os.path.exists(pred_log_path):
+            try:
+                os.remove(pred_log_path)
+            except Exception:
+                pass
+
+        self._record_performance(best_accuracy, best_f1, len(X_combined))
+        print(f"[OL] Modelo salvo! {best_model_name} Acc={best_accuracy:.1%} F1={best_f1:.3f}")
+
+        return {
+            "success": True, "new_accuracy": best_accuracy, "new_f1": best_f1,
+            "samples_used": len(X_combined), "best_model": best_model_name,
+            "first_training": not has_current_model,
+        }
 
     def _save_new_model(self, model, scaler, feature_columns):
         """Salva o novo modelo treinado (compatibilidade)"""

@@ -681,8 +681,11 @@ def train_and_save_best_ml(best_params: Dict, train_df: pd.DataFrame, test_df: p
     model_dir = ROOT / "ml_models"
     model_dir.mkdir(parents=True, exist_ok=True)
 
+    model_name_map = {"rf": "RandomForest", "gb": "GradientBoosting", "xgb": "XGBoost",
+                       "lr": "LogisticRegression", "mlp": "MLP"}
+    canonical_name = model_name_map.get(mt, mt.upper())
     with open(model_dir / "signal_validators.pkl", "wb") as f:
-        pickle.dump({mt.upper(): final_model}, f)
+        pickle.dump({canonical_name: final_model}, f)
 
     with open(model_dir / "scaler_simple.pkl", "wb") as f:
         pickle.dump(scaler, f)
@@ -709,7 +712,7 @@ def train_and_save_best_ml(best_params: Dict, train_df: pd.DataFrame, test_df: p
         "n_features": len(FEATURE_COLUMNS),
         "train_samples": len(train_df),
         "test_samples": len(test_df),
-        "best_model": mt.upper(),
+        "best_model": canonical_name,
         "best_accuracy": metrics.get("wr_approved", 0),
         "best_f1": 0,
         "best_params": {k: v for k, v in best_params.items() if not k.startswith("_")},
