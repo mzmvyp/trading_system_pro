@@ -510,16 +510,10 @@ class AgnoTradingAgent:
         mtf = analysis_data.get("multi_timeframe", {})
 
         # 1. RSI zone alignment
+        # RECALIBRADO: dados de 5188 sinais mostram RSI "favor" accuracy = 20.8% (MAU).
+        # RSI "contra" accuracy = 68.2% (BOM). Portanto: RSI só vota CONTRA, nunca a favor.
         rsi = indicators.get("rsi", {}).get("value", 50)
-        if is_buy and rsi < rsi_oversold:
-            votes_for += 1
-            voter_votes["rsi"] = 1
-            details.append(f"RSI oversold ({rsi:.1f} < {rsi_oversold})")
-        elif not is_buy and rsi > rsi_overbought:
-            votes_for += 1
-            voter_votes["rsi"] = 1
-            details.append(f"RSI overbought ({rsi:.1f} > {rsi_overbought})")
-        elif is_buy and rsi > rsi_overbought:
+        if is_buy and rsi > rsi_overbought:
             votes_against += 1
             voter_votes["rsi"] = -1
             details.append(f"RSI contra BUY ({rsi:.1f} > {rsi_overbought})")
@@ -1311,14 +1305,16 @@ Responda APENAS com JSON:
                 votes_for = confluence["votes_for"]
                 votes_against = confluence["votes_against"]
 
-                # LLM voto simétrico: confiança alta = favor, baixa = contra
+                # LLM voto RECALIBRADO: dados mostram que conf>=7 SEMPRE vota +1
+                # (porque min_confidence_0_10 = 7), tornando o voter inútil como
+                # discriminador. Apenas conf >= 9 merece +1. Conf <= 4 vota contra.
                 llm_confidence = agno_signal.get("confidence", 5)
-                if llm_confidence >= 7:
-                    llm_vote = 1   # Alta confiança: voto a favor
-                elif llm_confidence <= 3:
+                if llm_confidence >= 9:
+                    llm_vote = 1   # Confiança excepcional: voto a favor
+                elif llm_confidence <= 4:
                     llm_vote = -1  # Baixa confiança: voto contra
                 else:
-                    llm_vote = 0   # Confiança moderada: neutro
+                    llm_vote = 0   # 5-8: neutro (a maioria dos sinais cai aqui)
 
                 # Bi-LSTM sequence vote (se modelo treinado)
                 # Mesma lógica calibrada do ML: confiar no SKIP, exigir alta prob para FOR
@@ -1483,13 +1479,14 @@ Responda APENAS com JSON:
                 total_all = total_for + total_against
                 combined_score = total_for / max(total_all, 1)
 
-                # Sistema de votos (9 técnicos + ML + LSTM + LLM + Regime):
-                # Mínimo 5 votos a favor OU score >= 55%
-                # Se score >= 80% (forte concordância), aceitar com 4 votos
-                # Nota: em sideways, o regime voter já vota -1 (penalidade automática),
-                # então NÃO precisamos de threshold extra — era double-penalty
-                MIN_COMBINED_SCORE = 0.55
-                MIN_VOTES_FOR = 4 if combined_score >= 0.80 else 5
+                # Sistema de votos RECALIBRADO com base em 5188 sinais reais:
+                # Análise profunda mostrou que winners têm AVG 1.67 votes_for
+                # enquanto losers têm 3.30 — o sistema BLOQUEAVA sinais bons.
+                # Backtester: melhor PF (1.91) com conf>=6 + sem filtro de votos.
+                # Nova estratégia: filtro LEVE de confluência + confiança do AGNO
+                # como gate principal (já validado: conf>=7 BUY WR 65.6%).
+                MIN_COMBINED_SCORE = 0.30
+                MIN_VOTES_FOR = 2
 
                 agno_signal["confluence_score"] = round(combined_score, 3)
                 agno_signal["confluence_details"] = confluence["details"]
@@ -1920,121 +1917,8 @@ Responda APENAS com JSON:
                         except Exception:
                             pass
 
-            # ========================================
-            # SHADOW MODE: Gerador Local de Sinais
-            # Roda em paralelo com DeepSeek para coletar dados de accuracy.
-            # NUNCA executa — apenas salva para comparação.
-            # ========================================
-            try:
-                from src.analysis.local_signal_generator import LocalSignalGenerator
-                local_gen = LocalSignalGenerator()
-                local_result = local_gen.generate_signal(analysis_data, market_regime)
-                local_signal_dir = local_result.get("signal", "NO_SIGNAL")
-
-                if local_signal_dir in ("BUY", "SELL"):
-                    # Construir sinal local com mesma estrutura do AGNO
-                    local_signal = {
-                        "symbol": symbol,
-                        "source": "LOCAL_GEN",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "signal": local_signal_dir,
-                        "confidence": local_result.get("confidence", 5),
-                        "reasoning": local_result.get("reasoning", ""),
-                        "entry_price": agno_signal.get("entry_price", 0),
-                        "shadow_mode": True,
-                        "executed": False,
-                        "local_gen_score": local_result.get("weighted_score", 0),
-                        "local_gen_components": local_result.get("component_scores", {}),
-                    }
-
-                    # Copiar indicadores do agno_signal (já coletados)
-                    for key in ("rsi", "adx", "atr", "bb_position", "macd_histogram",
-                                "trend", "cvd", "cvd_direction", "orderbook_imbalance",
-                                "bullish_tf_count", "bearish_tf_count", "indicators"):
-                        if key in agno_signal:
-                            local_signal[key] = agno_signal[key]
-
-                    # Rodar confluência técnica (mesma que o AGNO passa)
-                    local_confluence = self._calculate_technical_confluence(
-                        {**analysis_data, "symbol": symbol}, local_signal_dir
-                    )
-                    local_is_buy = local_signal_dir == "BUY"
-
-                    # ML vote
-                    local_ml = self._validate_with_ml_model(local_signal)
-                    local_ml_vote = local_ml.get("ml_vote", 0)
-                    local_ml_prob = local_ml.get("probability", 0)
-
-                    # Regime vote (SIDEWAYS penaliza forte, consistente com AGNO)
-                    local_regime_vote = 0
-                    if market_regime:
-                        br = market_regime.get("base_regime", "SIDEWAYS")
-                        if br == "SIDEWAYS":
-                            local_regime_vote = -2
-                        elif (local_is_buy and br == "BULL") or (not local_is_buy and br == "BEAR"):
-                            local_regime_vote = 1
-                        elif (local_is_buy and br == "BEAR") or (not local_is_buy and br == "BULL"):
-                            local_regime_vote = -1
-
-                    # Calcular totais
-                    l_for = local_confluence["votes_for"] + (1 if local_ml_vote > 0 else 0) + (1 if local_regime_vote > 0 else 0)
-                    l_against = local_confluence["votes_against"] + (abs(local_ml_vote) if local_ml_vote < 0 else 0) + (abs(local_regime_vote) if local_regime_vote < 0 else 0)
-                    l_total = l_for + l_against
-                    l_score = l_for / max(l_total, 1)
-
-                    local_signal["confluence_score"] = round(l_score, 3)
-                    local_signal["confluence_details"] = local_confluence["details"]
-                    local_signal["confluence_votes_for"] = l_for
-                    local_signal["confluence_votes_against"] = l_against
-
-                    # Voter breakdown para tracking de accuracy
-                    local_voters = local_confluence.get("voter_votes", {})
-                    local_voters["ml"] = local_ml_vote
-                    local_voters["lstm"] = 0  # LSTM já calculado acima — reusar se disponível
-                    local_voters["llm"] = 0   # Sem LLM no gerador local
-                    local_voters["regime"] = local_regime_vote
-                    local_voters["ml_prob"] = round(local_ml_prob, 4)
-                    local_voters["lstm_prob"] = 0.5
-                    local_signal["voter_votes"] = local_voters
-                    local_signal["ml_probability"] = local_ml_prob
-
-                    # Calcular SL/TP técnicos (mesma lógica do AGNO)
-                    entry = local_signal.get("entry_price", 0)
-                    if entry > 0:
-                        try:
-                            from src.analysis.technical_levels_calculator import calculate_technical_sl_tp
-                            op_type = "SCALP" if (market_regime and market_regime.get("base_regime") == "SIDEWAYS") else "DAY_TRADE"
-                            tech_levels = calculate_technical_sl_tp(
-                                entry_price=entry,
-                                direction=local_signal_dir,
-                                analysis_data=analysis_data,
-                                operation_type=op_type,
-                                optimized_params=locals().get('_opt_params_for_sl'),
-                            )
-                            if "error" not in tech_levels:
-                                local_signal["stop_loss"] = tech_levels["stop_loss"]
-                                local_signal["take_profit_1"] = tech_levels["take_profit_1"]
-                                local_signal["take_profit_2"] = tech_levels["take_profit_2"]
-                                local_signal["risk_reward"] = tech_levels.get("risk_reward", 0)
-                                local_signal["operation_type"] = op_type
-                        except Exception:
-                            pass
-
-                    # Salvar (NUNCA executa)
-                    self._save_signal(local_signal)
-
-                    # Comparar com AGNO
-                    agno_dir = agno_signal.get("signal", "NO_SIGNAL")
-                    match_str = "CONCORDAM" if local_signal_dir == agno_dir else "DIVERGEM"
-                    logger.info(
-                        f"[LOCAL_GEN] {symbol}: {local_signal_dir} conf={local_result.get('confidence')}/10 "
-                        f"score={l_score:.1%} ({l_for} for/{l_against} against) "
-                        f"| DeepSeek={agno_dir} → {match_str}"
-                    )
-                else:
-                    logger.info(f"[LOCAL_GEN] {symbol}: NO_SIGNAL (score={local_result.get('weighted_score', 0):+.3f})")
-            except Exception as e:
-                logger.warning(f"[LOCAL_GEN] Erro no gerador local: {e}")
+            # LOCAL_GEN DESATIVADO — análise de 5188 sinais mostrou WR 27.8%
+            # (pior que random). Dados completos em deep_analysis_report.txt.
 
             # === NOTIFICAÇÃO POR EMAIL: Sinal gerado ===
             if agno_signal.get("signal") in ["BUY", "SELL"]:

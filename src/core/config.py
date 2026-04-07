@@ -39,9 +39,9 @@ class Settings(BaseSettings):
     max_risk_per_trade: float = 0.02  # Máximo 2% de risco por trade
     max_drawdown: float = 0.15  # Máximo 15% de drawdown
     max_exposure: float = 0.50  # Máximo 50% de exposição total
-    max_daily_trades: int = 5  # Máximo 5 trades por dia
+    max_daily_trades: int = 8  # Máximo 8 trades/dia (up from 5 — agora só passam sinais bons)
     base_risk_percentage: float = 0.01  # 1% base de risco
-    max_open_positions: int = 6  # Máximo 6 posições simultâneas
+    max_open_positions: int = 4  # 4 posições simultâneas (down from 6 — melhor gestão com $100)
 
     # ========================================
     # GESTAO DE CAPITAL E RISCO POR TRADE
@@ -108,11 +108,20 @@ class Settings(BaseSettings):
     # Tokens que devem ser ignorados mesmo que apareçam como top movers
     # Identificados pela análise de 2000+ trades (Win Rate < 30% ou ilíquidos)
     token_blacklist: list = [
-        "JCTUSDT",     # Ilíquido - preço manipulado (entry $20 → $0.003)
+        "JCTUSDT",     # Dados corrompidos (entry $20 -> $0.003)
         "BRUSDT",      # SL > 20% - volatilidade extrema
         "SIRENUSDT",   # SL > 22% - volatilidade extrema
-        "LYNUSDT",     # 0% Win Rate - consistentemente perdedor
-        "UAIUSDT",     # 16.7% Win Rate - consistentemente perdedor
+        "LYNUSDT",     # WR 25%, PnL -66.81% (N=12)
+        "UAIUSDT",     # WR 16.7% - consistentemente perdedor
+        "ZECUSDT",     # WR 0%, PnL -26.10% (N=8)
+        "KNCUSDT",     # WR 0%, PnL -14.82% (N=5)
+        "PLAYUSDT",    # WR 12%, PnL -30.60% (N=8)
+        "DUSKUSDT",    # WR 11%, PnL -22.35% (N=9)
+        "BANKUSDT",    # WR 14%, PnL -18.25% (N=7)
+        "MUSDT",       # WR 14%, PnL -17.77% (N=7)
+        "PIPPINUSDT",  # WR 20%, PnL -37.57% (N=20)
+        "CTSIUSDT",    # WR 20%, PnL -27.65% (N=10)
+        "EDGEUSDT",    # WR 18%, PnL -10.90% (N=17)
     ]
 
     # ========================================
