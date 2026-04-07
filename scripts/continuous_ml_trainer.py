@@ -183,18 +183,33 @@ def load_all_real_signals() -> pd.DataFrame:
     return df
 
 
-def split_train_test(df: pd.DataFrame, test_ratio: float = 0.25) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Split temporal: treino nas mais antigas, teste nas mais recentes.
+def balance_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    """Balancear wins e losses: undersampling da maioria."""
+    wins = df[df["is_winner"] == True]
+    losses = df[df["is_winner"] == False]
+    n_min = min(len(wins), len(losses))
+    if n_min < 10:
+        return df
+    wins_sampled = wins.sample(n=n_min, random_state=42) if len(wins) > n_min else wins
+    losses_sampled = losses.sample(n=n_min, random_state=42) if len(losses) > n_min else losses
+    balanced = pd.concat([wins_sampled, losses_sampled]).sort_values("ts").reset_index(drop=True)
+    print(f"[BALANCE] {len(wins)} wins + {len(losses)} losses -> {n_min} + {n_min} = {len(balanced)} balanceado")
+    return balanced
 
-    Garante que test tem sinais de múltiplos períodos e mínimo de BUY e SELL.
-    """
+
+def split_train_test(df: pd.DataFrame, test_ratio: float = 0.25) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Split temporal + balanceamento do treino."""
     df = df.sort_values("ts").reset_index(drop=True)
     split_idx = int(len(df) * (1 - test_ratio))
     train = df.iloc[:split_idx].copy()
     test = df.iloc[split_idx:].copy()
 
-    print(f"[SPLIT] Train: {len(train)} (até {train['ts'].max().date()}) | Test: {len(test)} ({test['ts'].min().date()} - {test['ts'].max().date()})")
+    # Balancear APENAS o treino (teste fica com distribuição real)
+    train = balance_dataset(train)
+
+    print(f"[SPLIT] Train: {len(train)} (balanceado) | Test: {len(test)} (distribuição real)")
     print(f"  Test BUY: {len(test[test['signal']=='BUY'])} | Test SELL: {len(test[test['signal']=='SELL'])}")
+    print(f"  Test Winners: {test['is_winner'].sum()}/{len(test)} ({test['is_winner'].mean()*100:.1f}%)")
     return train, test
 
 

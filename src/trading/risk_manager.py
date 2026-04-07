@@ -16,7 +16,7 @@ _sl_cooldown_hours = 4.0
 _sl_cooldown_registry: Dict[str, datetime] = {}
 
 # Cooldown direcional pós-close: bloqueia MESMA DIREÇÃO por N horas após fechar
-_direction_cooldown_hours = 6.0
+_direction_cooldown_hours = 10.0
 _direction_cooldown_registry: Dict[str, dict] = {}
 
 # Arquivo de persistência para cooldowns

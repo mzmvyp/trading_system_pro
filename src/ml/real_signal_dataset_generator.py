@@ -228,8 +228,26 @@ class RealSignalDatasetGenerator:
 
         # 80/20 temporal split
         split_idx = int(len(X) * 0.8)
-        X_train, X_test = X[:split_idx], X[split_idx:]
-        y_train, y_test = y[:split_idx], y[split_idx:]
+        X_train_raw, X_test = X[:split_idx], X[split_idx:]
+        y_train_raw, y_test = y[:split_idx], y[split_idx:]
+
+        # BALANCEAR treino: igualar wins e losses
+        idx_win = np.where(y_train_raw == 1)[0]
+        idx_loss = np.where(y_train_raw == 0)[0]
+        n_min = min(len(idx_win), len(idx_loss))
+        if n_min >= 10 and abs(len(idx_win) - len(idx_loss)) > n_min * 0.2:
+            rng = np.random.RandomState(42)
+            if len(idx_win) > n_min:
+                idx_win = rng.choice(idx_win, size=n_min, replace=False)
+            if len(idx_loss) > n_min:
+                idx_loss = rng.choice(idx_loss, size=n_min, replace=False)
+            balanced_idx = np.sort(np.concatenate([idx_win, idx_loss]))
+            X_train = X_train_raw[balanced_idx]
+            y_train = y_train_raw[balanced_idx]
+            print(f"[BALANCE] Train: {len(idx_win)} wins + {len(idx_loss)} losses = {len(X_train)} balanceado")
+        else:
+            X_train = X_train_raw
+            y_train = y_train_raw
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 

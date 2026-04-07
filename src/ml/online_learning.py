@@ -351,6 +351,21 @@ class OnlineLearningManager:
                 X_combined = np.vstack([X_combined, synthetic])
                 y_combined = np.hstack([y_combined, [minority_class]])
 
+            # BALANCEAR: igualar wins e losses (undersampling da maioria)
+            idx_win = np.where(y_combined == 1)[0]
+            idx_loss = np.where(y_combined == 0)[0]
+            n_min = min(len(idx_win), len(idx_loss))
+            if n_min >= 10 and abs(len(idx_win) - len(idx_loss)) > n_min * 0.2:
+                np.random.seed(42)
+                if len(idx_win) > len(idx_loss):
+                    idx_win = np.random.choice(idx_win, size=len(idx_loss), replace=False)
+                else:
+                    idx_loss = np.random.choice(idx_loss, size=len(idx_win), replace=False)
+                balanced_idx = np.sort(np.concatenate([idx_win, idx_loss]))
+                X_combined = X_combined[balanced_idx]
+                y_combined = y_combined[balanced_idx]
+                print(f"[OL] Dataset BALANCEADO: {len(idx_win)} wins + {len(idx_loss)} losses = {len(X_combined)} total")
+
             # Split temporal
             split_idx = max(int(len(X_combined) * 0.8), 1)
             X_train, X_val = X_combined[:split_idx], X_combined[split_idx:]

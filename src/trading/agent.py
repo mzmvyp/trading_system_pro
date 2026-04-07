@@ -407,15 +407,8 @@ class AgnoTradingAgent:
             # prob 0.30-0.50 → voto contra (-1)
             # prob 0.50-0.75 → neutro (0) — zona não confiável
             ml_vote = 0
-            ml_is_biased = self._check_ml_prediction_bias()
 
-            if ml_is_biased:
-                ml_vote = 0  # Modelo viciado = voto neutro
-                logger.info(
-                    f"[ML VOTO] Modelo viciado (>70% mesma classe) — voto NEUTRO "
-                    f"(prob={probability:.1%}, pred={prediction})"
-                )
-            elif probability >= 0.75:
+            if probability >= 0.75:
                 ml_vote = 1  # Voto a favor — só com alta confiança
                 logger.info(
                     f"[ML VOTO] A FAVOR — prob={probability:.1%} (>= 75%)"
