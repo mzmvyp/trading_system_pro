@@ -148,11 +148,13 @@ class ConfluenceAnalyzer:
         # Detect conflicts
         all_conflicts = self._detect_conflicts(components)
 
-        # Apply conflict penalty
+        # Apply conflict penalty only to the stronger side
         if all_conflicts:
             penalty = self.conflict_penalty * len(all_conflicts)
-            bullish_score = max(0, bullish_score - penalty)
-            bearish_score = max(0, bearish_score - penalty)
+            if bullish_score >= bearish_score:
+                bullish_score = max(0, bullish_score - penalty)
+            else:
+                bearish_score = max(0, bearish_score - penalty)
 
         # Determine final direction and score
         direction, score = self._determine_direction(bullish_score, bearish_score)

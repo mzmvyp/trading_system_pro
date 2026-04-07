@@ -234,6 +234,7 @@ async def process_agent_response(response: Any, symbol: str) -> Dict[str, Any]:
                 signal["confidence"] = int(conf_match.group(1))
                 break
 
+    signal["confidence"] = max(1, min(10, int(signal.get("confidence", 5))))
     return signal
 
 

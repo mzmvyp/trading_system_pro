@@ -113,32 +113,58 @@ def _check_sl_cooldown(symbol: str) -> bool:
 
 
 def _calculate_current_drawdown() -> float:
-    """Calcula o drawdown atual baseado no histórico de trades."""
+    """Calcula drawdown real desde o pico máximo do equity (não PnL acumulado)."""
     try:
         from src.trading.paper_trading import real_paper_trading
-        summary = real_paper_trading.get_portfolio_summary()
-        total_pnl_percent = summary.get('total_pnl_percent', 0)
-        if total_pnl_percent < 0:
-            return abs(total_pnl_percent) / 100.0
-        return 0.0
+        from src.core.config import settings as _cfg
+
+        trades = real_paper_trading.get_trade_history()
+        initial_capital = _cfg.initial_capital
+
+        if not trades:
+            summary = real_paper_trading.get_portfolio_summary()
+            total_pnl_percent = summary.get('total_pnl_percent', 0)
+            if total_pnl_percent < 0:
+                return abs(total_pnl_percent) / 100.0
+            return 0.0
+
+        equity = initial_capital
+        peak = initial_capital
+        max_drawdown = 0.0
+
+        for t in trades:
+            pnl = t.get('pnl', t.get('realized_pnl', 0)) or 0
+            equity += pnl
+            if equity > peak:
+                peak = equity
+            dd = (peak - equity) / peak if peak > 0 else 0
+            if dd > max_drawdown:
+                max_drawdown = dd
+
+        current_dd = (peak - equity) / peak if peak > 0 else 0
+        if current_dd > 0.01:
+            logger.info(f"[DRAWDOWN] Equity={equity:.2f} | Pico={peak:.2f} | DD atual={current_dd:.1%} | DD max={max_drawdown:.1%}")
+        return current_dd
     except Exception as e:
         logger.warning(f"Erro ao calcular drawdown: {e}")
         return 0.0
 
 
 def _calculate_total_exposure() -> float:
-    """Calcula a exposição total atual baseado nas posições abertas."""
+    """Calcula a exposição total atual usando preço atual (mark_price) se disponível."""
     try:
         if not os.path.exists("portfolio/state.json"):
             return 0.0
         with open("portfolio/state.json", "r", encoding='utf-8') as f:
             state = json.load(f)
         positions = state.get("positions", {})
-        total_value = sum(
-            p.get("position_value", p.get("position_size", 0) * p.get("entry_price", 0))
-            for p in positions.values()
-            if p.get("status") == "OPEN"
-        )
+        total_value = 0.0
+        for p in positions.values():
+            if p.get("status") != "OPEN":
+                continue
+            size = p.get("position_size", 0)
+            current_price = p.get("mark_price", p.get("current_price", p.get("entry_price", 0)))
+            total_value += size * current_price if size and current_price else p.get("position_value", 0)
         from src.core.config import settings as _cfg
         capital = state.get("capital", state.get("initial_capital", _cfg.initial_capital))
         if capital <= 0:
@@ -373,31 +399,39 @@ def validate_risk_and_position(
         if risk_percentage > 5.0:
             logger.info(f"[RISCO] Stop largo ({risk_percentage:.2f}%) - posição será reduzida proporcionalmente")
 
+        from src.core.config import settings as _risk_cfg
         current_drawdown = _calculate_current_drawdown()
-        max_drawdown_allowed = 0.40
+        max_drawdown_allowed = _risk_cfg.max_drawdown  # config.py: 0.15
         if current_drawdown > max_drawdown_allowed:
             return {
                 "can_execute": False,
                 "reason": f"Drawdown atual muito alto: {current_drawdown:.2%} (máximo {max_drawdown_allowed:.0%})",
                 "risk_level": "high"
             }
-        elif current_drawdown > 0.15:
+        elif current_drawdown > max_drawdown_allowed * 0.6:
             logger.warning(f"[RISCO] Drawdown elevado ({current_drawdown:.2%}), reduzindo tamanho de posição")
 
         total_exposure = _calculate_total_exposure()
-        max_exposure_allowed = 0.80
+        max_exposure_allowed = _risk_cfg.max_exposure  # config.py: 0.50
         if total_exposure > max_exposure_allowed:
             return {
                 "can_execute": False,
                 "reason": f"Exposição total muito alta: {total_exposure:.0%} (máximo {max_exposure_allowed:.0%})",
                 "risk_level": "high"
             }
-        elif total_exposure > 0.50:
+        elif total_exposure > max_exposure_allowed * 0.8:
             logger.warning(f"[RISCO] Exposição elevada ({total_exposure:.0%}), considere reduzir posições")
 
         logger.info(f"[P&L MODE] Exposição atual: {total_exposure:.0%}")
 
-        # Sem limite diario de trades - filtros de qualidade ja controlam
+        daily_trades = _get_daily_trades_count()
+        max_daily = _risk_cfg.max_daily_trades  # config.py: 8
+        if daily_trades >= max_daily:
+            return {
+                "can_execute": False,
+                "reason": f"Limite diário atingido: {daily_trades}/{max_daily} trades hoje",
+                "risk_level": "medium"
+            }
 
         # Calcular position size baseado no capital REAL e risco configurado
         # Formula: risk_amount = capital * risk_percent
