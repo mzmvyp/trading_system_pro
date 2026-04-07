@@ -63,73 +63,101 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 # ============================================================
 
 def load_all_real_signals() -> pd.DataFrame:
-    """Carrega TODOS os sinais com outcomes conhecidos, deduplicados."""
-    from src.trading.signal_tracker import load_all_signals, evaluate_signal
+    """Carrega sinais do metrics_data.csv (já avaliados, sem chamar API).
 
-    print("[DATA] Carregando sinais reais...")
-    all_sigs = load_all_signals("signals")
+    Se metrics_data.csv não existir, faz fallback para avaliação via API (lento).
+    """
+    csv_path = ROOT / "metrics_data.csv"
 
-    records = []
-    total = len(all_sigs)
-    for i, sig in enumerate(all_sigs):
-        if sig.get("symbol") in BLACKLIST or sig.get("symbol") == "JCTUSDT":
-            continue
-        if sig.get("source") == "LOCAL_GEN":
-            continue
-        if sig.get("signal") not in ("BUY", "SELL"):
-            continue
+    if csv_path.exists():
+        print(f"[DATA] Carregando de {csv_path} (pré-avaliado, rápido)...")
+        raw = pd.read_csv(csv_path)
+        raw = raw[~raw["symbol"].isin(BLACKLIST | {"JCTUSDT"})]
+        if "source" in raw.columns:
+            raw = raw[raw["source"] != "LOCAL_GEN"]
+        raw = raw[raw["signal"].isin(["BUY", "SELL"])]
+        raw = raw[raw["outcome"].isin(["SL_HIT", "TP1_HIT", "TP2_HIT"])]
 
-        ts_str = sig.get("timestamp", "")
-        try:
-            if "T" in ts_str:
-                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-            else:
-                ts = datetime.strptime(ts_str[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            continue
+        raw["ts"] = pd.to_datetime(raw["timestamp"], errors="coerce", utc=True)
+        raw = raw.dropna(subset=["ts"])
 
-        result = evaluate_signal(sig)
-        outcome = result.get("outcome", "PENDING")
-        if outcome not in ("TP1_HIT", "TP2_HIT", "SL_HIT"):
-            continue
+        # Mapear colunas do CSV para feature columns
+        if "signal_encoded" not in raw.columns:
+            raw["signal_encoded"] = raw["signal"].apply(lambda x: 1 if x == "BUY" else -1)
+        if "bullish_tf_count" not in raw.columns:
+            raw["bullish_tf_count"] = 0
+        if "bearish_tf_count" not in raw.columns:
+            raw["bearish_tf_count"] = 0
+        if "trend_encoded" not in raw.columns:
+            trend_map = {"strong_bullish": 2, "bullish": 1, "neutral": 0, "bearish": -1, "strong_bearish": -2}
+            raw["trend_encoded"] = raw.get("trend", pd.Series("neutral", index=raw.index)).map(trend_map).fillna(0)
+        if "sentiment_encoded" not in raw.columns:
+            raw["sentiment_encoded"] = 0
+        if "risk_reward_ratio" not in raw.columns:
+            raw["risk_reward_ratio"] = raw.get("risk_reward", pd.Series(1.0, index=raw.index)).fillna(1.0)
+        if "reward_distance_pct" not in raw.columns:
+            raw["reward_distance_pct"] = 0.5
+        for col in FEATURE_COLUMNS:
+            if col not in raw.columns:
+                raw[col] = 0
 
-        is_winner = outcome in ("TP1_HIT", "TP2_HIT")
-        pnl = result.get("pnl_percent", 0)
+        if "is_winner" not in raw.columns:
+            raw["is_winner"] = raw["outcome"].isin(["TP1_HIT", "TP2_HIT"])
+        if "pnl_pct" not in raw.columns:
+            raw["pnl_pct"] = raw.get("pnl_percent", pd.Series(0, index=raw.index))
 
-        records.append({
-            "ts": ts,
-            "symbol": sig.get("symbol"),
-            "signal": sig.get("signal"),
-            "is_winner": is_winner,
-            "pnl_pct": pnl,
-            "confidence": sig.get("confidence", 5),
-            "rsi": sig.get("rsi", 50),
-            "macd_histogram": sig.get("macd_histogram", 0),
-            "adx": sig.get("adx", 25),
-            "atr": sig.get("atr", 0),
-            "bb_position": sig.get("bb_position", 0.5),
-            "cvd": sig.get("cvd", 0),
-            "orderbook_imbalance": sig.get("orderbook_imbalance", 0.5),
-            "bullish_tf_count": sig.get("bullish_tf_count", 0),
-            "bearish_tf_count": sig.get("bearish_tf_count", 0),
-            "trend_encoded": sig.get("trend_encoded", 0),
-            "sentiment_encoded": sig.get("sentiment_encoded", 0),
-            "signal_encoded": 1 if sig.get("signal") == "BUY" else -1,
-            "risk_distance_pct": sig.get("risk_distance_pct", 2.0),
-            "reward_distance_pct": sig.get("reward_distance_pct", 0.5),
-            "risk_reward_ratio": sig.get("risk_reward_ratio", 1.0),
-            "entry_price": sig.get("entry_price", 0),
-            "stop_loss": sig.get("stop_loss", 0),
-            "take_profit_1": sig.get("take_profit_1", 0),
-            "candle_body_pct": sig.get("candle_body_pct", 0.5),
-            "volume_ratio": sig.get("volume_ratio", 1.0),
-            "_raw_signal": sig,
-        })
+        df = raw
+    else:
+        print("[DATA] metrics_data.csv não encontrado. Avaliando via API (pode demorar)...")
+        from src.trading.signal_tracker import load_all_signals, evaluate_signal
 
-        if (i + 1) % 200 == 0:
-            print(f"  ... {i+1}/{total} sinais processados, {len(records)} válidos")
+        all_sigs = load_all_signals("signals")
+        records = []
+        total = len(all_sigs)
+        for i, sig in enumerate(all_sigs):
+            if sig.get("symbol") in BLACKLIST or sig.get("symbol") == "JCTUSDT":
+                continue
+            if sig.get("source") == "LOCAL_GEN":
+                continue
+            if sig.get("signal") not in ("BUY", "SELL"):
+                continue
 
-    df = pd.DataFrame(records)
+            ts_str = sig.get("timestamp", "")
+            try:
+                if "T" in ts_str:
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                else:
+                    ts = datetime.strptime(ts_str[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                continue
+
+            result = evaluate_signal(sig)
+            outcome = result.get("outcome", "PENDING")
+            if outcome not in ("TP1_HIT", "TP2_HIT", "SL_HIT"):
+                continue
+
+            is_winner = outcome in ("TP1_HIT", "TP2_HIT")
+            pnl = result.get("pnl_percent", 0)
+
+            rec = {
+                "ts": ts, "symbol": sig.get("symbol"), "signal": sig.get("signal"),
+                "is_winner": is_winner, "pnl_pct": pnl,
+                "confidence": sig.get("confidence", 5),
+            }
+            for col in FEATURE_COLUMNS:
+                if col == "signal_encoded":
+                    rec[col] = 1 if sig.get("signal") == "BUY" else -1
+                else:
+                    rec[col] = sig.get(col, 0)
+            records.append(rec)
+
+            if (i + 1) % 200 == 0:
+                print(f"  ... {i+1}/{total} processados, {len(records)} válidos")
+
+        df = pd.DataFrame(records)
+
     if df.empty:
         print("[ERRO] Nenhum sinal válido encontrado!")
         return df
