@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     max_exposure: float = 0.50  # Máximo 50% de exposição total
     max_daily_trades: int = 8  # Máximo 8 trades/dia (up from 5 — agora só passam sinais bons)
     base_risk_percentage: float = 0.01  # 1% base de risco
-    max_open_positions: int = 3  # 3 posições simultâneas (análise limpa: melhor PnL/DD ratio)
+    max_open_positions: int = 6  # 6 posições simultâneas
 
     # ========================================
     # GESTAO DE CAPITAL E RISCO POR TRADE
