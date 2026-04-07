@@ -741,7 +741,9 @@ async def analyze_technical_indicators(symbol: str = "BTCUSDT", optimized_params
                 "ema_50": float(ema_50) if not np.isnan(ema_50) else current_price,
                 "ema_200": ema_200_value,
                 "obv": obv_value,
-                "obv_trend": obv_trend
+                "obv_trend": obv_trend,
+                "candle_body_pct": float(abs(df['close'].iloc[-1] - df['open'].iloc[-1]) / current_price * 100) if current_price > 0 else 0.5,
+                "volume_ratio": float(volume[-1] / volume[-21:-1].mean()) if len(volume) >= 21 and volume[-21:-1].mean() > 0 else 1.0,
             },
             "volume_profile": {
                 "poc_price": float(poc_price),

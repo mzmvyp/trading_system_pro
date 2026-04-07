@@ -1171,6 +1171,10 @@ Responda APENAS com JSON:
                     agno_signal["bearish_tf_count"] = analysis_data.get("multi_timeframe", {}).get("bearish_count", 0)
                     agno_signal["indicators"] = indicators
 
+                    # ML features: candle_body_pct e volume_ratio (mesma semântica do treino)
+                    agno_signal["candle_body_pct"] = indicators.get("candle_body_pct", 0.5)
+                    agno_signal["volume_ratio"] = volume_flow.get("volume_ratio", indicators.get("volume_ratio", 1.0))
+
                     logger.debug(f"[ML] Indicadores do analysis_data: RSI={agno_signal.get('rsi')}, ADX={agno_signal.get('adx')}")
                 else:
                     # Fallback: coletar indicadores separadamente

@@ -353,6 +353,15 @@ class SimpleSignalValidator:
             pickle.dump(self.scaler, f)
         print(f"  [OK] Scaler: {scaler_path}")
 
+        # Preprocessing artifacts (medians + clip bounds)
+        preproc_path = os.path.join(CONFIG["model_dir"], "preproc_simple.pkl")
+        with open(preproc_path, 'wb') as f:
+            pickle.dump({
+                'train_medians': getattr(self, '_train_medians', {}),
+                'train_clip_bounds': getattr(self, '_train_clip_bounds', {}),
+            }, f)
+        print(f"  [OK] Preproc: {preproc_path}")
+
         # Metadata
         info_path = os.path.join(CONFIG["model_dir"], "model_info_simple.json")
         with open(info_path, 'w') as f:
@@ -375,6 +384,18 @@ class SimpleSignalValidator:
             self.model_info = json.load(f)
             self.feature_columns = self.model_info.get('feature_columns', [])
             self.best_model_name = self.model_info.get('best_model')
+
+        # Reload preprocessing artifacts
+        preproc_path = os.path.join(CONFIG["model_dir"], "preproc_simple.pkl")
+        if os.path.exists(preproc_path):
+            with open(preproc_path, 'rb') as f:
+                preproc = pickle.load(f)
+                self._train_medians = preproc.get('train_medians', {})
+                self._train_clip_bounds = preproc.get('train_clip_bounds', {})
+            print(f"[OK] Preproc carregado ({len(self._train_medians)} medians, {len(self._train_clip_bounds)} bounds)")
+        else:
+            self._train_medians = {}
+            self._train_clip_bounds = {}
 
         print(f"[OK] Modelos carregados. Melhor: {self.best_model_name}")
 
@@ -463,11 +484,12 @@ class SimpleSignalValidator:
             'trend_encoded': deepseek_signal.get('trend_encoded', 0),
             'sentiment_encoded': deepseek_signal.get('sentiment_encoded', 0),
             'signal_encoded': 1 if deepseek_signal.get('signal') == 'BUY' else (-1 if deepseek_signal.get('signal') == 'SELL' else 0),
-            # Features de mercado (atr_pct, candle_body_pct, volume_ratio)
-            # mantidas nos nomes originais para compatibilidade com feature_columns
-            'risk_distance_pct': deepseek_signal.get('risk_distance_pct', 2),
-            'reward_distance_pct': deepseek_signal.get('reward_distance_pct', 0.5),
-            'risk_reward_ratio': deepseek_signal.get('risk_reward_ratio', 1),
+            # Alinhar com semântica do treino: ATR%, candle_body%, volume_ratio
+            'risk_distance_pct': (deepseek_signal.get('atr', 0) / deepseek_signal.get('entry_price', 1) * 100)
+                                 if deepseek_signal.get('entry_price', 0) > 0 and deepseek_signal.get('atr', 0) > 0
+                                 else 2.0,
+            'reward_distance_pct': deepseek_signal.get('candle_body_pct', 0.5),
+            'risk_reward_ratio': deepseek_signal.get('volume_ratio', 1.0),
         }
 
         validation = self.predict_signal(features)
