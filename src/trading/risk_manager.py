@@ -113,37 +113,50 @@ def _check_sl_cooldown(symbol: str) -> bool:
 
 
 def _calculate_current_drawdown() -> float:
-    """Calcula drawdown real desde o pico máximo do equity (não PnL acumulado)."""
+    """Calcula drawdown real desde o pico máximo do equity.
+    Funciona tanto em modo paper (trade_history) quanto modo real (real_orders/)."""
     try:
-        from src.trading.paper_trading import real_paper_trading
         from src.core.config import settings as _cfg
-
-        trades = real_paper_trading.get_trade_history()
         initial_capital = _cfg.initial_capital
+        pnl_list = []
 
-        if not trades:
-            summary = real_paper_trading.get_portfolio_summary()
-            total_pnl_percent = summary.get('total_pnl_percent', 0)
-            if total_pnl_percent < 0:
-                return abs(total_pnl_percent) / 100.0
+        # Tentar paper trading primeiro
+        try:
+            from src.trading.paper_trading import real_paper_trading
+            trades = real_paper_trading.get_trade_history()
+            if trades:
+                pnl_list = [t.get('pnl', t.get('realized_pnl', 0)) or 0 for t in trades]
+        except Exception:
+            pass
+
+        # Se paper vazio, ler de real_orders/ (modo produção real)
+        if not pnl_list:
+            import glob
+            order_files = sorted(glob.glob("real_orders/orders_*.json"))
+            for fpath in order_files:
+                try:
+                    with open(fpath, 'r') as f:
+                        orders = json.load(f)
+                    for o in orders:
+                        pnl = o.get("realized_pnl", o.get("pnl", 0))
+                        if pnl and isinstance(pnl, (int, float)) and pnl != 0:
+                            pnl_list.append(pnl)
+                except Exception:
+                    continue
+
+        if not pnl_list:
             return 0.0
 
         equity = initial_capital
         peak = initial_capital
-        max_drawdown = 0.0
-
-        for t in trades:
-            pnl = t.get('pnl', t.get('realized_pnl', 0)) or 0
+        for pnl in pnl_list:
             equity += pnl
             if equity > peak:
                 peak = equity
-            dd = (peak - equity) / peak if peak > 0 else 0
-            if dd > max_drawdown:
-                max_drawdown = dd
 
         current_dd = (peak - equity) / peak if peak > 0 else 0
         if current_dd > 0.01:
-            logger.info(f"[DRAWDOWN] Equity={equity:.2f} | Pico={peak:.2f} | DD atual={current_dd:.1%} | DD max={max_drawdown:.1%}")
+            logger.info(f"[DRAWDOWN] Equity={equity:.2f} | Pico={peak:.2f} | DD={current_dd:.1%}")
         return current_dd
     except Exception as e:
         logger.warning(f"Erro ao calcular drawdown: {e}")

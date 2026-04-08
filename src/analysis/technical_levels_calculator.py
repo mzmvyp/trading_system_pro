@@ -15,8 +15,10 @@ MIN_SL_DISTANCE_PCT = 0.3
 # SL maximo tecnico: se nenhum nivel tecnico estiver a menos de 15%, provavelmente nao ha setup
 # O tamanho da posição é ajustado automaticamente para compensar stop largo
 MAX_SL_DISTANCE_PCT = 15.0
-# Minimo risk:reward aceitavel (1.5:1 — alvos realistas para mercado lateral)
-MIN_RISK_REWARD = 1.5
+# Minimo risk:reward aceitavel (1.0:1 — permite TPs em níveis técnicos reais)
+# Reduzido de 1.5 para 1.0: dados mostram que R:R forçado empurra TPs para
+# níveis sem suporte técnico, resultando em trades que quase acertam mas não fecham
+MIN_RISK_REWARD = 1.0
 
 
 def calculate_technical_sl_tp(
@@ -390,10 +392,9 @@ def _find_buy_tp2(
         if r["price"] > tp1 * 1.003:
             return r["price"], f"em_{r['source']}"
 
-    # Fallback: TP2 = 2x a distancia de TP1
     tp1_distance = tp1 - entry
-    tp2 = entry + (tp1_distance * 1.5)
-    return tp2, "1.5x_TP1_dist"
+    tp2 = entry + (tp1_distance * 1.3)
+    return tp2, "1.3x_TP1_dist"
 
 
 # ===== SELL SL/TP helpers =====
@@ -462,11 +463,10 @@ def _find_sell_tp2(
             return s["price"], f"em_{s['source']}"
 
     tp1_distance = entry - tp1
-    tp2 = entry - (tp1_distance * 1.5)
-    # Ensure TP2 never goes negative
+    tp2 = entry - (tp1_distance * 1.3)
     if tp2 <= 0:
-        tp2 = tp1 * 0.97  # Fallback: 3% below TP1
-    return tp2, "1.5x_TP1_dist"
+        tp2 = tp1 * 0.97
+    return tp2, "1.3x_TP1_dist"
 
 
 # ===== Multiplicadores por tipo de operacao =====
@@ -529,7 +529,7 @@ def _validate_risk_reward(
             result["tp1_method"] += "+RR_ajustado"
             # Ajustar TP2 se ficou abaixo do TP1
             if tp2 <= tp1:
-                tp2 = entry + (sl_dist * MIN_RISK_REWARD * 1.5)
+                tp2 = entry + (sl_dist * MIN_RISK_REWARD * 1.3)
                 result["take_profit_2"] = round(tp2, 8)
                 result["tp2_method"] += "+RR_ajustado"
     else:
@@ -540,7 +540,7 @@ def _validate_risk_reward(
             result["take_profit_1"] = round(tp1, 8)
             result["tp1_method"] += "+RR_ajustado"
             if tp2 >= tp1:
-                tp2 = entry - (sl_dist * MIN_RISK_REWARD * 1.5)
+                tp2 = entry - (sl_dist * MIN_RISK_REWARD * 1.3)
                 result["take_profit_2"] = round(tp2, 8)
                 result["tp2_method"] += "+RR_ajustado"
 
