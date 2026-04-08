@@ -394,7 +394,8 @@ if len(df_ml) > 0:
             return 'color: #ff4444'
         return ''
 
-    styled = df_display.style.applymap(color_decision, subset=['ml_decision'])
+    _map = getattr(df_display.style, "map", None) or df_display.style.applymap
+    styled = _map(color_decision, subset=['ml_decision'])
     st.dataframe(styled, use_container_width=True, hide_index=True, height=500)
 
 

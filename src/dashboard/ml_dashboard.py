@@ -506,7 +506,8 @@ def main():
             display_cols = [c for c in ['timestamp', 'symbol', 'deepseek_signal', 'predicted_success', 'probability', 'recommendation', 'model_used'] if c in df_pred.columns]
             styled = df_pred[display_cols].tail(20).style
             if 'recommendation' in display_cols:
-                styled = styled.applymap(color_rec, subset=['recommendation'])
+                _map = getattr(styled, "map", None) or styled.applymap
+                styled = _map(color_rec, subset=['recommendation'])
             st.dataframe(styled, use_container_width=True)
         else:
             st.info("Nenhuma predicao registrada ainda.")

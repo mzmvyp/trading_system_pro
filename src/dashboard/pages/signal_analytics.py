@@ -256,7 +256,10 @@ with tab1:
         }
         return colors.get(val, "")
 
-    styled = display_df.style.applymap(color_pnl, subset=["PnL %"]).applymap(color_outcome, subset=["Resultado"])
+    style_method = getattr(display_df.style, "map", None) or display_df.style.applymap
+    styled = style_method(color_pnl, subset=["PnL %"])
+    style_method2 = getattr(styled, "map", None) or styled.applymap
+    styled = style_method2(color_outcome, subset=["Resultado"])
     st.dataframe(styled, use_container_width=True, hide_index=True, height=500)
 
     st.caption(f"Total: {len(df_filtered)} sinais")
