@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
-EXCLUDE_SYMBOLS = {"JCTUSDT"}
+EXCLUDE_SYMBOLS = {"JCTUSDT", "4USDT"}
 CSV_PATH = ROOT / "metrics_data.csv"
 
 def load_data():

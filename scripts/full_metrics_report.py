@@ -17,7 +17,7 @@ os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
 SIGNALS_DIR = ROOT / "signals"
-EXCLUDE_SYMBOLS = {"JCTUSDT"}
+EXCLUDE_SYMBOLS = {"JCTUSDT", "4USDT"}
 
 # ============================================================
 # 1. LOAD ALL SIGNALS

@@ -1292,6 +1292,7 @@ Responda APENAS com JSON:
                 ml_prob = ml_validation.get('probability', 0)
                 ml_pred = ml_validation.get('prediction', 0)
                 ml_vote = ml_validation.get("ml_vote", 0)
+                agno_signal["ml_probability"] = ml_prob
 
                 # Gate: se accuracy do ML for < 55%, forçar voto neutro
                 _ml_accuracies = self._get_model_accuracies()
@@ -1509,6 +1510,7 @@ Responda APENAS com JSON:
                 # como gate principal (já validado: conf>=7 BUY WR 65.6%).
                 MIN_COMBINED_SCORE = 0.30
                 MIN_VOTES_FOR = 2
+                MAX_VOTES_FOR = 5
 
                 agno_signal["confluence_score"] = round(combined_score, 3)
                 agno_signal["confluence_details"] = confluence["details"]
@@ -1550,6 +1552,17 @@ Responda APENAS com JSON:
                     logger.warning(f"╔══ [BLOQUEADO] {llm_signal_dir} {symbol} — Confluência: {motivo_confl}")
                     agno_signal["signal"] = "NO_SIGNAL"
                     agno_signal["block_reason"] = f"Confluência: {motivo_confl}"
+                elif total_for > MAX_VOTES_FOR:
+                    details_str = " | ".join(confluence["details"])
+                    motivo_confl = (
+                        f"excesso de concordância (armadilha): "
+                        f"votos={total_for:.0f} (max {MAX_VOTES_FOR}). "
+                        f"Dados: WR 24% com >=5 votos vs 43% com 4 votos. "
+                        f"[{details_str}]"
+                    )
+                    logger.warning(f"╔══ [BLOQUEADO] {llm_signal_dir} {symbol} — {motivo_confl}")
+                    agno_signal["signal"] = "NO_SIGNAL"
+                    agno_signal["block_reason"] = motivo_confl
 
             # ========================================
             # GARANTIR SL/TP1/TP2 OBRIGATÓRIOS

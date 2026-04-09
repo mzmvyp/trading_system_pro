@@ -109,6 +109,7 @@ class Settings(BaseSettings):
     # Identificados pela análise de 2000+ trades (Win Rate < 30% ou ilíquidos)
     token_blacklist: list = [
         "JCTUSDT",     # Dados corrompidos (entry $20 -> $0.003)
+        "4USDT",       # PnL gigante (micro-cap, dados nao confiaveis)
         "BRUSDT",      # SL > 20% - volatilidade extrema
         "SIRENUSDT",   # SL > 22% - volatilidade extrema
         "LYNUSDT",     # WR 25%, PnL -66.81% (N=12)
@@ -122,15 +123,18 @@ class Settings(BaseSettings):
         "PIPPINUSDT",  # WR 20%, PnL -37.57% (N=20)
         "CTSIUSDT",    # WR 20%, PnL -27.65% (N=10)
         "EDGEUSDT",    # WR 18%, PnL -10.90% (N=17)
+        "RIVERUSDT",   # WR 16.7%, PnL -31.19% (N=6) — abril analise
+        "AVAXUSDT",    # WR 10%, PnL -15.29% (N=10) — abril analise
+        "DOGEUSDT",    # WR 20%, PnL -10.60% (N=5) — abril analise
     ]
 
     # ========================================
-    # FILTRO DE SELL (SHORT) - Mais restritivo
+    # FILTRO DE SELL (SHORT)
     # ========================================
-    # Dados mostram SELL com 46% WR vs BUY com 67% WR
-    # Shorts precisam de confiança maior para compensar menor acerto
-    sell_min_confidence: int = 8  # Shorts precisam confiança 8/10 (WR 46% vs BUY 67%)
-    sell_require_strong_trend: bool = True  # SELL só em tendência forte de baixa
+    # Dados reais abril: SELL WR 32.4% (N=111) vs BUY WR 24% (N=25)
+    # SELL e a direcao principal do sistema; confianca minima 7 (igual BUY)
+    sell_min_confidence: int = 7
+    sell_require_strong_trend: bool = True
 
     # ========================================
     # TIMEOUT POR TIPO DE OPERAÇÃO

@@ -196,18 +196,17 @@ def evaluate_signal(signal: Dict) -> Dict:
                 tp1_hit = True
 
             if tp1_hit:
-                # TP1 bateu - agora verificar se TP2 também bate depois
-                # Continuar verificando klines restantes para TP2
+                pnl_tp1 = ((tp1 - entry_price) / entry_price * 100) if is_long else ((entry_price - tp1) / entry_price * 100)
+
                 result["outcome"] = "TP1_HIT"
                 result["exit_price"] = tp1
                 result["exit_time"] = candle_time.isoformat()
                 result["duration_hours"] = (candle_time - sig_time).total_seconds() / 3600
-                if is_long:
-                    result["pnl_percent"] = (tp1 - entry_price) / entry_price * 100
-                else:
-                    result["pnl_percent"] = (entry_price - tp1) / entry_price * 100
+                # 50% fecha no TP1, 50% continua — PnL provisório
+                result["pnl_percent"] = pnl_tp1 * 0.5
 
-                # Continuar para ver se TP2 bate (com SL no break-even)
+                # Verificar o que acontece com os 50% restantes
+                second_half_pnl = 0.0  # break-even por padrão
                 for candle2 in klines[klines.index(candle):]:
                     h2 = float(candle2[2])
                     l2 = float(candle2[3])
@@ -215,34 +214,30 @@ def evaluate_signal(signal: Dict) -> Dict:
 
                     # Após TP1, SL move para break-even (entry_price)
                     if is_long and l2 <= entry_price:
-                        break  # Break-even atingido, fica com PnL do TP1
+                        second_half_pnl = 0.0
+                        break
                     if not is_long and h2 >= entry_price:
+                        second_half_pnl = 0.0
                         break
 
                     if tp2 > 0:
+                        tp2_hit_now = False
                         if is_long and h2 >= tp2:
+                            tp2_hit_now = True
+                        elif not is_long and l2 <= tp2:
+                            tp2_hit_now = True
+
+                        if tp2_hit_now:
+                            pnl_tp2 = ((tp2 - entry_price) / entry_price * 100) if is_long else ((entry_price - tp2) / entry_price * 100)
+                            second_half_pnl = pnl_tp2
                             result["outcome"] = "TP2_HIT"
                             result["exit_price"] = tp2
                             result["exit_time"] = ct2.isoformat()
                             result["duration_hours"] = (ct2 - sig_time).total_seconds() / 3600
-                            if is_long:
-                                result["pnl_percent"] = (tp2 - entry_price) / entry_price * 100
-                            else:
-                                result["pnl_percent"] = (entry_price - tp2) / entry_price * 100
-                            break
-                        if not is_long and l2 <= tp2:
-                            result["outcome"] = "TP2_HIT"
-                            result["exit_price"] = tp2
-                            result["exit_time"] = ct2.isoformat()
-                            result["duration_hours"] = (ct2 - sig_time).total_seconds() / 3600
-                            result["pnl_percent"] = (entry_price - tp2) / entry_price * 100
                             break
 
-                # PnL final: 50% no TP1 + 50% no TP2 (ou break-even)
-                if result["outcome"] == "TP2_HIT":
-                    pnl_tp1 = ((tp1 - entry_price) / entry_price * 100) if is_long else ((entry_price - tp1) / entry_price * 100)
-                    pnl_tp2 = ((tp2 - entry_price) / entry_price * 100) if is_long else ((entry_price - tp2) / entry_price * 100)
-                    result["pnl_percent"] = (pnl_tp1 * 0.5) + (pnl_tp2 * 0.5)
+                # PnL final: 50% no TP1 + 50% no resultado da segunda metade
+                result["pnl_percent"] = (pnl_tp1 * 0.5) + (second_half_pnl * 0.5)
 
                 result["max_favorable"] = max_favorable
                 result["max_adverse"] = max_adverse
@@ -488,12 +483,17 @@ def evaluate_all_signals(
     signals = load_all_signals(signals_dir)
 
     # Carregar cache
+    _CACHE_VERSION = 2  # Bump when PnL calculation changes to force re-evaluation
     cache = {}
     if os.path.exists(cache_file):
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
                 cached = json.load(f)
+                cache_ver = cached[0].get("_cache_v", 1) if cached else 1
                 for item in cached:
+                    # Re-evaluate TP1/TP2 entries from old cache (PnL formula changed)
+                    if cache_ver < _CACHE_VERSION and item.get("outcome") in ("TP1_HIT", "TP2_HIT"):
+                        continue
                     key = f"{item.get('symbol')}_{item.get('timestamp')}_{item.get('source')}"
                     cache[key] = item
         except (json.JSONDecodeError, IOError):
@@ -535,8 +535,11 @@ def evaluate_all_signals(
     if updated:
         try:
             os.makedirs(os.path.dirname(cache_file) if os.path.dirname(cache_file) else ".", exist_ok=True)
+            cache_list = list(cache.values())
+            for item in cache_list:
+                item["_cache_v"] = _CACHE_VERSION
             with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump(list(cache.values()), f, indent=2, ensure_ascii=False, default=str)
+                json.dump(cache_list, f, indent=2, ensure_ascii=False, default=str)
         except Exception as e:
             logger.warning(f"Erro ao salvar cache de avaliações: {e}")
 

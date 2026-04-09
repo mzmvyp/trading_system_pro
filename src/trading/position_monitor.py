@@ -51,6 +51,7 @@ class PositionMonitor:
     def __init__(self):
         self._last_reeval: Dict[str, datetime] = {}
         self._trailing_sl_applied: Dict[str, float] = {}  # {symbol: último SL trailing aplicado}
+        self._tp1_be_applied: set = set()  # symbols where TP1 break-even was already applied
 
     async def check_all_positions(self, executor) -> Dict[str, Any]:
         """
@@ -226,6 +227,118 @@ class PositionMonitor:
                   f"{results['circuit_breaker_closed']} fechadas por circuit breaker")
 
         return results
+
+    async def protect_after_tp1(self, executor) -> Dict[str, Any]:
+        """
+        Detecta se TP1 disparou (posição agora ~50% do original) e move SL
+        para break-even + 0.1% de buffer. Sem isto, os 50% restantes ficam
+        expostos ao SL original e podem devolver todo o lucro do TP1.
+        """
+        results = {"checked": 0, "sl_moved_breakeven": 0, "errors": []}
+        try:
+            positions = await executor.get_all_positions()
+            if not positions:
+                return results
+
+            for pos in positions:
+                symbol = pos.get("symbol", "")
+                side = pos.get("side", "LONG")
+                entry_price = pos.get("entry_price", 0)
+                position_amt = abs(pos.get("position_amt", 0))
+                if not symbol or entry_price <= 0 or position_amt <= 0:
+                    continue
+
+                results["checked"] += 1
+
+                if symbol in self._tp1_be_applied:
+                    continue
+
+                original_size = await self._find_original_position_size(symbol)
+                if not original_size or original_size <= 0:
+                    continue
+
+                ratio = position_amt / original_size
+                if ratio > 0.65:
+                    continue  # TP1 hasn't triggered yet (still >65% of original)
+
+                be_buffer = 0.001  # 0.1%
+                if side == "LONG":
+                    new_sl = entry_price * (1 + be_buffer)
+                else:
+                    new_sl = entry_price * (1 - be_buffer)
+
+                algo_orders = await executor.get_open_algo_orders(symbol)
+                current_sl_price = None
+                for order in algo_orders:
+                    if (order.get("type") or "").upper() == "STOP_MARKET":
+                        current_sl_price = float(
+                            order.get("stopPrice", 0)
+                            or order.get("triggerPrice", 0)
+                            or 0
+                        )
+                        break
+
+                should_move = False
+                if current_sl_price:
+                    if side == "LONG" and new_sl > current_sl_price:
+                        should_move = True
+                    elif side == "SHORT" and new_sl < current_sl_price:
+                        should_move = True
+                else:
+                    should_move = True
+
+                if not should_move:
+                    self._tp1_be_applied.add(symbol)
+                    continue
+
+                logger.warning(
+                    f"[TP1 PROTECT] {symbol} ({side}): posição reduziu para "
+                    f"{ratio:.0%} do original → TP1 disparou. "
+                    f"Movendo SL de ${current_sl_price or 0:.4f} para "
+                    f"break-even ${new_sl:.4f}"
+                )
+                success = await self._move_stop_loss(
+                    executor, symbol, side, position_amt, new_sl
+                )
+                if success:
+                    self._tp1_be_applied.add(symbol)
+                    results["sl_moved_breakeven"] += 1
+                else:
+                    results["errors"].append(
+                        f"TP1 protect {symbol}: failed to move SL"
+                    )
+
+        except Exception as e:
+            logger.exception(f"[TP1 PROTECT] Erro geral: {e}")
+            results["errors"].append(f"General: {e}")
+
+        if results["sl_moved_breakeven"] > 0:
+            logger.info(
+                f"[TP1 PROTECT] {results['sl_moved_breakeven']} posições "
+                f"protegidas com SL em break-even"
+            )
+        return results
+
+    async def _find_original_position_size(self, symbol: str) -> Optional[float]:
+        """Busca tamanho original da posição nos execution records."""
+        try:
+            records_dir = "real_orders"
+            if not os.path.exists(records_dir):
+                return None
+            import glob as _glob
+            pattern = os.path.join(records_dir, f"execution_{symbol}_*.json")
+            files = sorted(_glob.glob(pattern), reverse=True)
+            for f in files:
+                try:
+                    with open(f, "r") as fh:
+                        record = json.load(fh)
+                        if record.get("status") == "OPEN" and record.get("position_size"):
+                            return float(record["position_size"])
+                except (json.JSONDecodeError, KeyError):
+                    continue
+        except Exception as e:
+            logger.warning(f"Erro ao buscar position_size de {symbol}: {e}")
+        return None
 
     async def apply_trailing_stop(self, executor) -> Dict[str, Any]:
         """

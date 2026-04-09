@@ -48,6 +48,18 @@ if not evaluations:
     st.warning("Nenhum sinal encontrado em signals/. Execute o sistema primeiro.")
     st.stop()
 
+_EXCLUDE_SYMBOLS = {"JCTUSDT", "4USDT"}
+_PNL_OUTLIER_CAP = 15.0
+
+evaluations = [
+    e for e in evaluations if e.get("symbol") not in _EXCLUDE_SYMBOLS
+]
+
+for e in evaluations:
+    pnl = e.get("pnl_percent", 0)
+    if abs(pnl) > _PNL_OUTLIER_CAP:
+        e["pnl_percent"] = _PNL_OUTLIER_CAP if pnl > 0 else -_PNL_OUTLIER_CAP
+
 df = pd.DataFrame(evaluations)
 
 # ================================================================
@@ -256,10 +268,8 @@ with tab1:
         }
         return colors.get(val, "")
 
-    style_method = getattr(display_df.style, "map", None) or display_df.style.applymap
-    styled = style_method(color_pnl, subset=["PnL %"])
-    style_method2 = getattr(styled, "map", None) or styled.applymap
-    styled = style_method2(color_outcome, subset=["Resultado"])
+    styled = display_df.style.map(color_pnl, subset=["PnL %"])
+    styled = styled.map(color_outcome, subset=["Resultado"])
     st.dataframe(styled, use_container_width=True, hide_index=True, height=500)
 
     st.caption(f"Total: {len(df_filtered)} sinais")
@@ -354,12 +364,27 @@ with tab3:
 with tab4:
     st.subheader("Visualizacoes")
 
-    if not closed_df.empty:
+    chart_exec_only = st.toggle(
+        "Mostrar apenas sinais EXECUTADOS (resultado real)",
+        value=True,
+        help="Ativado = mostra apenas trades realmente executados na exchange. "
+             "Desativado = inclui sinais apenas gerados (nao reflete a conta real)."
+    )
+
+    if chart_exec_only:
+        chart_df = closed_df[closed_df["executed"].astype(bool)].copy()
+        if chart_df.empty:
+            st.warning("Nenhum sinal executado finalizado. Mostrando todos.")
+            chart_df = closed_df.copy()
+    else:
+        chart_df = closed_df.copy()
+
+    if not chart_df.empty:
         col1, col2 = st.columns(2)
 
         with col1:
             # PnL acumulado ao longo do tempo
-            sorted_closed = closed_df.sort_values("timestamp")
+            sorted_closed = chart_df.sort_values("timestamp")
             sorted_closed["cumulative_pnl"] = sorted_closed["pnl_percent"].cumsum()
 
             fig_cum = go.Figure()
@@ -385,7 +410,7 @@ with tab4:
         with col2:
             # Distribuicao de PnL
             fig_dist = px.histogram(
-                closed_df, x="pnl_percent", nbins=30,
+                chart_df, x="pnl_percent", nbins=30,
                 title="Distribuicao de PnL por Trade",
                 color_discrete_sequence=["#00ccff"]
             )
@@ -402,7 +427,7 @@ with tab4:
 
         with col1:
             # Outcomes pie chart
-            outcome_counts = closed_df["outcome"].value_counts()
+            outcome_counts = chart_df["outcome"].value_counts()
             colors_map = {
                 "TP2_HIT": "#00ff00",
                 "TP1_HIT": "#00cc00",
@@ -422,8 +447,8 @@ with tab4:
         with col2:
             # Confianca vs PnL scatter
             fig_conf = px.scatter(
-                closed_df, x="confidence", y="pnl_percent",
-                color="outcome", size=closed_df["pnl_percent"].abs() + 0.1,
+                chart_df, x="confidence", y="pnl_percent",
+                color="outcome", size=chart_df["pnl_percent"].abs() + 0.1,
                 title="Confianca vs PnL",
                 color_discrete_map=colors_map,
                 hover_data=["symbol", "source", "signal"]
@@ -435,9 +460,9 @@ with tab4:
         # Heatmap: Win Rate por Simbolo x Fonte
         st.subheader("Heatmap: Win Rate por Simbolo x Fonte")
         pivot_data = []
-        for sym in closed_df["symbol"].unique():
-            for src in closed_df["source"].unique():
-                subset = closed_df[(closed_df["symbol"] == sym) & (closed_df["source"] == src)]
+        for sym in chart_df["symbol"].unique():
+            for src in chart_df["source"].unique():
+                subset = chart_df[(chart_df["symbol"] == sym) & (chart_df["source"] == src)]
                 if len(subset) > 0:
                     wins = len(subset[subset["pnl_percent"] > 0])
                     wr = wins / len(subset) * 100

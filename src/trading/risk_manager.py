@@ -344,6 +344,54 @@ def validate_risk_and_position(
                     "reason": f"Stop loss muito apertado: {sl_distance_pct:.2f}% (minimo 0.5%). Mercado choppy, evitar.",
                     "risk_level": "high"
                 }
+            if sl_distance_pct > 2.5:
+                return {
+                    "can_execute": False,
+                    "reason": f"Stop loss muito largo: {sl_distance_pct:.2f}% (maximo 2.5%). Dados mostram WR 42% com SL<=2% vs 22% com SL>3%.",
+                    "risk_level": "high"
+                }
+
+        # Filtro ADX: tendencia forte ja exauriu o movimento
+        _adx = signal.get('adx', 0)
+        if _adx and _adx > 35:
+            return {
+                "can_execute": False,
+                "reason": f"ADX muito alto: {_adx:.1f} (max 35). Dados mostram WR 15% com ADX>40 vs 44% com ADX 20-25.",
+                "risk_level": "medium"
+            }
+
+        # Filtro BUY + strong_bullish: dados mostram apenas 11.8% WR
+        _trend_label = signal.get('trend', '')
+        _direction = signal.get('signal', '')
+        if _direction == 'BUY' and _trend_label == 'strong_bullish':
+            return {
+                "can_execute": False,
+                "reason": "BUY em strong_bullish bloqueado: dados mostram 11.8% WR (momento ja exauriu).",
+                "risk_level": "medium"
+            }
+
+        # Filtro de horario: horas com WR < 15%
+        _BAD_HOURS = {0, 1, 5, 6, 10, 20, 21}
+        try:
+            from datetime import datetime, timezone
+            _hour_now = datetime.now(timezone.utc).hour
+            if _hour_now in _BAD_HOURS:
+                return {
+                    "can_execute": False,
+                    "reason": f"Horario {_hour_now}h UTC bloqueado: dados mostram WR 0-15% nessas horas.",
+                    "risk_level": "low"
+                }
+        except Exception:
+            pass
+
+        # Filtro ML dead zone: probabilidade 0.35-0.50 tem 12% WR
+        _ml_prob = signal.get('ml_probability')
+        if _ml_prob is not None and 0.35 <= float(_ml_prob) <= 0.50:
+            return {
+                "can_execute": False,
+                "reason": f"ML probabilidade na dead zone: {_ml_prob:.2f} (0.35-0.50 tem apenas 12% WR).",
+                "risk_level": "medium"
+            }
 
         # Validação de R:R mínimo
         entry_rr = signal.get('entry_price', 0)
@@ -400,17 +448,12 @@ def validate_risk_and_position(
         risk_per_trade = abs(entry_price - stop_loss)
         risk_percentage = (risk_per_trade / entry_price) * 100
 
-        # Stop largo NÃO bloqueia - ajusta tamanho da posição
-        # Só bloqueia se stop absurdo (> 20%) = provavelmente bug
-        if risk_percentage > 20.0:
+        if risk_percentage > 2.5:
             return {
                 "can_execute": False,
-                "reason": f"Stop loss provavelmente inválido: {risk_percentage:.2f}% de distância (> 20%)",
+                "reason": f"SL muito largo: {risk_percentage:.2f}% (max 2.5%). Dados: WR 42% com SL<=2% vs 16% com SL>3%.",
                 "risk_level": "high"
             }
-
-        if risk_percentage > 5.0:
-            logger.info(f"[RISCO] Stop largo ({risk_percentage:.2f}%) - posição será reduzida proporcionalmente")
 
         from src.core.config import settings as _risk_cfg
         current_drawdown = _calculate_current_drawdown()

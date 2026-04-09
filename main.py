@@ -349,6 +349,15 @@ async def main():
                     if closed_positions:
                         logger.info(f"[POSICAO FECHADA] Detectado fechamento: {closed_positions}")
 
+                        # Limpar tracking de TP1 break-even para posições fechadas
+                        try:
+                            from src.trading.position_monitor import get_monitor
+                            _mon = get_monitor()
+                            _mon._tp1_be_applied.difference_update(closed_positions)
+                            _mon._trailing_sl_applied = {k: v for k, v in _mon._trailing_sl_applied.items() if k not in closed_positions}
+                        except Exception:
+                            pass
+
                         # Registrar cooldowns para evitar whipsaw e reentrada na mesma direção
                         # CORRIGIDO: Aplica cooldown para QUALQUER fechamento (TP ou SL)
                         # Bug fix: DRIFTUSDT bateu TP2 e reabriu imediatamente no mesmo ciclo
@@ -410,6 +419,9 @@ async def main():
 
                                 # Verificar saúde (SL ativo, circuit breaker)
                                 await monitor.check_all_positions(exec_monitor)
+
+                                # TP1 protection: mover SL para break-even após TP1 disparar
+                                await monitor.protect_after_tp1(exec_monitor)
 
                                 # Trailing stop: proteger lucros progressivamente (CADA ciclo)
                                 await monitor.apply_trailing_stop(exec_monitor)

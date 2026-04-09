@@ -13,7 +13,7 @@ from scipy import stats
 
 ROOT = Path(__file__).resolve().parent.parent
 df = pd.read_csv(ROOT / "metrics_data.csv")
-df = df[~df["symbol"].isin(["JCTUSDT"])]
+df = df[~df["symbol"].isin(["JCTUSDT", "4USDT"])]
 df["ts"] = pd.to_datetime(df["timestamp"], errors="coerce")
 fin = df[df["outcome"].isin(["SL_HIT", "TP1_HIT", "TP2_HIT", "EXPIRED"])].copy()
 fin = fin[fin["signal"].isin(["BUY", "SELL"])].copy()

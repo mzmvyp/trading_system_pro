@@ -646,8 +646,8 @@ class BinanceFuturesExecutor:
 
         # PROTEÇÃO: Garantir distância mínima e MÁXIMA do SL
         sl_distance_pct = abs(entry_price - stop_loss) / entry_price * 100
-        MIN_SL_DISTANCE_PCT = 1.5  # Mínimo 1.5% — SL muito apertado → alavancagem absurda
-        MAX_SL_DISTANCE_PCT = 8.0  # Máximo 8% — SL muito longe → risco absurdo, R:R ruim
+        MIN_SL_DISTANCE_PCT = 1.0  # Mínimo 1.0%
+        MAX_SL_DISTANCE_PCT = 2.5  # Máximo 2.5% — dados mostram WR 42% com SL<=2% vs 16% com SL>3%
 
         if sl_distance_pct < MIN_SL_DISTANCE_PCT:
             old_sl = stop_loss

@@ -45,7 +45,7 @@ try:
 except Exception:
     BLACKLIST = {"JCTUSDT", "BRUSDT", "SIRENUSDT", "LYNUSDT", "UAIUSDT",
                  "ZECUSDT", "KNCUSDT", "PLAYUSDT", "DUSKUSDT", "BANKUSDT",
-                 "MUSDT", "PIPPINUSDT", "CTSIUSDT", "EDGEUSDT"}
+                 "MUSDT", "PIPPINUSDT", "CTSIUSDT", "EDGEUSDT", "4USDT"}
 
 try:
     from src.core.logger import get_logger

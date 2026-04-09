@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 MIN_SL_DISTANCE_PCT = 0.3
 # SL maximo tecnico: se nenhum nivel tecnico estiver a menos de 15%, provavelmente nao ha setup
 # O tamanho da posição é ajustado automaticamente para compensar stop largo
-MAX_SL_DISTANCE_PCT = 15.0
+MAX_SL_DISTANCE_PCT = 2.5
 # Minimo risk:reward aceitavel (1.0:1 — permite TPs em níveis técnicos reais)
 # Reduzido de 1.5 para 1.0: dados mostram que R:R forçado empurra TPs para
 # níveis sem suporte técnico, resultando em trades que quase acertam mas não fecham
