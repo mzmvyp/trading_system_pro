@@ -775,39 +775,23 @@ class BinanceFuturesExecutor:
                 logger.warning(f"[RISCO] Risco calculado muito baixo: ${risk_amount:.2f} (disponivel: ${available:.2f})")
                 return {"success": False, "error": f"Saldo disponivel muito baixo: ${available:.2f}"}
 
-            if position_size is None:
-                if stop_loss and stop_loss != entry_price:
-                    # Distancia do stop loss em $
-                    stop_distance = abs(entry_price - stop_loss)
-
-                    # Tamanho da posicao (em unidades do ativo)
-                    # Se stop for atingido, perda = position_size * stop_distance = risk_amount
-                    position_size = risk_amount / stop_distance
-
-                    # Calcular valor total da posicao
-                    position_value_calc = position_size * entry_price
-
-                    # IMPORTANTE: A margem necessária em modo ISOLATED é apenas o risco (valor do stop)
-                    # Não é o valor_posicao / alavancagem, é o próprio risk_amount + buffer
-                    margin_required = risk_amount * 1.2  # 20% de buffer para taxas e slippage
-
-                    logger.info(f"[RISCO] Disponivel: ${available:.2f} | Total: ${total_balance:.2f} | Risco: {settings.risk_percent_per_trade}% = ${risk_amount:.2f}")
-                    logger.info(f"[POSICAO] Entry: ${entry_price:.4f} | Stop: ${stop_loss:.4f} | Distancia: ${stop_distance:.4f}")
-                    logger.info(f"[POSICAO] Tamanho: {position_size:.4f} unidades | Valor: ${position_value_calc:.2f}")
-                    logger.info(f"[MARGEM] Margem isolada necessaria: ${margin_required:.2f} (risco + buffer)")
-
-                    # Verificar se tem margem disponível
-                    if margin_required > available:
-                        logger.warning(f"[MARGEM INSUFICIENTE] Necessario: ${margin_required:.2f} > Disponivel: ${available:.2f}")
-                        return {
-                            "success": False,
-                            "error": f"Margem insuficiente. Disponivel: ${available:.2f}, Necessario: ${margin_required:.2f}"
-                        }
-                else:
-                    # Fallback: usar 1% do saldo se nao tiver stop loss definido
-                    position_value = available * 0.01
-                    position_size = position_value / entry_price
-                    logger.warning(f"[POSICAO FALLBACK] Sem stop loss valido, usando 1% do saldo: {position_size:.6f} unidades")
+            # SEMPRE recalcular position_size com o SL FINAL
+            # O SL pode ter sido ajustado pelo executor (min/max distance)
+            # Formula: position_size = risk_amount / stop_distance_em_$
+            # Se o stop bater, perde exatamente risk_amount (5% do capital)
+            stop_distance = abs(entry_price - stop_loss) if stop_loss and stop_loss != entry_price else 0
+            if stop_distance > 0:
+                position_size = risk_amount / stop_distance
+                stop_pct = stop_distance / entry_price * 100
+                position_value_calc = position_size * entry_price
+                logger.info(f"[RISCO] Capital: ${total_balance:.2f} | Risco: {settings.risk_percent_per_trade}% = ${risk_amount:.2f} | Disponivel: ${available:.2f}")
+                logger.info(f"[POSICAO] Entry: ${entry_price:.4f} | Stop: ${stop_loss:.4f} | Distancia: {stop_pct:.2f}%")
+                logger.info(f"[POSICAO] risk ${risk_amount:.2f} / stop {stop_pct:.2f}% = Posição ${position_value_calc:.2f} ({position_size:.6f} unidades)")
+            else:
+                # Fallback: usar 1% do saldo se nao tiver stop loss definido
+                position_value = total_balance * 0.01
+                position_size = position_value / entry_price
+                logger.warning(f"[POSICAO FALLBACK] Sem stop loss valido, usando 1% do capital: {position_size:.6f} unidades")
 
             # Arredondar para a precisão correta
             position_size = self._round_quantity(position_size, symbol_info.get("quantity_precision", 3))
@@ -829,114 +813,62 @@ class BinanceFuturesExecutor:
                     "error": f"Valor nocional ${notional:.2f} menor que minimo ${min_notional}"
                 }
 
-            # 5. Calcular e configurar alavancagem DINAMICA
-            # CORRIGIDO: A margem isolada deve ser >= 2x o risco do SL
-            # Isso garante que o preço de liquidação fique BEM ALÉM do SL
-            # Antes: margem ≈ risk_amount → liquidação quase no SL (1% de diferença!)
-            # Agora: margem ≈ 2x risk_amount → liquidação ~2x além do SL
-            # Exemplo: SL a 8%, liquidação fica a ~16% → impossível liquidar antes do SL
+            # 5. Calcular alavancagem baseada no POSITION SIZE do risco
+            # O position_size é SAGRADO — vem da fórmula:
+            #   risk_amount = capital_total × 5%
+            #   stop_distance_% = |entry - stop| / entry
+            #   position_value = risk_amount / stop_distance_%
+            # O leverage se ADAPTA para executar esse position size com a margem disponível.
             position_value = position_size * entry_price
-            # Margem = 2x o risco + 10% buffer para taxas
-            # Isso faz a alavancagem ser ~metade do que era antes
-            # Se SL = 8%, leverage antes = ~11x, agora = ~5x
-            # Preço de liquidação fica a ~20% vs ~9% antes
-            desired_margin = risk_amount * 2.1  # 2x risco + 10% buffer para taxas
-
-            # Hard cap: margem por posição limitada ao MENOR entre:
-            #   - 25% do capital total (máx 4 posições simultâneas no pior caso)
-            #   - 85% da margem disponível (15% buffer para taxas/slippage)
-            # Antes era 10% do total — impossibilitava trades em contas pequenas
-            max_margin_allowed = min(total_balance * 0.25, available * 0.85)
-            if desired_margin > max_margin_allowed:
-                logger.info(f"[MARGEM CAP] Margem desejada ${desired_margin:.2f} > cap ${max_margin_allowed:.2f} (25% total=${total_balance * 0.25:.2f}, 85% disp=${available * 0.85:.2f}). Usando cap.")
-                desired_margin = max_margin_allowed
-
             symbol_max_leverage = symbol_info.get("max_leverage", 20) if symbol_info else 20
-            if desired_margin > 0:
-                calculated_leverage = int(position_value / desired_margin)
-                # Cap adicional: NUNCA mais que 7x para evitar liquidações
-                # Antes era 15x — causava ROIs de -17% a -43% nos trades perdedores
-                calculated_leverage = max(1, min(calculated_leverage, symbol_max_leverage, 7))
-            else:
-                calculated_leverage = self.default_leverage
 
-            actual_margin = position_value / calculated_leverage if calculated_leverage > 0 else position_value
+            # Leverage necessário = position_value / margem que vamos usar
+            # Usar até 90% do disponível como margem (10% buffer para taxas)
+            usable_margin = available * 0.90
+            if usable_margin <= 0:
+                return {"success": False, "error": f"Margem disponível insuficiente: ${available:.2f}"}
 
-            # SAFETY: Se a margem real excede o cap, reduzir position_size para caber
-            if actual_margin > max_margin_allowed and max_margin_allowed > 0:
+            # Leverage necessário para o position size calculado pelo risco
+            needed_leverage = position_value / usable_margin
+            calculated_leverage = max(1, int(needed_leverage) + 1)  # Arredondar pra cima
+
+            # Limite de segurança: liquidação deve ficar >= 2x além do SL
+            # liquidação ≈ 100% / leverage → leverage_max = 100 / (2 × SL%)
+            sl_pct = abs(entry_price - stop_loss) / entry_price * 100 if stop_loss else 5.0
+            safe_max_leverage = max(2, int(100 / (2 * sl_pct))) if sl_pct > 0 else 10
+
+            # Cap final: menor entre (segurança, exchange max, 20x hard limit)
+            max_leverage = min(safe_max_leverage, symbol_max_leverage, 20)
+            calculated_leverage = min(calculated_leverage, max_leverage)
+            calculated_leverage = max(1, calculated_leverage)
+
+            actual_margin = position_value / calculated_leverage
+
+            # Se mesmo com leverage máximo seguro a margem não cabe, reduzir position
+            if actual_margin > usable_margin:
                 old_size = position_size
-                # Recalcular: max_margin * leverage = max_position_value
-                max_position_value = max_margin_allowed * calculated_leverage
+                max_position_value = usable_margin * calculated_leverage
                 position_size = max_position_value / entry_price
                 position_size = self._round_quantity(position_size, symbol_info.get("quantity_precision", 3))
                 position_value = position_size * entry_price
                 actual_margin = position_value / calculated_leverage
                 logger.warning(
-                    f"[MARGEM REDUZIDA] Posição reduzida de {old_size:.6f} para {position_size:.6f} "
-                    f"para manter margem em ${actual_margin:.2f} (cap=${max_margin_allowed:.2f}, disp=${available:.2f})"
+                    f"[MARGEM] Posição reduzida de {old_size:.6f} para {position_size:.6f} "
+                    f"(margem disponível: ${available:.2f}, leverage: {calculated_leverage}x)"
                 )
 
-            # Verificar notional mínimo APÓS redução de margem
-            # Se abaixo do mínimo, tentar ajustar leverage para caber
-            if position_value < min_notional:
-                import math
-                precision = symbol_info.get("quantity_precision", 3)
-                factor = 10 ** precision
-                min_size_for_notional = math.ceil((min_notional / entry_price) * factor) / factor
-                min_value = min_size_for_notional * entry_price
-
-                # Calcular leverage máximo seguro baseado na distância do SL
-                # Liquidação deve ficar >= 2x além do SL para segurança
-                sl_dist_pct = abs(entry_price - stop_loss) / entry_price * 100 if stop_loss else 5.0
-                safe_max_leverage = max(2, min(int(100 / (2 * sl_dist_pct)), symbol_max_leverage, 20))
-                rescue_margin = min_value / safe_max_leverage
-
-                if rescue_margin <= available * 0.90:
-                    position_size = min_size_for_notional
-                    position_value = min_value
-                    calculated_leverage = safe_max_leverage
-                    actual_margin = rescue_margin
-                    logger.info(
-                        f"[NOTIONAL RESCUE] Posição ajustada para ${position_value:.2f} "
-                        f"(mín ${min_notional:.0f}), leverage={calculated_leverage}x, "
-                        f"margem=${actual_margin:.2f} (disp=${available:.2f})"
-                    )
-                else:
-                    return {
-                        "success": False,
-                        "error": f"Posição ${position_value:.2f} abaixo do mínimo (${min_notional:.0f}). "
-                                 f"Ajuste para ${min_value:.2f} requer ${rescue_margin:.2f} margem "
-                                 f"mas disponível é ${available:.2f}"
-                    }
-
-            # Verificação de segurança: SL distance * leverage deve ser < 80% da margem
-            # Se não, a liquidação pode acontecer antes do SL
-            sl_pct = abs(entry_price - stop_loss) / entry_price * 100
-            margin_loss_at_sl = sl_pct * calculated_leverage  # % da margem perdida no SL
-            liq_distance_approx = 100.0 / calculated_leverage * 0.95  # ~distância de liquidação (com maintenance margin)
+            # Logs de segurança
+            margin_loss_at_sl = sl_pct * calculated_leverage
+            liq_distance_approx = 100.0 / calculated_leverage * 0.95
             logger.info(
-                f"[ALAVANCAGEM] Posicao: ${position_value:.2f} | Risco: ${risk_amount:.2f} | "
+                f"[POSICAO] Valor: ${position_value:.2f} | Risco: ${risk_amount:.2f} (5% capital) | "
                 f"Margem: ${actual_margin:.2f} | Leverage: {calculated_leverage}x "
-                f"(max_par={symbol_info.get('max_leverage', '?') if symbol_info else '?'})"
+                f"(max_seguro={max_leverage}x, max_par={symbol_max_leverage}x)"
             )
             logger.info(
                 f"[SEGURANCA] SL: {sl_pct:.1f}% | Perda no SL: {margin_loss_at_sl:.0f}% da margem | "
                 f"Liquidação ~{liq_distance_approx:.1f}% | "
                 f"Gap seguro: {liq_distance_approx - sl_pct:.1f}%"
-            )
-            if margin_loss_at_sl > 75:
-                logger.warning(
-                    f"[PERIGO] Perda no SL seria {margin_loss_at_sl:.0f}% da margem! "
-                    f"Muito próximo da liquidação. Reduzindo leverage."
-                )
-                # Recalcular para que perda no SL = máximo 60% da margem
-                safe_leverage = int(60.0 / sl_pct) if sl_pct > 0 else 5
-                calculated_leverage = max(1, min(safe_leverage, calculated_leverage))
-                actual_margin = position_value / calculated_leverage if calculated_leverage > 0 else position_value
-                margin_loss_at_sl = sl_pct * calculated_leverage
-                logger.warning(
-                    f"[CORRIGIDO] Novo leverage: {calculated_leverage}x | "
-                    f"Perda no SL: {margin_loss_at_sl:.0f}% da margem"
                 )
 
             leverage_result = await self.set_leverage(symbol, calculated_leverage)
