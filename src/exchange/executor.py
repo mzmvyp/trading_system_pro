@@ -757,10 +757,10 @@ class BinanceFuturesExecutor:
             if not symbol_info or "error" in symbol_info:
                 return {"success": False, "error": f"Erro ao obter info do simbolo: {symbol_info}"}
 
-            # 4. Calcular risco baseado no SALDO DISPONIVEL
-            # Usa o disponivel para evitar "Margin insufficient" da Binance
-            # Se tem pouca margem livre, reduz o risco proporcionalmente
-            capital_base = available  # Usar saldo DISPONIVEL, nao o total
+            # 4. Calcular risco baseado no CAPITAL TOTAL (wallet_balance)
+            # O risco deve ser calculado sobre o capital total, nao sobre a margem disponivel.
+            # Usar available_balance causava posicoes microscopicas quando havia posicoes abertas.
+            capital_base = total_balance  # Usar CAPITAL TOTAL para calcular risco
             risk_percent = settings.risk_percent_per_trade / 100.0
             risk_amount = capital_base * risk_percent
 
@@ -842,9 +842,9 @@ class BinanceFuturesExecutor:
             # Preço de liquidação fica a ~20% vs ~9% antes
             desired_margin = risk_amount * 2.1  # 2x risco + 10% buffer para taxas
 
-            # Hard cap: margem NUNCA deve exceder 10% do saldo disponível
+            # Hard cap: margem NUNCA deve exceder 10% do capital total
             # Isso garante que uma única posição não consume mais que 10% do capital
-            max_margin_allowed = available * 0.10
+            max_margin_allowed = total_balance * 0.10
             if desired_margin > max_margin_allowed:
                 logger.info(f"[MARGEM CAP] Margem desejada ${desired_margin:.2f} > 10% do disponível (${max_margin_allowed:.2f}). Usando cap.")
                 desired_margin = max_margin_allowed
@@ -1116,7 +1116,8 @@ class BinanceFuturesExecutor:
                     "mark_price": float(pos.get("markPrice", 0)),
                     "unrealized_pnl": float(pos["unRealizedProfit"]),
                     "leverage": int(pos["leverage"]),
-                    "liquidation_price": float(pos["liquidationPrice"])
+                    "liquidation_price": float(pos["liquidationPrice"]),
+                    "update_time": int(pos.get("updateTime", 0))
                 })
 
         return open_positions

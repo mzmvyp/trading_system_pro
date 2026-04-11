@@ -52,7 +52,7 @@ class Settings(BaseSettings):
 
     # Porcentagem do capital a arriscar por trade
     # 5% = se o stop loss for atingido, perde 5% do capital
-    risk_percent_per_trade: float = 2.0  # 2% do capital arriscado por trade (antes 5% — muito agressivo)
+    risk_percent_per_trade: float = 5.0  # 5% do capital arriscado por trade
 
     # Como calcular o tamanho da posicao:
     # 1. Risco em $ = capital * (risk_percent_per_trade / 100)

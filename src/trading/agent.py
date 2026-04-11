@@ -1062,7 +1062,7 @@ Responda APENAS com JSON:
                             _ds_executor = BinanceFuturesExecutor()
                             _ds_balance = await _ds_executor.get_balance()
                             if "error" not in _ds_balance:
-                                _ds_capital = _ds_balance.get("available_balance", 0)
+                                _ds_capital = _ds_balance.get("total_balance", _ds_balance.get("wallet_balance", 0))
                         except Exception as e:
                             logger.error(f"[CAPITAL] Falha ao obter saldo da Binance: {e}")
 
@@ -1890,7 +1890,7 @@ Responda APENAS com JSON:
                     _cap_executor = BinanceFuturesExecutor()
                     _cap_balance = await _cap_executor.get_balance()
                     if "error" not in _cap_balance:
-                        _capital_value = _cap_balance.get("available_balance", 0)
+                        _capital_value = _cap_balance.get("total_balance", _cap_balance.get("wallet_balance", 0))
                 except Exception as e:
                     logger.error(f"[CAPITAL] Falha ao obter saldo da Binance: {e}")
 
@@ -1909,7 +1909,7 @@ Responda APENAS com JSON:
                         # MODO REAL: Executar na Binance Futures
                         from src.exchange.executor import BinanceFuturesExecutor
                         executor = BinanceFuturesExecutor()
-                        execution_result = await executor.execute_signal(agno_signal, position_size=None)
+                        execution_result = await executor.execute_signal(agno_signal, position_size=position_size)
                         if execution_result.get("success"):
                             agno_signal["_executed"] = True
                             self._mark_signal_executed(agno_signal, "real", True, execution_result.get("message", ""))
