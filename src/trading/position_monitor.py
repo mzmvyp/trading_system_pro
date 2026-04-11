@@ -642,10 +642,18 @@ class PositionMonitor:
                         logger.debug(f"[REAVALIACAO] {symbol}: pulando, aberta ha {hours_open:.1f}h (min: {settings.reevaluation_min_time_open_hours}h)")
                         continue
                 else:
-                    # SEM TIMESTAMP = não reavaliar (posição pode ter sido aberta agora)
-                    # Evita fechar posições recém-abertas por falta de execution record
-                    logger.info(f"[REAVALIACAO] {symbol}: sem entry_time encontrado — pulando reavaliação (segurança)")
-                    continue
+                    # SEM TIMESTAMP local: tentar usar update_time da Binance (vem no pos dict)
+                    _update_ms = pos.get("update_time", 0)
+                    if _update_ms and _update_ms > 0:
+                        entry_time = datetime.fromtimestamp(_update_ms / 1000, tz=timezone.utc)
+                        hours_open = (now - entry_time).total_seconds() / 3600
+                        if hours_open < settings.reevaluation_min_time_open_hours:
+                            logger.debug(f"[REAVALIACAO] {symbol}: pulando, aberta ha {hours_open:.1f}h (min: {settings.reevaluation_min_time_open_hours}h)")
+                            continue
+                        logger.info(f"[REAVALIACAO] {symbol}: usando update_time da Binance ({hours_open:.1f}h aberta)")
+                    else:
+                        # Sem nenhum timestamp: reavaliar mesmo assim (posicao pode estar aberta ha dias)
+                        logger.warning(f"[REAVALIACAO] {symbol}: sem entry_time — reavaliando mesmo assim (segurança: posicao pode ser antiga)")
 
                 results["reevaluated"] += 1
                 self._last_reeval[symbol] = now
