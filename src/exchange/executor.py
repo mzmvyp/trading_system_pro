@@ -844,8 +844,21 @@ class BinanceFuturesExecutor:
 
             actual_margin = position_value / calculated_leverage
 
-            # Se mesmo com leverage máximo seguro a margem não cabe, reduzir position
+            # Se mesmo com leverage máximo seguro a margem não cabe, verificar viabilidade
             if actual_margin > usable_margin:
+                reduction_pct = 1 - (usable_margin * calculated_leverage / position_value)
+                if reduction_pct > 0.50:
+                    # Redução > 50% = trade inviável, não abre posição inútil
+                    logger.warning(
+                        f"[MARGEM BLOQUEADO] {symbol}: posição ${position_value:.2f} requer ${actual_margin:.2f} margem, "
+                        f"disponível: ${available:.2f}. Redução seria {reduction_pct*100:.0f}% — trade cancelado."
+                    )
+                    return {
+                        "success": False,
+                        "error": f"Margem insuficiente. Posição ${position_value:.2f} precisaria de "
+                                 f"redução de {reduction_pct*100:.0f}% (máx 50%). Disponível: ${available:.2f}"
+                    }
+                # Redução <= 50%: aceitar com ajuste
                 old_size = position_size
                 max_position_value = usable_margin * calculated_leverage
                 position_size = max_position_value / entry_price
@@ -854,7 +867,7 @@ class BinanceFuturesExecutor:
                 actual_margin = position_value / calculated_leverage
                 logger.warning(
                     f"[MARGEM] Posição reduzida de {old_size:.6f} para {position_size:.6f} "
-                    f"(margem disponível: ${available:.2f}, leverage: {calculated_leverage}x)"
+                    f"(-{reduction_pct*100:.0f}%, margem disponível: ${available:.2f}, leverage: {calculated_leverage}x)"
                 )
 
             # Logs de segurança
@@ -931,6 +944,23 @@ class BinanceFuturesExecutor:
                 logger.error(f"Erro ao colocar Take Profit 2: {tp2_order}")
             else:
                 logger.info(f"[TAKE PROFIT 2] Colocado: ID {_order_id(tp2_order)}")
+
+            # SEGURANÇA: Se AMBOS os TPs falharam, posição fica sem targets — FECHAR
+            if "error" in tp1_order and "error" in tp2_order:
+                logger.error(
+                    f"[CRITICAL] {symbol}: TP1 e TP2 falharam! Posição sem take profit. "
+                    f"TP1: {tp1_order.get('error', '?')} | TP2: {tp2_order.get('error', '?')}"
+                )
+                logger.error(f"[CRITICAL] Fechando posição {symbol} — NÃO operar sem targets!")
+                try:
+                    await self.close_position(symbol)
+                except Exception as close_err:
+                    logger.error(f"[CRITICAL] Falha ao fechar posição sem TPs: {close_err}")
+                return {
+                    "success": False,
+                    "error": f"TPs falharam para {symbol}. Posição fechada por segurança. "
+                             f"TP1: {tp1_order.get('error', '?')}, TP2: {tp2_order.get('error', '?')}"
+                }
 
             # 12. Registrar execução completa
             execution_record = {
