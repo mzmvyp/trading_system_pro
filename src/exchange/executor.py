@@ -822,15 +822,10 @@ class BinanceFuturesExecutor:
             position_value = position_size * entry_price
             symbol_max_leverage = symbol_info.get("max_leverage", 20) if symbol_info else 20
 
-            # Leverage necessário = position_value / margem que vamos usar
             # Usar até 90% do disponível como margem (10% buffer para taxas)
             usable_margin = available * 0.90
             if usable_margin <= 0:
                 return {"success": False, "error": f"Margem disponível insuficiente: ${available:.2f}"}
-
-            # Leverage necessário para o position size calculado pelo risco
-            needed_leverage = position_value / usable_margin
-            calculated_leverage = max(1, int(needed_leverage) + 1)  # Arredondar pra cima
 
             # Limite de segurança: liquidação deve ficar >= 2x além do SL
             # liquidação ≈ 100% / leverage → leverage_max = 100 / (2 × SL%)
@@ -839,8 +834,12 @@ class BinanceFuturesExecutor:
 
             # Cap final: menor entre (segurança, exchange max, 20x hard limit)
             max_leverage = min(safe_max_leverage, symbol_max_leverage, 20)
-            calculated_leverage = min(calculated_leverage, max_leverage)
-            calculated_leverage = max(1, calculated_leverage)
+
+            # Usar o MÁXIMO leverage seguro para MINIMIZAR margem
+            # Antes: usava leverage mínimo para caber na margem → consumia TODA a margem
+            # Agora: usa leverage máximo seguro → margem mínima, mais capital livre
+            # Exemplo: $550 posição, SL 0.9% → leverage 20x → margem $27.50 (não $75!)
+            calculated_leverage = max(1, max_leverage)
 
             actual_margin = position_value / calculated_leverage
 
