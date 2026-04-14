@@ -542,7 +542,7 @@ def main():
 def _render_bilstm_tab():
     """Aba Bi-LSTM: status, gerar dataset, treinar."""
     st.subheader("🧠 Bi-LSTM Sequence Validator")
-    st.caption("Modelo de sequência temporal para validar sinais. Treinado com dados do backtest.")
+    st.caption("Modelo de sequência temporal para validar sinais. Treinado com sinais reais.")
 
     bilstm_info = load_bilstm_model_info()
     has_bilstm = bool(bilstm_info)
@@ -550,18 +550,10 @@ def _render_bilstm_tab():
     # Sidebar: parâmetros para dataset e treino
     with st.sidebar:
         st.subheader("🧠 Bi-LSTM - Parâmetros")
-        symbols_bilstm = st.multiselect(
-            "Símbolos",
-            ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"],
-            default=["BTCUSDT", "ETHUSDT", "SOLUSDT"],
-            key="bilstm_symbols",
-        )
-        interval_bilstm = st.selectbox("Intervalo", ["1h", "4h", "15m"], index=0, key="bilstm_interval")
         seq_length = st.slider("Sequence Length", 20, 120, 60, key="bilstm_seq")
-        days_back = st.slider("Dias de histórico", 30, 365, 180, key="bilstm_days")
-        n_variations = st.slider("Variações de parâmetros", 5, 50, 20, key="bilstm_nvar")
         epochs_bilstm = st.slider("Epochs", 10, 200, 100, key="bilstm_epochs")
         batch_size_bilstm = st.selectbox("Batch size", [16, 32, 64], index=1, key="bilstm_batch")
+        n_optuna_trials = st.slider("Optuna Trials", 10, 50, 20, key="bilstm_optuna_trials")
 
     if has_bilstm:
         res = bilstm_info.get("results", {})
@@ -580,30 +572,51 @@ def _render_bilstm_tab():
         st.metric("Sequence length", bilstm_info.get("sequence_length", "N/A"))
         st.metric("Features", bilstm_info.get("n_features", "N/A"))
         st.metric("Amostras treino/teste", f"{bilstm_info.get('train_samples', 0)} / {bilstm_info.get('test_samples', 0)}")
+        st.metric("Fonte", bilstm_info.get("data_source", "N/A"))
+        if bilstm_info.get("optuna_best_score"):
+            st.metric("Optuna Score", f"{bilstm_info['optuna_best_score']:.4f}")
+            st.metric("Op Accuracy", f"{bilstm_info.get('optuna_op_accuracy', 0):.1%}")
     else:
         st.warning("Nenhum modelo Bi-LSTM treinado. Gere o dataset e treine abaixo.")
 
     dataset_ok = backtest_dataset_exists()
     if not dataset_ok:
-        st.info("Gere o dataset do backtest primeiro (pode levar 5–10 min).")
+        st.info("Gere o dataset de sinais reais primeiro.")
 
-    if st.button("📦 Gerar Dataset do Backtest", type="primary", use_container_width=True):
-        with st.spinner("Rodando backtests para gerar dados de treino... (pode levar 5-10 min)"):
+    # ===== GERAR DATASET DE SINAIS REAIS =====
+    if st.button("📊 Gerar Dataset de Sinais Reais", type="primary", use_container_width=True):
+        with st.spinner("Gerando dataset a partir dos sinais reais (pode levar 5-15 min)..."):
             try:
-                from src.ml.backtest_dataset_generator import BacktestDatasetGenerator
-                generator = BacktestDatasetGenerator(
-                    symbols=symbols_bilstm or ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
-                    interval=interval_bilstm,
+                from src.ml.real_signal_dataset_generator import RealSignalDatasetGenerator
+                generator = RealSignalDatasetGenerator(
                     sequence_length=seq_length,
-                    days_back=days_back,
-                    n_param_variations=n_variations,
+                    max_signals=5000,
                 )
                 stats = asyncio.run(generator.generate())
-                st.success(f"Dataset gerado: {stats.get('total_trades', 0)} trades | Símbolos: {stats.get('symbols_processed', [])}")
+                total = stats.get("total_trades", 0)
+                if total >= 50 and "error" not in stats:
+                    wins = stats.get("winning_trades", 0)
+                    losses = stats.get("losing_trades", 0)
+                    st.success(
+                        f"Dataset gerado: {total} sinais reais | "
+                        f"{wins} wins / {losses} losses | "
+                        f"Pares: {len(stats.get('symbols_processed', []))}"
+                    )
+                else:
+                    st.warning(f"Poucos sinais com outcome ({total}). Fallback para backtest...")
+                    from src.ml.backtest_dataset_generator import BacktestDatasetGenerator
+                    bt_gen = BacktestDatasetGenerator(
+                        symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+                        interval="1h", sequence_length=seq_length,
+                        days_back=180, n_param_variations=20,
+                    )
+                    stats = asyncio.run(bt_gen.generate())
+                    st.success(f"Dataset backtest gerado: {stats.get('total_trades', 0)} trades")
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao gerar dataset: {e}")
 
+    # ===== TREINAR BI-LSTM =====
     if dataset_ok and st.button("🎯 Treinar Bi-LSTM", use_container_width=True):
         with st.spinner("Treinando Bi-LSTM..."):
             try:
@@ -611,10 +624,36 @@ def _render_bilstm_tab():
                 validator = LSTMSequenceValidator()
                 results = validator.train(epochs=epochs_bilstm, batch_size=batch_size_bilstm)
                 test_acc = results.get("test", {}).get("accuracy", 0)
-                st.success(f"Treino concluído! Accuracy teste: {test_acc:.1%}")
+                test_f1 = results.get("test", {}).get("f1_score", 0)
+                st.success(f"Treino concluido! Accuracy: {test_acc:.1%} | F1: {test_f1:.3f}")
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao treinar: {e}")
+
+    # ===== OPTUNA — OTIMIZAR HIPERPARÂMETROS =====
+    if dataset_ok and st.button("🔬 Otimizar com Optuna", use_container_width=True):
+        with st.spinner(f"Otimizando hiperparametros ({n_optuna_trials} trials)... pode levar 30-60 min"):
+            try:
+                from src.ml.lstm_sequence_validator import LSTMSequenceValidator
+                validator = LSTMSequenceValidator()
+                results = validator.train_with_optuna(
+                    n_trials=n_optuna_trials,
+                    epochs_per_trial=30,
+                )
+                if results.get("success"):
+                    bp = results.get("best_params", {})
+                    st.success(
+                        f"Otimizacao concluida! Score: {results.get('best_score', 0):.4f} | "
+                        f"Op Accuracy: {results.get('op_accuracy', 0):.1%} "
+                        f"(n={results.get('n_operational', 0)}) | "
+                        f"Units: {bp.get('units_1', '?')}+{bp.get('units_2', '?')} | "
+                        f"LR: {bp.get('lr', '?'):.5f}"
+                    )
+                else:
+                    st.error(f"Erro: {results.get('reason', 'desconhecido')}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao otimizar: {e}")
 
 
 async def _fetch_data_with_timeout(engine, symbol: str, interval: str, start_dt, end_dt, timeout: int = 90):
