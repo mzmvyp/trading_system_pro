@@ -131,10 +131,36 @@ class LSTMSequenceValidator:
         from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
         print("\n" + "=" * 60)
-        print("TREINAMENTO Bi-LSTM (dados do backtest)")
+        print("TREINAMENTO Bi-LSTM")
         print("=" * 60)
 
         X_train, X_test, y_train, y_test = self.load_dataset()
+
+        # ========================================
+        # BALANCEAR TREINO: igualar wins e losses
+        # ========================================
+        # Sem balanceamento, 71% losses → modelo prevê "loss" pra tudo
+        # Balancear ANTES de normalizar para não desperdiçar cálculo
+        win_rate = float(y_train.mean())
+        if win_rate < 0.40 or win_rate > 0.60:
+            idx_win = np.where(y_train == 1)[0]
+            idx_loss = np.where(y_train == 0)[0]
+            n_min = min(len(idx_win), len(idx_loss))
+            if n_min >= 20:
+                rng = np.random.RandomState(42)
+                if len(idx_win) > n_min:
+                    idx_win = rng.choice(idx_win, size=n_min, replace=False)
+                if len(idx_loss) > n_min:
+                    idx_loss = rng.choice(idx_loss, size=n_min, replace=False)
+                balanced_idx = np.sort(np.concatenate([idx_win, idx_loss]))
+                X_train = X_train[balanced_idx]
+                y_train = y_train[balanced_idx]
+                print(f"[BALANCE] Treino balanceado: {len(idx_win)} wins + {len(idx_loss)} losses = {len(X_train)} "
+                      f"(era {win_rate*100:.0f}% → agora 50%)")
+            else:
+                print(f"[BALANCE] Poucos exemplos da classe minoritária ({n_min}) — mantendo desbalanceado")
+        else:
+            print(f"[BALANCE] Treino já balanceado ({win_rate*100:.0f}% win rate)")
 
         # Normalizar features — fit APENAS no train (evita data leakage)
         from sklearn.preprocessing import StandardScaler
