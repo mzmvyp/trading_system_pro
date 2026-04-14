@@ -562,6 +562,236 @@ class LSTMSequenceValidator:
             logger.error(f"[Bi-LSTM] Erro no train_from_backtest: {e}")
             return {"success": False, "reason": str(e)}
 
+    def train_with_optuna(self, n_trials: int = 20, epochs_per_trial: int = 30) -> Dict:
+        """
+        Otimiza hiperparâmetros da Bi-LSTM com Optuna.
+        Mesmo padrão usado no sklearn ML (online_learning.py).
+
+        Busca: units, dropout, learning_rate, L2, batch_size, dense_units.
+        Métrica: composite score (win_rate + balanced_accuracy + approval_rate).
+        """
+        import optuna
+        import tensorflow as tf
+        from tensorflow.keras.callbacks import EarlyStopping
+        from tensorflow.keras.layers import (
+            LSTM, BatchNormalization, Bidirectional, Dense, Dropout, Input,
+        )
+        from tensorflow.keras.models import Sequential
+        from tensorflow.keras.optimizers import Adam
+        from tensorflow.keras.regularizers import l1_l2
+        from sklearn.preprocessing import StandardScaler
+
+        print("\n" + "=" * 60)
+        print("OPTUNA — OTIMIZAÇÃO DE HIPERPARÂMETROS Bi-LSTM")
+        print(f"Trials: {n_trials} | Epochs/trial: {epochs_per_trial}")
+        print("=" * 60)
+
+        # Carregar e preparar dados
+        X_train_raw, X_test, y_train_raw, y_test = self.load_dataset()
+
+        # Balancear treino
+        win_rate = float(y_train_raw.mean())
+        if win_rate < 0.40 or win_rate > 0.60:
+            idx_win = np.where(y_train_raw == 1)[0]
+            idx_loss = np.where(y_train_raw == 0)[0]
+            n_min = min(len(idx_win), len(idx_loss))
+            if n_min >= 20:
+                rng = np.random.RandomState(42)
+                idx_win_bal = rng.choice(idx_win, size=n_min, replace=False) if len(idx_win) > n_min else idx_win
+                idx_loss_bal = rng.choice(idx_loss, size=n_min, replace=False) if len(idx_loss) > n_min else idx_loss
+                balanced_idx = np.sort(np.concatenate([idx_win_bal, idx_loss_bal]))
+                X_train_raw = X_train_raw[balanced_idx]
+                y_train_raw = y_train_raw[balanced_idx]
+                print(f"[BALANCE] {n_min} wins + {n_min} losses = {len(X_train_raw)}")
+
+        # Normalizar
+        scaler = StandardScaler()
+        n_features = X_train_raw.shape[2]
+        seq_len = X_train_raw.shape[1]
+        X_train_flat = scaler.fit_transform(X_train_raw.reshape(-1, n_features))
+        X_test_flat = scaler.transform(X_test.reshape(-1, n_features))
+        X_train_sc = np.nan_to_num(X_train_flat.reshape(len(X_train_raw), seq_len, n_features))
+        X_test_sc = np.nan_to_num(X_test_flat.reshape(len(X_test), seq_len, n_features))
+
+        best_val_auc = [0.0]
+
+        def objective(trial):
+            tf.keras.backend.clear_session()
+
+            # Hiperparâmetros a otimizar
+            units_1 = trial.suggest_int("units_1", 24, 80, step=8)
+            units_2 = trial.suggest_int("units_2", 8, 48, step=8)
+            dropout = trial.suggest_float("dropout", 0.10, 0.45)
+            rec_dropout = trial.suggest_float("rec_dropout", 0.10, 0.45)
+            lr = trial.suggest_float("lr", 1e-4, 5e-3, log=True)
+            l2_reg = trial.suggest_float("l2", 1e-5, 1e-2, log=True)
+            dense_units = trial.suggest_int("dense_units", 8, 48, step=8)
+            dense_dropout = trial.suggest_float("dense_dropout", 0.15, 0.50)
+            batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
+
+            model = Sequential([
+                Input(shape=(seq_len, n_features)),
+                Bidirectional(LSTM(units=units_1, return_sequences=True,
+                                   dropout=dropout, recurrent_dropout=rec_dropout,
+                                   kernel_regularizer=l1_l2(l1=1e-5, l2=l2_reg))),
+                BatchNormalization(),
+                Bidirectional(LSTM(units=units_2, return_sequences=False,
+                                   dropout=dropout, recurrent_dropout=rec_dropout,
+                                   kernel_regularizer=l1_l2(l1=1e-5, l2=l2_reg))),
+                BatchNormalization(),
+                Dense(dense_units, activation="relu", kernel_regularizer=l1_l2(l1=1e-5, l2=l2_reg)),
+                Dropout(dense_dropout),
+                Dense(1, activation="sigmoid"),
+            ])
+            model.compile(optimizer=Adam(learning_rate=lr),
+                          loss="binary_crossentropy",
+                          metrics=["accuracy", tf.keras.metrics.AUC(name="auc")])
+
+            early_stop = EarlyStopping(monitor="val_auc", patience=8,
+                                       restore_best_weights=True, mode="max")
+
+            history = model.fit(
+                X_train_sc, y_train_raw, epochs=epochs_per_trial, batch_size=batch_size,
+                validation_data=(X_test_sc, y_test),
+                callbacks=[early_stop], verbose=0,
+            )
+
+            # Avaliar no teste
+            probs = model.predict(X_test_sc, verbose=0).flatten()
+            preds = (probs > 0.5).astype(int)
+
+            # Operacional: sinais que cruzam 0.6/0.4
+            operational_mask = (probs >= 0.6) | (probs <= 0.4)
+            n_operational = operational_mask.sum()
+
+            if n_operational < max(3, len(y_test) * 0.05):
+                return -1.0  # Modelo neutro demais
+
+            op_preds = np.where(probs >= 0.6, 1, np.where(probs <= 0.4, 0, -1))
+            op_mask = op_preds >= 0
+            op_correct = (op_preds[op_mask] == y_test[op_mask]).sum()
+            op_accuracy = op_correct / max(n_operational, 1)
+
+            # Balanced accuracy
+            from sklearn.metrics import balanced_accuracy_score, f1_score
+            bal_acc = balanced_accuracy_score(y_test, preds)
+            f1 = f1_score(y_test, preds, zero_division=0)
+
+            # Composite: priorizar accuracy operacional + F1 + cobertura
+            approval_rate = n_operational / len(y_test)
+            ar_norm = min(approval_rate / 0.5, 1.0)
+
+            composite = (0.35 * op_accuracy +
+                         0.25 * f1 +
+                         0.25 * bal_acc +
+                         0.15 * ar_norm)
+
+            trial.set_user_attr("op_accuracy", float(op_accuracy))
+            trial.set_user_attr("n_operational", int(n_operational))
+            trial.set_user_attr("f1", float(f1))
+            trial.set_user_attr("bal_acc", float(bal_acc))
+
+            print(f"  Trial {trial.number}: composite={composite:.4f} | "
+                  f"op_acc={op_accuracy:.1%} (n={n_operational}) | "
+                  f"f1={f1:.3f} | bal_acc={bal_acc:.1%}")
+
+            return composite
+
+        # Suprimir logs do Optuna
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        study = optuna.create_study(direction="maximize")
+        study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+
+        best = study.best_trial
+        bp = best.params
+        print(f"\n{'='*60}")
+        print(f"MELHOR TRIAL: #{best.number}")
+        print(f"  Score: {best.value:.4f}")
+        print(f"  Op accuracy: {best.user_attrs.get('op_accuracy', 0):.1%} "
+              f"(n={best.user_attrs.get('n_operational', 0)})")
+        print(f"  F1: {best.user_attrs.get('f1', 0):.3f}")
+        print(f"  Params: units={bp['units_1']}+{bp['units_2']}, "
+              f"dropout={bp['dropout']:.2f}, lr={bp['lr']:.5f}, "
+              f"L2={bp['l2']:.5f}, dense={bp['dense_units']}")
+        print(f"{'='*60}")
+
+        # Treinar modelo final com melhores parâmetros + mais epochs
+        print("\n[FINAL] Treinando modelo com melhores hiperparâmetros...")
+        tf.keras.backend.clear_session()
+
+        self.scaler = scaler
+        self.sequence_length = seq_len
+        self.n_features = n_features
+
+        final_model = Sequential([
+            Input(shape=(seq_len, n_features)),
+            Bidirectional(LSTM(units=bp["units_1"], return_sequences=True,
+                               dropout=bp["dropout"], recurrent_dropout=bp["rec_dropout"],
+                               kernel_regularizer=l1_l2(l1=1e-5, l2=bp["l2"]))),
+            BatchNormalization(),
+            Bidirectional(LSTM(units=bp["units_2"], return_sequences=False,
+                               dropout=bp["dropout"], recurrent_dropout=bp["rec_dropout"],
+                               kernel_regularizer=l1_l2(l1=1e-5, l2=bp["l2"]))),
+            BatchNormalization(),
+            Dense(bp["dense_units"], activation="relu",
+                  kernel_regularizer=l1_l2(l1=1e-5, l2=bp["l2"])),
+            Dropout(bp["dense_dropout"]),
+            Dense(1, activation="sigmoid"),
+        ])
+        final_model.compile(optimizer=Adam(learning_rate=bp["lr"]),
+                            loss="binary_crossentropy",
+                            metrics=["accuracy", tf.keras.metrics.AUC(name="auc")])
+
+        from tensorflow.keras.callbacks import ReduceLROnPlateau
+        callbacks = [
+            EarlyStopping(monitor="val_auc", patience=15, restore_best_weights=True, mode="max"),
+            ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=7, min_lr=1e-6),
+        ]
+
+        final_model.fit(
+            X_train_sc, y_train_raw, epochs=100, batch_size=bp["batch_size"],
+            validation_data=(X_test_sc, y_test),
+            callbacks=callbacks, verbose=1,
+        )
+
+        self.model = final_model
+        results = self._evaluate(X_train_sc, y_train_raw, X_test_sc, y_test)
+
+        # Detectar fonte do dataset
+        _data_source = "unknown"
+        try:
+            _ds_info_path = DATASET_DIR / "dataset_info_latest.json"
+            if _ds_info_path.exists():
+                with open(_ds_info_path, "r") as _f:
+                    _data_source = json.load(_f).get("data_source", "unknown")
+        except Exception:
+            pass
+
+        self.model_info = {
+            "type": "Bi-LSTM (Optuna)",
+            "training_date": datetime.now(timezone.utc).isoformat(),
+            "sequence_length": seq_len,
+            "n_features": n_features,
+            "train_samples": len(X_train_raw),
+            "test_samples": len(X_test),
+            "results": results,
+            "data_source": _data_source,
+            "optuna_best_params": bp,
+            "optuna_best_score": best.value,
+            "optuna_n_trials": n_trials,
+            "optuna_op_accuracy": best.user_attrs.get("op_accuracy", 0),
+        }
+        self._save_model()
+
+        return {
+            "success": True,
+            "results": results,
+            "best_params": bp,
+            "best_score": best.value,
+            "op_accuracy": best.user_attrs.get("op_accuracy", 0),
+            "n_operational": best.user_attrs.get("n_operational", 0),
+        }
+
     def _log_prediction(self, symbol: str, prob: float, prediction: int):
         """Registra predição do LSTM para avaliação futura (dashboard)."""
         try:
