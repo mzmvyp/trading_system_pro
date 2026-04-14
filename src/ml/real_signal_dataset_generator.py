@@ -50,6 +50,7 @@ class RealSignalDatasetGenerator:
             "rsi", "ema_fast", "ema_slow", "macd", "macd_signal", "macd_hist",
             "bb_upper", "bb_middle", "bb_lower", "adx", "atr",
             "volume_ratio",
+            "direction_encoded",  # BUY=1, SELL=-1 (constante na sequência)
         ]
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -194,6 +195,12 @@ class RealSignalDatasetGenerator:
             vol_mean = seq_data["volume"].mean()
             if vol_mean > 0:
                 seq_data["volume"] = seq_data["volume"] / vol_mean
+
+        # Adicionar direção do sinal como feature constante em toda a sequência
+        # BUY=1, SELL=-1 — sem isso a LSTM não sabe se o trade é long ou short
+        direction = signal.get("signal", "")
+        direction_val = 1.0 if direction == "BUY" else (-1.0 if direction == "SELL" else 0.0)
+        seq_data["direction_encoded"] = direction_val
 
         sequence = seq_data.values.astype(np.float32)
         sequence = np.nan_to_num(sequence, nan=0.0)

@@ -161,13 +161,9 @@ class LSTMSequenceValidator:
         # Construir modelo
         self.build_model()
 
-        # Class weights para lidar com desbalanceamento
-        n_pos = y_train.sum()
-        n_neg = len(y_train) - n_pos
-        if n_pos > 0 and n_neg > 0:
-            class_weight = {0: len(y_train) / (2 * n_neg), 1: len(y_train) / (2 * n_pos)}
-        else:
-            class_weight = None
+        # class_weight REMOVIDO: o dataset já é balanceado por subsampling
+        # Usar ambos (balance + class_weight) empurrava logits → 0 → sigmoid(0) = 0.5
+        # Resultado: probs 0.43-0.55 sempre, modelo nunca votava operacionalmente
 
         callbacks = [
             EarlyStopping(
@@ -184,7 +180,7 @@ class LSTMSequenceValidator:
             ),
         ]
 
-        print(f"\n[TRAIN] Iniciando... (class_weight={class_weight})")
+        print(f"\n[TRAIN] Iniciando... (sem class_weight — dataset já balanceado)")
         start = datetime.now(timezone.utc)
 
         history = self.model.fit(
@@ -193,7 +189,6 @@ class LSTMSequenceValidator:
             batch_size=batch_size,
             validation_data=(X_test_scaled, y_test),
             callbacks=callbacks,
-            class_weight=class_weight,
             verbose=1,
         )
 
@@ -283,7 +278,7 @@ class LSTMSequenceValidator:
                 self.model_info = json.load(f)
 
             self.sequence_length = self.model_info.get("sequence_length", 60)
-            self.n_features = self.model_info.get("n_features", 17)
+            self.n_features = self.model_info.get("n_features", 18)
 
             logger.info(f"[Bi-LSTM] Modelo carregado (seq={self.sequence_length}, features={self.n_features})")
             return True
@@ -292,7 +287,7 @@ class LSTMSequenceValidator:
             logger.warning(f"[Bi-LSTM] Erro ao carregar modelo: {e}")
             return False
 
-    def predict_from_candles(self, candles_df) -> Dict:
+    def predict_from_candles(self, candles_df, direction: str = "") -> Dict:
         """
         Prediz probabilidade de sucesso a partir de candles recentes.
 
@@ -301,7 +296,7 @@ class LSTMSequenceValidator:
 
         Args:
             candles_df: DataFrame com últimos sequence_length candles
-                       (deve ter as mesmas features do treino)
+            direction: "BUY" ou "SELL" — essencial para a predição
 
         Returns:
             Dict com probability, prediction, confidence
@@ -341,6 +336,11 @@ class LSTMSequenceValidator:
                 vol_mean = seq_data["volume"].mean()
                 if vol_mean > 0:
                     seq_data["volume"] = seq_data["volume"] / vol_mean
+
+            # Adicionar direção como feature (BUY=1, SELL=-1)
+            # Sem isso a LSTM não sabe se o trade é long ou short
+            direction_val = 1.0 if direction == "BUY" else (-1.0 if direction == "SELL" else 0.0)
+            seq_data["direction_encoded"] = direction_val
 
             X = seq_data.values.astype(np.float32)
             X = np.nan_to_num(X, nan=0.0)

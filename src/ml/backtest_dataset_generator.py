@@ -66,6 +66,7 @@ class BacktestDatasetGenerator:
             "rsi", "ema_fast", "ema_slow", "macd", "macd_signal", "macd_hist",
             "bb_upper", "bb_middle", "bb_lower", "adx", "atr",
             "volume_ratio",
+            "direction_encoded",  # BUY=1, SELL=-1 (constante na sequência)
         ]
 
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -249,6 +250,10 @@ class BacktestDatasetGenerator:
                 seq_data["volume"] = seq_data["volume"] / vol_mean
 
         # RSI já está 0-100, ADX já está 0-100, MACD/hist mantém escala relativa
+
+        # Adicionar direção do trade como feature constante
+        direction_val = 1.0 if trade.direction == "BUY" else (-1.0 if trade.direction == "SELL" else 0.0)
+        seq_data["direction_encoded"] = direction_val
 
         # Converter para numpy array
         sequence = seq_data.values.astype(np.float32)

@@ -145,7 +145,7 @@ async def _backfill_ml_and_lstm(signal: dict, ml_validator, lstm_validator, back
     if need_lstm and lstm_validator is not None:
         try:
             # LSTM espera as colunas do backtest (incl. volume_ratio)
-            res = lstm_validator.predict_from_candles(df)
+            res = lstm_validator.predict_from_candles(df, direction=signal.get("signal", ""))
             if res.get("error"):
                 pass
             else:
