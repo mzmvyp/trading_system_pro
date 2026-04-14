@@ -1357,7 +1357,7 @@ Responda APENAS com JSON:
                         )
                         if not _df.empty:
                             _df = _engine.calculate_indicators(_df)
-                            lstm_result = self.lstm_sequence_validator.predict_from_candles(_df)
+                            lstm_result = self.lstm_sequence_validator.predict_from_candles(_df, direction=llm_signal_dir)
                             lstm_prob = lstm_result.get("probability", 0.5)
 
                             # Log prediction para avaliação futura
