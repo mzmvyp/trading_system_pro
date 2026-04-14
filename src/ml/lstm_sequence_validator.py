@@ -81,34 +81,35 @@ class LSTMSequenceValidator:
 
         print(f"\n[BUILD] Construindo Bi-LSTM (seq={self.sequence_length}, features={self.n_features})")
 
+        # Arquitetura reduzida para ~4000-5000 amostras
+        # Antes: 64+32 units, dropout 0.2 → overfitting severo (81% treino vs 59% teste)
+        # Agora: 32+16 units, dropout 0.4 → menos parâmetros, mais regularização
         model = Sequential([
             Input(shape=(self.sequence_length, self.n_features)),
 
-            # Bi-LSTM Layer 1 - captura padrões em ambas as direções
+            # Bi-LSTM Layer 1 (reduzida de 64 → 32)
             Bidirectional(LSTM(
-                units=64,
+                units=32,
                 return_sequences=True,
-                dropout=0.2,
-                recurrent_dropout=0.2,
-                kernel_regularizer=l1_l2(l1=1e-5, l2=1e-4),
+                dropout=0.3,
+                recurrent_dropout=0.3,
+                kernel_regularizer=l1_l2(l1=1e-5, l2=1e-3),
             ), name="bilstm_1"),
             BatchNormalization(),
 
-            # Bi-LSTM Layer 2
+            # Bi-LSTM Layer 2 (reduzida de 32 → 16)
             Bidirectional(LSTM(
-                units=32,
+                units=16,
                 return_sequences=False,
-                dropout=0.2,
-                recurrent_dropout=0.2,
-                kernel_regularizer=l1_l2(l1=1e-5, l2=1e-4),
+                dropout=0.3,
+                recurrent_dropout=0.3,
+                kernel_regularizer=l1_l2(l1=1e-5, l2=1e-3),
             ), name="bilstm_2"),
             BatchNormalization(),
 
-            # Dense layers
-            Dense(32, activation="relu", kernel_regularizer=l1_l2(l1=1e-5, l2=1e-4)),
-            Dropout(0.3),
-            Dense(16, activation="relu"),
-            Dropout(0.2),
+            # Dense layers (reduzidas)
+            Dense(16, activation="relu", kernel_regularizer=l1_l2(l1=1e-5, l2=1e-3)),
+            Dropout(0.4),
 
             # Output
             Dense(1, activation="sigmoid", name="output"),
@@ -158,9 +159,6 @@ class LSTMSequenceValidator:
         X_train_scaled = np.nan_to_num(X_train_scaled, nan=0.0, posinf=0.0, neginf=0.0)
         X_test_scaled = np.nan_to_num(X_test_scaled, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Construir modelo
-        self.build_model()
-
         # class_weight REMOVIDO: o dataset já é balanceado por subsampling
         # Usar ambos (balance + class_weight) empurrava logits → 0 → sigmoid(0) = 0.5
         # Resultado: probs 0.43-0.55 sempre, modelo nunca votava operacionalmente
@@ -180,7 +178,33 @@ class LSTMSequenceValidator:
             ),
         ]
 
-        print(f"\n[TRAIN] Iniciando... (sem class_weight — dataset já balanceado)")
+        # ========================================
+        # HARD EXAMPLE MINING — aprender com os erros
+        # ========================================
+        # Se existe modelo anterior, identifica exemplos que ele errou
+        # e dá peso 2x nesses exemplos no treino → foca nos erros
+        sample_weight = np.ones(len(y_train), dtype=np.float32)
+        n_hard = 0
+
+        if self._load_previous_model():
+            try:
+                y_pred_prob = self.model.predict(X_train_scaled, verbose=0).flatten()
+                y_pred = (y_pred_prob > 0.5).astype(int)
+                mistakes = (y_pred != y_train)
+                n_hard = int(mistakes.sum())
+                if n_hard > 0:
+                    # Erros do modelo anterior recebem peso 2x
+                    sample_weight[mistakes] = 2.0
+                    print(f"[HARD EXAMPLES] {n_hard}/{len(y_train)} erros do modelo anterior receberão peso 2x")
+                else:
+                    print("[HARD EXAMPLES] Modelo anterior não errou nenhum exemplo (improvável)")
+            except Exception as e:
+                print(f"[HARD EXAMPLES] Não foi possível avaliar modelo anterior: {e}")
+
+        # Rebuild fresh model para treinar do zero com os pesos
+        self.build_model()
+
+        print(f"\n[TRAIN] Iniciando... (hard examples: {n_hard}, sem class_weight)")
         start = datetime.now(timezone.utc)
 
         history = self.model.fit(
@@ -189,6 +213,7 @@ class LSTMSequenceValidator:
             batch_size=batch_size,
             validation_data=(X_test_scaled, y_test),
             callbacks=callbacks,
+            sample_weight=sample_weight,
             verbose=1,
         )
 
@@ -217,6 +242,7 @@ class LSTMSequenceValidator:
             "n_features": self.n_features,
             "train_samples": len(X_train),
             "test_samples": len(X_test),
+            "hard_examples": n_hard,
             "results": results,
             "data_source": _data_source,
         }
@@ -252,6 +278,24 @@ class LSTMSequenceValidator:
         print(f"\n{classification_report(y_test, y_test_pred, target_names=['Loss', 'Win'])}")
 
         return results
+
+    def _load_previous_model(self) -> bool:
+        """Carrega modelo anterior (se existir) para avaliar erros no hard example mining."""
+        try:
+            import tensorflow as tf
+            model_path = MODEL_DIR / "bilstm_sequence_validator.h5"
+            scaler_path = MODEL_DIR / "bilstm_scaler.pkl"
+            if not model_path.exists() or not scaler_path.exists():
+                print("[HARD EXAMPLES] Nenhum modelo anterior encontrado — primeiro treino")
+                return False
+            self.model = tf.keras.models.load_model(model_path)
+            with open(scaler_path, "rb") as f:
+                self.scaler = pickle.load(f)
+            print("[HARD EXAMPLES] Modelo anterior carregado para identificar erros")
+            return True
+        except Exception as e:
+            print(f"[HARD EXAMPLES] Falha ao carregar modelo anterior: {e}")
+            return False
 
     def _save_model(self):
         """Salva modelo, scaler e metadata."""
