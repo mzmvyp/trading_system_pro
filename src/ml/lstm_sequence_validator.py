@@ -81,35 +81,36 @@ class LSTMSequenceValidator:
 
         print(f"\n[BUILD] Construindo Bi-LSTM (seq={self.sequence_length}, features={self.n_features})")
 
-        # Arquitetura reduzida para ~4000-5000 amostras
-        # Antes: 64+32 units, dropout 0.2 → overfitting severo (81% treino vs 59% teste)
-        # Agora: 32+16 units, dropout 0.4 → menos parâmetros, mais regularização
+        # Arquitetura balanceada para ~4000-5000 amostras
+        # V1 (64+32, dropout 0.2): overfitting severo (81% treino vs 59% teste)
+        # V2 (32+16, dropout 0.4): sem overfitting mas range colapsou (0.32-0.51)
+        # V3 (48+24, dropout 0.3): meio-termo — generaliza sem colapsar probabilidades
         model = Sequential([
             Input(shape=(self.sequence_length, self.n_features)),
 
-            # Bi-LSTM Layer 1 (reduzida de 64 → 32)
+            # Bi-LSTM Layer 1 (48 units — entre 64 e 32)
             Bidirectional(LSTM(
-                units=32,
+                units=48,
                 return_sequences=True,
-                dropout=0.3,
-                recurrent_dropout=0.3,
-                kernel_regularizer=l1_l2(l1=1e-5, l2=1e-3),
+                dropout=0.25,
+                recurrent_dropout=0.25,
+                kernel_regularizer=l1_l2(l1=1e-5, l2=5e-4),
             ), name="bilstm_1"),
             BatchNormalization(),
 
-            # Bi-LSTM Layer 2 (reduzida de 32 → 16)
+            # Bi-LSTM Layer 2 (24 units — entre 32 e 16)
             Bidirectional(LSTM(
-                units=16,
+                units=24,
                 return_sequences=False,
-                dropout=0.3,
-                recurrent_dropout=0.3,
-                kernel_regularizer=l1_l2(l1=1e-5, l2=1e-3),
+                dropout=0.25,
+                recurrent_dropout=0.25,
+                kernel_regularizer=l1_l2(l1=1e-5, l2=5e-4),
             ), name="bilstm_2"),
             BatchNormalization(),
 
-            # Dense layers (reduzidas)
-            Dense(16, activation="relu", kernel_regularizer=l1_l2(l1=1e-5, l2=1e-3)),
-            Dropout(0.4),
+            # Dense layer
+            Dense(24, activation="relu", kernel_regularizer=l1_l2(l1=1e-5, l2=5e-4)),
+            Dropout(0.35),
 
             # Output
             Dense(1, activation="sigmoid", name="output"),
