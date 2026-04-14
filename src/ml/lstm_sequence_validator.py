@@ -197,6 +197,17 @@ class LSTMSequenceValidator:
         # Avaliar
         results = self._evaluate(X_train_scaled, y_train, X_test_scaled, y_test)
 
+        # Detectar fonte real do dataset
+        _data_source = "unknown"
+        try:
+            _ds_info_path = DATASET_DIR / "dataset_info_latest.json"
+            if _ds_info_path.exists():
+                with open(_ds_info_path, "r") as _f:
+                    _ds_info = json.load(_f)
+                    _data_source = _ds_info.get("data_source", "unknown")
+        except Exception:
+            pass
+
         self.model_info = {
             "type": "Bi-LSTM",
             "training_date": datetime.now(timezone.utc).isoformat(),
@@ -207,7 +218,7 @@ class LSTMSequenceValidator:
             "train_samples": len(X_train),
             "test_samples": len(X_test),
             "results": results,
-            "data_source": "backtest_dataset_generator",
+            "data_source": _data_source,
         }
 
         self._save_model()
