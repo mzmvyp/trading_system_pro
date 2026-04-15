@@ -877,6 +877,47 @@ class BinanceFuturesExecutor:
 
             logger.info(f"[ORDEM PRINCIPAL] Executada: Order ID {main_order.get('orderId')}")
 
+            # 7b. RE-ENFORCE SL baseado no preço REAL de execução (avgPrice)
+            # O SL foi calculado/enforced usando o entry_price do SINAL, mas o fill
+            # pode ser diferente. Sem isso, a distância real do SL pode ser muito menor
+            # que MIN_SL_DISTANCE_PCT (ex: sinal entry=$0.0700, fill=$0.0705, SL=$0.0707
+            # → distância real 0.28% ao invés de 1.0%).
+            actual_entry = float(main_order.get("avgPrice", 0))
+            if actual_entry > 0:
+                actual_sl_distance_pct = abs(actual_entry - stop_loss) / actual_entry * 100
+                if actual_sl_distance_pct < MIN_SL_DISTANCE_PCT:
+                    old_sl = stop_loss
+                    if signal_type == "BUY":
+                        stop_loss = actual_entry * (1 - MIN_SL_DISTANCE_PCT / 100)
+                    else:  # SELL
+                        stop_loss = actual_entry * (1 + MIN_SL_DISTANCE_PCT / 100)
+                    logger.warning(
+                        f"[SL RE-ENFORCE POS-FILL] Fill ${actual_entry:.6f} ≠ sinal ${entry_price:.6f}. "
+                        f"SL distância real era {actual_sl_distance_pct:.2f}% (mín {MIN_SL_DISTANCE_PCT}%). "
+                        f"SL: ${old_sl:.6f} → ${stop_loss:.6f}"
+                    )
+                    signal["stop_loss"] = stop_loss
+                elif actual_sl_distance_pct > MAX_SL_DISTANCE_PCT:
+                    old_sl = stop_loss
+                    if signal_type == "BUY":
+                        stop_loss = actual_entry * (1 - MAX_SL_DISTANCE_PCT / 100)
+                    else:  # SELL
+                        stop_loss = actual_entry * (1 + MAX_SL_DISTANCE_PCT / 100)
+                    logger.warning(
+                        f"[SL RE-ENFORCE POS-FILL] Fill ${actual_entry:.6f} ≠ sinal ${entry_price:.6f}. "
+                        f"SL distância real era {actual_sl_distance_pct:.2f}% (máx {MAX_SL_DISTANCE_PCT}%). "
+                        f"SL: ${old_sl:.6f} → ${stop_loss:.6f}"
+                    )
+                    signal["stop_loss"] = stop_loss
+
+                # Atualizar entry_price para o preço real de fill
+                entry_price = actual_entry
+                sl_distance_pct = abs(entry_price - stop_loss) / entry_price * 100
+                logger.info(
+                    f"[POS-FILL] Entry real: ${actual_entry:.6f} | SL final: ${stop_loss:.6f} "
+                    f"({sl_distance_pct:.2f}%)"
+                )
+
             # 8. Determinar lado oposto para Stop Loss e Take Profit
             close_side = "SELL" if signal_type == "BUY" else "BUY"
 

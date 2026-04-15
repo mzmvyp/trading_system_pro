@@ -81,36 +81,37 @@ class LSTMSequenceValidator:
 
         print(f"\n[BUILD] Construindo Bi-LSTM (seq={self.sequence_length}, features={self.n_features})")
 
-        # Arquitetura balanceada para ~4000-5000 amostras
+        # Arquitetura balanceada para ~200-5000 amostras
         # V1 (64+32, dropout 0.2): overfitting severo (81% treino vs 59% teste)
         # V2 (32+16, dropout 0.4): sem overfitting mas range colapsou (0.32-0.51)
         # V3 (48+24, dropout 0.3): meio-termo — generaliza sem colapsar probabilidades
+        # V4 (32+16, dropout 0.30, L2=2e-3): mais regularização para dataset pequeno
         model = Sequential([
             Input(shape=(self.sequence_length, self.n_features)),
 
-            # Bi-LSTM Layer 1 (48 units — entre 64 e 32)
+            # Bi-LSTM Layer 1
             Bidirectional(LSTM(
-                units=48,
+                units=32,
                 return_sequences=True,
-                dropout=0.25,
+                dropout=0.30,
                 recurrent_dropout=0.25,
-                kernel_regularizer=l1_l2(l1=1e-5, l2=5e-4),
+                kernel_regularizer=l1_l2(l1=1e-5, l2=2e-3),
             ), name="bilstm_1"),
             BatchNormalization(),
 
-            # Bi-LSTM Layer 2 (24 units — entre 32 e 16)
+            # Bi-LSTM Layer 2
             Bidirectional(LSTM(
-                units=24,
+                units=16,
                 return_sequences=False,
-                dropout=0.25,
+                dropout=0.30,
                 recurrent_dropout=0.25,
-                kernel_regularizer=l1_l2(l1=1e-5, l2=5e-4),
+                kernel_regularizer=l1_l2(l1=1e-5, l2=2e-3),
             ), name="bilstm_2"),
             BatchNormalization(),
 
             # Dense layer
-            Dense(24, activation="relu", kernel_regularizer=l1_l2(l1=1e-5, l2=5e-4)),
-            Dropout(0.35),
+            Dense(16, activation="relu", kernel_regularizer=l1_l2(l1=1e-5, l2=2e-3)),
+            Dropout(0.40),
 
             # Output
             Dense(1, activation="sigmoid", name="output"),
@@ -137,30 +138,24 @@ class LSTMSequenceValidator:
         X_train, X_test, y_train, y_test = self.load_dataset()
 
         # ========================================
-        # BALANCEAR TREINO: igualar wins e losses
+        # CLASS WEIGHTS ao invés de undersampling
         # ========================================
-        # Sem balanceamento, 71% losses → modelo prevê "loss" pra tudo
-        # Balancear ANTES de normalizar para não desperdiçar cálculo
+        # Undersampling causava mismatch treino/teste:
+        # treino balanceado a 50% mas teste com WR real ~30%
+        # → modelo aprendia distribuição errada, val_auc < 0.50
+        # Class weights mantém TODAS as amostras e corrige o desbalanceamento
         win_rate = float(y_train.mean())
-        if win_rate < 0.40 or win_rate > 0.60:
-            idx_win = np.where(y_train == 1)[0]
-            idx_loss = np.where(y_train == 0)[0]
-            n_min = min(len(idx_win), len(idx_loss))
-            if n_min >= 20:
-                rng = np.random.RandomState(42)
-                if len(idx_win) > n_min:
-                    idx_win = rng.choice(idx_win, size=n_min, replace=False)
-                if len(idx_loss) > n_min:
-                    idx_loss = rng.choice(idx_loss, size=n_min, replace=False)
-                balanced_idx = np.sort(np.concatenate([idx_win, idx_loss]))
-                X_train = X_train[balanced_idx]
-                y_train = y_train[balanced_idx]
-                print(f"[BALANCE] Treino balanceado: {len(idx_win)} wins + {len(idx_loss)} losses = {len(X_train)} "
-                      f"(era {win_rate*100:.0f}% → agora 50%)")
-            else:
-                print(f"[BALANCE] Poucos exemplos da classe minoritária ({n_min}) — mantendo desbalanceado")
+        n_pos = int(y_train.sum())
+        n_neg = len(y_train) - n_pos
+        if n_pos > 0 and n_neg > 0:
+            weight_neg = len(y_train) / (2.0 * n_neg)
+            weight_pos = len(y_train) / (2.0 * n_pos)
+            class_weights = {0: weight_neg, 1: weight_pos}
+            print(f"[CLASS_WEIGHT] WR={win_rate:.1%} | {n_pos} wins, {n_neg} losses | "
+                  f"weights: 0→{weight_neg:.2f}, 1→{weight_pos:.2f}")
         else:
-            print(f"[BALANCE] Treino já balanceado ({win_rate*100:.0f}% win rate)")
+            class_weights = {0: 1.0, 1: 1.0}
+            print(f"[CLASS_WEIGHT] Dataset com apenas uma classe, pesos iguais")
 
         # Normalizar features — fit APENAS no train (evita data leakage)
         from sklearn.preprocessing import StandardScaler
@@ -185,10 +180,6 @@ class LSTMSequenceValidator:
         # Tratar NaN/Inf
         X_train_scaled = np.nan_to_num(X_train_scaled, nan=0.0, posinf=0.0, neginf=0.0)
         X_test_scaled = np.nan_to_num(X_test_scaled, nan=0.0, posinf=0.0, neginf=0.0)
-
-        # class_weight REMOVIDO: o dataset já é balanceado por subsampling
-        # Usar ambos (balance + class_weight) empurrava logits → 0 → sigmoid(0) = 0.5
-        # Resultado: probs 0.43-0.55 sempre, modelo nunca votava operacionalmente
 
         callbacks = [
             EarlyStopping(
@@ -231,7 +222,7 @@ class LSTMSequenceValidator:
         # Rebuild fresh model para treinar do zero com os pesos
         self.build_model()
 
-        print(f"\n[TRAIN] Iniciando... (hard examples: {n_hard}, sem class_weight)")
+        print(f"\n[TRAIN] Iniciando... (hard examples: {n_hard}, class_weight ativo)")
         start = datetime.now(timezone.utc)
 
         history = self.model.fit(
@@ -241,6 +232,7 @@ class LSTMSequenceValidator:
             validation_data=(X_test_scaled, y_test),
             callbacks=callbacks,
             sample_weight=sample_weight,
+            class_weight=class_weights,
             verbose=1,
         )
 
@@ -589,20 +581,22 @@ class LSTMSequenceValidator:
         # Carregar e preparar dados
         X_train_raw, X_test, y_train_raw, y_test = self.load_dataset()
 
-        # Balancear treino
+        # NÃO balancear por undersampling — causa mismatch treino/teste
+        # (treino fica 50/50 mas teste mantém WR real ~30%, modelo aprende distribuição errada)
+        # Em vez disso, usar class_weight para compensar desbalanceamento
         win_rate = float(y_train_raw.mean())
-        if win_rate < 0.40 or win_rate > 0.60:
-            idx_win = np.where(y_train_raw == 1)[0]
-            idx_loss = np.where(y_train_raw == 0)[0]
-            n_min = min(len(idx_win), len(idx_loss))
-            if n_min >= 20:
-                rng = np.random.RandomState(42)
-                idx_win_bal = rng.choice(idx_win, size=n_min, replace=False) if len(idx_win) > n_min else idx_win
-                idx_loss_bal = rng.choice(idx_loss, size=n_min, replace=False) if len(idx_loss) > n_min else idx_loss
-                balanced_idx = np.sort(np.concatenate([idx_win_bal, idx_loss_bal]))
-                X_train_raw = X_train_raw[balanced_idx]
-                y_train_raw = y_train_raw[balanced_idx]
-                print(f"[BALANCE] {n_min} wins + {n_min} losses = {len(X_train_raw)}")
+        n_pos = int(y_train_raw.sum())
+        n_neg = len(y_train_raw) - n_pos
+        if n_pos > 0 and n_neg > 0:
+            # Peso inversamente proporcional à frequência da classe
+            weight_neg = len(y_train_raw) / (2.0 * n_neg)
+            weight_pos = len(y_train_raw) / (2.0 * n_pos)
+            class_weights = {0: weight_neg, 1: weight_pos}
+            print(f"[CLASS_WEIGHT] WR={win_rate:.1%} | {n_pos} wins, {n_neg} losses | "
+                  f"weights: 0→{weight_neg:.2f}, 1→{weight_pos:.2f}")
+        else:
+            class_weights = {0: 1.0, 1: 1.0}
+            print(f"[CLASS_WEIGHT] Dataset com apenas uma classe, pesos iguais")
 
         # Normalizar
         scaler = StandardScaler()
@@ -619,14 +613,16 @@ class LSTMSequenceValidator:
             tf.keras.backend.clear_session()
 
             # Hiperparâmetros a otimizar
-            units_1 = trial.suggest_int("units_1", 24, 80, step=8)
-            units_2 = trial.suggest_int("units_2", 8, 48, step=8)
-            dropout = trial.suggest_float("dropout", 0.10, 0.45)
-            rec_dropout = trial.suggest_float("rec_dropout", 0.10, 0.45)
-            lr = trial.suggest_float("lr", 1e-4, 5e-3, log=True)
-            l2_reg = trial.suggest_float("l2", 1e-5, 1e-2, log=True)
-            dense_units = trial.suggest_int("dense_units", 8, 48, step=8)
-            dense_dropout = trial.suggest_float("dense_dropout", 0.15, 0.50)
+            # Capacidade reduzida para evitar memorização (dataset pequeno ~200-500 amostras)
+            units_1 = trial.suggest_int("units_1", 16, 48, step=8)
+            units_2 = trial.suggest_int("units_2", 8, 24, step=8)
+            # Regularização com mínimos altos para forçar generalização
+            dropout = trial.suggest_float("dropout", 0.25, 0.50)
+            rec_dropout = trial.suggest_float("rec_dropout", 0.20, 0.45)
+            lr = trial.suggest_float("lr", 1e-4, 3e-3, log=True)
+            l2_reg = trial.suggest_float("l2", 1e-3, 5e-2, log=True)
+            dense_units = trial.suggest_int("dense_units", 8, 24, step=8)
+            dense_dropout = trial.suggest_float("dense_dropout", 0.25, 0.55)
             batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
 
             model = Sequential([
@@ -654,6 +650,7 @@ class LSTMSequenceValidator:
                 X_train_sc, y_train_raw, epochs=epochs_per_trial, batch_size=batch_size,
                 validation_data=(X_test_sc, y_test),
                 callbacks=[early_stop], verbose=0,
+                class_weight=class_weights,
             )
 
             # Avaliar no teste
@@ -752,10 +749,24 @@ class LSTMSequenceValidator:
             X_train_sc, y_train_raw, epochs=100, batch_size=bp["batch_size"],
             validation_data=(X_test_sc, y_test),
             callbacks=callbacks, verbose=1,
+            class_weight=class_weights,
         )
 
         self.model = final_model
         results = self._evaluate(X_train_sc, y_train_raw, X_test_sc, y_test)
+
+        # Validação de qualidade: modelo com val_auc < 0.52 é pior que aleatório
+        final_val_auc = results.get("test_auc", 0)
+        if final_val_auc < 0.52:
+            print(f"\n[AVISO] val_auc={final_val_auc:.3f} < 0.52 — modelo pior que aleatório!")
+            print(f"[AVISO] O modelo será salvo mas marcado como LOW_QUALITY.")
+            results["quality"] = "LOW_QUALITY"
+            results["quality_warning"] = (
+                f"val_auc={final_val_auc:.3f} indica que o modelo não generaliza. "
+                f"Considere: mais dados, features diferentes, ou walk-forward validation."
+            )
+        else:
+            results["quality"] = "OK"
 
         # Detectar fonte do dataset
         _data_source = "unknown"

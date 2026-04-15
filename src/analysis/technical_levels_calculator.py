@@ -10,8 +10,10 @@ from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Margem minima de seguranca: SL nao pode ser mais perto que 0.3% do entry
-MIN_SL_DISTANCE_PCT = 0.3
+# Margem minima de seguranca: SL nao pode ser mais perto que 1.0% do entry
+# Consistente com executor.py MIN_SL_DISTANCE_PCT = 1.0
+# Valor anterior (0.3%) permitia SL muito apertado, causando stops prematuros
+MIN_SL_DISTANCE_PCT = 1.0
 # SL maximo tecnico: se nenhum nivel tecnico estiver a menos de 15%, provavelmente nao ha setup
 # O tamanho da posição é ajustado automaticamente para compensar stop largo
 MAX_SL_DISTANCE_PCT = 2.5
