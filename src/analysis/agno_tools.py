@@ -1716,7 +1716,7 @@ async def get_deepseek_analysis(symbol: str) -> Dict[str, Any]:
             raise ValueError(error_msg)
 
         # Criar agent simples apenas para chamar DeepSeek
-        model = DeepSeek(id="deepseek-chat", api_key=api_key, temperature=0.3, max_tokens=1000)
+        model = DeepSeek(id="deepseek-reasoner", api_key=api_key, temperature=0.3, max_tokens=1000)
         agent = Agent(
             model=model,
             instructions="Você é um trader profissional. Analise os dados e forneça um sinal de trading em formato JSON."

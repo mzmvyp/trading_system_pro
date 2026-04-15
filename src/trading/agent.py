@@ -74,7 +74,7 @@ class AgnoTradingAgent:
         # OTIMIZADO: Agent sem ferramentas - dados são coletados localmente
         # e enviados em prompt único, reduzindo de ~5 API calls para 1 por símbolo
         self.agent = Agent(
-            model=DeepSeek(id="deepseek-chat", api_key=api_key, temperature=0.3, max_tokens=500),
+            model=DeepSeek(id="deepseek-reasoner", api_key=api_key, temperature=0.3, max_tokens=500),
             instructions=self._get_instructions()
         )
 

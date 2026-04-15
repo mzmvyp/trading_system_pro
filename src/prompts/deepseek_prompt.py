@@ -457,7 +457,7 @@ async def get_deepseek_analysis(symbol: str) -> Dict[str, Any]:
         if not api_key:
             raise ValueError("DEEPSEEK_API_KEY não encontrada.")
 
-        model = DeepSeek(id="deepseek-chat", api_key=api_key, temperature=0.3, max_tokens=500)
+        model = DeepSeek(id="deepseek-reasoner", api_key=api_key, temperature=0.3, max_tokens=500)
         agent = Agent(
             model=model,
             instructions="Trader profissional. Analise dados e retorne sinal JSON."
