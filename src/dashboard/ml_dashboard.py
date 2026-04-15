@@ -554,6 +554,7 @@ def _render_bilstm_tab():
         epochs_bilstm = st.slider("Epochs", 10, 200, 100, key="bilstm_epochs")
         batch_size_bilstm = st.selectbox("Batch size", [16, 32, 64], index=1, key="bilstm_batch")
         n_optuna_trials = st.slider("Optuna Trials", 10, 50, 20, key="bilstm_optuna_trials")
+        n_wf_folds = st.slider("Walk-Forward Folds", 3, 8, 5, key="bilstm_wf_folds")
 
     if has_bilstm:
         res = bilstm_info.get("results", {})
@@ -573,9 +574,29 @@ def _render_bilstm_tab():
         st.metric("Features", bilstm_info.get("n_features", "N/A"))
         st.metric("Amostras treino/teste", f"{bilstm_info.get('train_samples', 0)} / {bilstm_info.get('test_samples', 0)}")
         st.metric("Fonte", bilstm_info.get("data_source", "N/A"))
+        # Métricas avançadas
+        if test_res.get("auc"):
+            st.metric("AUC (teste)", f"{test_res['auc']:.3f}")
+        if test_res.get("balanced_accuracy"):
+            st.metric("Balanced Acc (teste)", f"{test_res['balanced_accuracy']:.1%}")
+        if test_res.get("op_accuracy"):
+            st.metric("Op Accuracy (teste)", f"{test_res['op_accuracy']:.1%} (n={test_res.get('n_operational', 0)})")
         if bilstm_info.get("optuna_best_score"):
             st.metric("Optuna Score", f"{bilstm_info['optuna_best_score']:.4f}")
-            st.metric("Op Accuracy", f"{bilstm_info.get('optuna_op_accuracy', 0):.1%}")
+            st.metric("Op Accuracy (Optuna)", f"{bilstm_info.get('optuna_op_accuracy', 0):.1%}")
+        # Walk-Forward metrics
+        wf = bilstm_info.get("walk_forward")
+        if wf:
+            st.divider()
+            st.caption("📈 Walk-Forward Validation")
+            wf_cols = st.columns(3)
+            with wf_cols[0]:
+                st.metric("WF Score", f"{wf['avg_score']:.4f} ± {wf['std_score']:.4f}")
+            with wf_cols[1]:
+                st.metric("WF Op Acc", f"{wf['avg_op_accuracy']:.1%} ± {wf['std_op_accuracy']:.1%}")
+            with wf_cols[2]:
+                st.metric("WF AUC", f"{wf['avg_auc']:.3f}")
+            st.caption(f"Folds: {wf['n_rounds']} rounds avaliados")
     else:
         st.warning("Nenhum modelo Bi-LSTM treinado. Gere o dataset e treine abaixo.")
 
@@ -654,6 +675,41 @@ def _render_bilstm_tab():
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao otimizar: {e}")
+
+    # ===== WALK-FORWARD VALIDATION =====
+    if dataset_ok and st.button("📈 Walk-Forward Validation", use_container_width=True,
+                                 help="Treina/testa em janelas temporais rolantes — métrica mais realista"):
+        with st.spinner(f"Walk-Forward ({n_wf_folds} folds × {n_optuna_trials} trials)... pode levar 1-2h"):
+            try:
+                from src.ml.lstm_sequence_validator import LSTMSequenceValidator
+                validator = LSTMSequenceValidator()
+                results = validator.walk_forward_validate(
+                    n_folds=n_wf_folds,
+                    n_optuna_trials=n_optuna_trials,
+                    epochs_per_trial=20,
+                )
+                if results.get("success"):
+                    st.success(
+                        f"Walk-Forward concluído! "
+                        f"Score: {results['avg_score']:.4f} ± {results['std_score']:.4f} | "
+                        f"Op Acc: {results['avg_op_accuracy']:.1%} | "
+                        f"AUC: {results['avg_auc']:.3f} | "
+                        f"F1: {results['avg_f1']:.3f} | "
+                        f"Rounds: {results['n_rounds']}"
+                    )
+                    # Mostrar resultados por fold
+                    with st.expander("Detalhes por fold"):
+                        for fr in results["fold_results"]:
+                            st.write(
+                                f"**Fold {fr['fold']}**: score={fr['best_score']:.4f} | "
+                                f"op_acc={fr['op_accuracy']:.1%} | AUC={fr['auc']:.3f} | "
+                                f"train={fr['train_size']} test={fr['test_size']}"
+                            )
+                else:
+                    st.error(f"Erro: {results.get('reason', 'desconhecido')}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro no Walk-Forward: {e}")
 
 
 async def _fetch_data_with_timeout(engine, symbol: str, interval: str, start_dt, end_dt, timeout: int = 90):
