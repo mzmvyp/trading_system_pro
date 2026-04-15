@@ -270,8 +270,11 @@ class LSTMSequenceValidator:
         return results
 
     def _evaluate(self, X_train, y_train, X_test, y_test) -> Dict:
-        """Avalia modelo no treino e teste."""
-        from sklearn.metrics import accuracy_score, classification_report, f1_score
+        """Avalia modelo no treino e teste com métricas completas."""
+        from sklearn.metrics import (
+            accuracy_score, balanced_accuracy_score, classification_report,
+            f1_score, roc_auc_score,
+        )
 
         results = {}
 
@@ -284,16 +287,43 @@ class LSTMSequenceValidator:
 
         y_test_prob = self.model.predict(X_test, verbose=0).flatten()
         y_test_pred = (y_test_prob > 0.5).astype(int)
+
+        # AUC e balanced accuracy no teste
+        try:
+            test_auc = float(roc_auc_score(y_test, y_test_prob))
+        except Exception:
+            test_auc = 0.0
+        test_bal_acc = float(balanced_accuracy_score(y_test, y_test_pred))
+
+        # Métricas operacionais (sinais com prob >= 0.6 ou <= 0.4)
+        op_mask = (y_test_prob >= 0.6) | (y_test_prob <= 0.4)
+        n_operational = int(op_mask.sum())
+        if n_operational > 0:
+            op_preds = np.where(y_test_prob >= 0.6, 1, np.where(y_test_prob <= 0.4, 0, -1))
+            op_valid = op_preds >= 0
+            op_correct = int((op_preds[op_valid] == y_test[op_valid]).sum())
+            op_accuracy = op_correct / n_operational
+        else:
+            op_accuracy = 0.0
+
         results["test"] = {
             "accuracy": float(accuracy_score(y_test, y_test_pred)),
             "f1_score": float(f1_score(y_test, y_test_pred, zero_division=0)),
+            "auc": test_auc,
+            "balanced_accuracy": test_bal_acc,
+            "op_accuracy": float(op_accuracy),
+            "n_operational": n_operational,
         }
+        # Top-level for easy access
+        results["test_auc"] = test_auc
 
         print(f"\n{'='*60}")
         print("RESULTADOS")
         print(f"{'='*60}")
         print(f"  Train: acc={results['train']['accuracy']*100:.1f}%, f1={results['train']['f1_score']:.3f}")
-        print(f"  Test:  acc={results['test']['accuracy']*100:.1f}%, f1={results['test']['f1_score']:.3f}")
+        print(f"  Test:  acc={results['test']['accuracy']*100:.1f}%, f1={results['test']['f1_score']:.3f}, "
+              f"AUC={test_auc:.3f}, bal_acc={test_bal_acc:.1%}")
+        print(f"  Operacional: {op_accuracy:.1%} (n={n_operational}/{len(y_test)})")
         print(f"\n{classification_report(y_test, y_test_pred, target_names=['Loss', 'Win'])}")
 
         return results
