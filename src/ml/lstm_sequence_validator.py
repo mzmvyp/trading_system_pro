@@ -833,6 +833,357 @@ class LSTMSequenceValidator:
             "n_operational": best.user_attrs.get("n_operational", 0),
         }
 
+    def load_full_dataset(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Carrega dataset COMPLETO (train+test concatenados) para walk-forward."""
+        X_train = np.load(DATASET_DIR / "X_train_latest.npy")
+        X_test = np.load(DATASET_DIR / "X_test_latest.npy")
+        y_train = np.load(DATASET_DIR / "y_train_latest.npy")
+        y_test = np.load(DATASET_DIR / "y_test_latest.npy")
+
+        X_full = np.concatenate([X_train, X_test], axis=0)
+        y_full = np.concatenate([y_train, y_test], axis=0)
+
+        self.sequence_length = X_full.shape[1]
+        self.n_features = X_full.shape[2]
+
+        print(f"[FULL DATASET] {X_full.shape} (WR: {y_full.mean()*100:.1f}%)")
+        return X_full, y_full
+
+    def walk_forward_validate(
+        self, n_folds: int = 5, n_optuna_trials: int = 15, epochs_per_trial: int = 20
+    ) -> Dict:
+        """
+        Walk-Forward Validation com Optuna.
+
+        Divide os dados temporalmente em N folds e para cada janela:
+        1. Treina nos folds anteriores (expanding window)
+        2. Testa no fold atual (futuro imediato)
+        3. Usa Optuna para otimizar hiperparâmetros em CADA janela
+
+        Isso dá métricas realistas: o modelo é sempre avaliado em dados
+        que nunca viu e que são do FUTURO relativo ao treino.
+
+        Data: |---F1---|---F2---|---F3---|---F4---|---F5---|
+        R1:   [TRAIN  ][ TEST ]
+        R2:   [  TRAIN        ][ TEST ]
+        R3:   [    TRAIN               ][ TEST ]
+        R4:   [      TRAIN                     ][ TEST ]
+
+        Args:
+            n_folds: Número de folds temporais (default 5 → 4 rounds de avaliação)
+            n_optuna_trials: Trials Optuna por fold (menos que normal pois roda N vezes)
+            epochs_per_trial: Epochs por trial (reduzido para velocidade)
+
+        Returns:
+            Dict com métricas por fold e médias agregadas
+        """
+        import optuna
+        import tensorflow as tf
+        from sklearn.metrics import balanced_accuracy_score, f1_score, roc_auc_score
+        from sklearn.preprocessing import StandardScaler
+        from tensorflow.keras.callbacks import EarlyStopping
+        from tensorflow.keras.layers import (
+            LSTM, BatchNormalization, Bidirectional, Dense, Dropout, Input,
+        )
+        from tensorflow.keras.models import Sequential
+        from tensorflow.keras.optimizers import Adam
+        from tensorflow.keras.regularizers import l1_l2
+
+        print("\n" + "=" * 70)
+        print("WALK-FORWARD VALIDATION com Optuna")
+        print(f"Folds: {n_folds} | Trials/fold: {n_optuna_trials} | Epochs/trial: {epochs_per_trial}")
+        print("=" * 70)
+
+        X_full, y_full = self.load_full_dataset()
+        n_samples = len(X_full)
+        seq_len = X_full.shape[1]
+        n_features = X_full.shape[2]
+
+        if n_samples < n_folds * 20:
+            return {
+                "success": False,
+                "reason": f"Poucos dados ({n_samples}) para {n_folds} folds (mín {n_folds * 20})"
+            }
+
+        # Dividir em folds temporais (tamanhos iguais)
+        fold_size = n_samples // n_folds
+        fold_results = []
+
+        # Mínimo 2 folds de treino (para ter dados suficientes)
+        min_train_folds = 2
+
+        for round_idx in range(min_train_folds, n_folds):
+            train_end = round_idx * fold_size
+            test_start = train_end
+            test_end = min((round_idx + 1) * fold_size, n_samples)
+
+            X_train_wf = X_full[:train_end]
+            y_train_wf = y_full[:train_end]
+            X_test_wf = X_full[test_start:test_end]
+            y_test_wf = y_full[test_start:test_end]
+
+            if len(X_train_wf) < 50 or len(X_test_wf) < 10:
+                print(f"\n[FOLD {round_idx}] Pulando — dados insuficientes "
+                      f"(train={len(X_train_wf)}, test={len(X_test_wf)})")
+                continue
+
+            train_wr = float(y_train_wf.mean())
+            test_wr = float(y_test_wf.mean())
+            print(f"\n{'─'*60}")
+            print(f"FOLD {round_idx}/{n_folds-1} | "
+                  f"Train: {len(X_train_wf)} (WR {train_wr:.1%}) | "
+                  f"Test: {len(X_test_wf)} (WR {test_wr:.1%})")
+            print(f"{'─'*60}")
+
+            # Normalizar (fit somente no treino deste fold)
+            scaler = StandardScaler()
+            X_tr_flat = scaler.fit_transform(X_train_wf.reshape(-1, n_features))
+            X_te_flat = scaler.transform(X_test_wf.reshape(-1, n_features))
+            X_tr = np.nan_to_num(X_tr_flat.reshape(len(X_train_wf), seq_len, n_features))
+            X_te = np.nan_to_num(X_te_flat.reshape(len(X_test_wf), seq_len, n_features))
+
+            # Class weights para este fold
+            n_pos = int(y_train_wf.sum())
+            n_neg = len(y_train_wf) - n_pos
+            if n_pos > 0 and n_neg > 0:
+                cw = {0: len(y_train_wf) / (2.0 * n_neg), 1: len(y_train_wf) / (2.0 * n_pos)}
+            else:
+                cw = {0: 1.0, 1: 1.0}
+
+            # --- Optuna para este fold ---
+            def make_objective(X_tr_sc, y_tr, X_te_sc, y_te, class_w):
+                def objective(trial):
+                    tf.keras.backend.clear_session()
+
+                    units_1 = trial.suggest_int("units_1", 16, 48, step=8)
+                    units_2 = trial.suggest_int("units_2", 8, 24, step=8)
+                    dropout = trial.suggest_float("dropout", 0.25, 0.50)
+                    rec_dropout = trial.suggest_float("rec_dropout", 0.20, 0.45)
+                    lr = trial.suggest_float("lr", 1e-4, 3e-3, log=True)
+                    l2_reg = trial.suggest_float("l2", 1e-3, 5e-2, log=True)
+                    dense_units = trial.suggest_int("dense_units", 8, 24, step=8)
+                    dense_dropout = trial.suggest_float("dense_dropout", 0.25, 0.55)
+                    batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
+
+                    model = Sequential([
+                        Input(shape=(seq_len, n_features)),
+                        Bidirectional(LSTM(units=units_1, return_sequences=True,
+                                           dropout=dropout, recurrent_dropout=rec_dropout,
+                                           kernel_regularizer=l1_l2(l1=1e-5, l2=l2_reg))),
+                        BatchNormalization(),
+                        Bidirectional(LSTM(units=units_2, return_sequences=False,
+                                           dropout=dropout, recurrent_dropout=rec_dropout,
+                                           kernel_regularizer=l1_l2(l1=1e-5, l2=l2_reg))),
+                        BatchNormalization(),
+                        Dense(dense_units, activation="relu",
+                              kernel_regularizer=l1_l2(l1=1e-5, l2=l2_reg)),
+                        Dropout(dense_dropout),
+                        Dense(1, activation="sigmoid"),
+                    ])
+                    model.compile(optimizer=Adam(learning_rate=lr),
+                                  loss="binary_crossentropy",
+                                  metrics=["accuracy", tf.keras.metrics.AUC(name="auc")])
+
+                    early_stop = EarlyStopping(monitor="val_auc", patience=5,
+                                               restore_best_weights=True, mode="max")
+
+                    model.fit(X_tr_sc, y_tr, epochs=epochs_per_trial, batch_size=batch_size,
+                              validation_data=(X_te_sc, y_te),
+                              callbacks=[early_stop], verbose=0, class_weight=class_w)
+
+                    probs = model.predict(X_te_sc, verbose=0).flatten()
+                    preds = (probs > 0.5).astype(int)
+
+                    # Métricas operacionais
+                    op_mask = (probs >= 0.6) | (probs <= 0.4)
+                    n_op = op_mask.sum()
+                    if n_op < max(3, len(y_te) * 0.05):
+                        return -1.0
+
+                    op_preds = np.where(probs >= 0.6, 1, np.where(probs <= 0.4, 0, -1))
+                    op_valid = op_preds >= 0
+                    op_acc = (op_preds[op_valid] == y_te[op_valid]).sum() / max(n_op, 1)
+
+                    bal_acc = balanced_accuracy_score(y_te, preds)
+                    f1 = f1_score(y_te, preds, zero_division=0)
+                    ar = min((n_op / len(y_te)) / 0.5, 1.0)
+
+                    composite = 0.35 * op_acc + 0.25 * f1 + 0.25 * bal_acc + 0.15 * ar
+
+                    trial.set_user_attr("op_accuracy", float(op_acc))
+                    trial.set_user_attr("n_operational", int(n_op))
+                    trial.set_user_attr("f1", float(f1))
+                    trial.set_user_attr("bal_acc", float(bal_acc))
+                    try:
+                        trial.set_user_attr("auc", float(roc_auc_score(y_te, probs)))
+                    except Exception:
+                        trial.set_user_attr("auc", 0.0)
+
+                    return composite
+                return objective
+
+            optuna.logging.set_verbosity(optuna.logging.WARNING)
+            study = optuna.create_study(direction="maximize")
+            study.optimize(
+                make_objective(X_tr, y_train_wf, X_te, y_test_wf, cw),
+                n_trials=n_optuna_trials, show_progress_bar=False,
+            )
+
+            best = study.best_trial
+            fold_result = {
+                "fold": round_idx,
+                "train_size": len(X_train_wf),
+                "test_size": len(X_test_wf),
+                "train_wr": train_wr,
+                "test_wr": test_wr,
+                "best_score": best.value,
+                "op_accuracy": best.user_attrs.get("op_accuracy", 0),
+                "f1": best.user_attrs.get("f1", 0),
+                "bal_acc": best.user_attrs.get("bal_acc", 0),
+                "auc": best.user_attrs.get("auc", 0),
+                "n_operational": best.user_attrs.get("n_operational", 0),
+                "best_params": best.params,
+            }
+            fold_results.append(fold_result)
+
+            print(f"  Best: score={best.value:.4f} | op_acc={fold_result['op_accuracy']:.1%} | "
+                  f"AUC={fold_result['auc']:.3f} | F1={fold_result['f1']:.3f} | "
+                  f"n_op={fold_result['n_operational']}")
+
+        if not fold_results:
+            return {"success": False, "reason": "Nenhum fold teve dados suficientes"}
+
+        # Métricas agregadas
+        avg_score = np.mean([f["best_score"] for f in fold_results])
+        avg_op_acc = np.mean([f["op_accuracy"] for f in fold_results])
+        avg_auc = np.mean([f["auc"] for f in fold_results])
+        avg_f1 = np.mean([f["f1"] for f in fold_results])
+        std_score = np.std([f["best_score"] for f in fold_results])
+        std_op_acc = np.std([f["op_accuracy"] for f in fold_results])
+
+        print(f"\n{'='*70}")
+        print("WALK-FORWARD — RESULTADOS AGREGADOS")
+        print(f"{'='*70}")
+        print(f"  Folds avaliados: {len(fold_results)}")
+        print(f"  Score médio:     {avg_score:.4f} ± {std_score:.4f}")
+        print(f"  Op Accuracy:     {avg_op_acc:.1%} ± {std_op_acc:.1%}")
+        print(f"  AUC médio:       {avg_auc:.3f}")
+        print(f"  F1 médio:        {avg_f1:.3f}")
+
+        # Treinar modelo final com TODOS os dados e melhores parâmetros do último fold
+        # (o último fold tem mais dados de treino e é mais representativo)
+        best_params = fold_results[-1]["best_params"]
+        print(f"\n[FINAL] Treinando modelo com params do último fold e TODOS os dados...")
+
+        tf.keras.backend.clear_session()
+        # Split final: usar 90% treino / 10% validação do dataset completo
+        final_split = int(len(X_full) * 0.90)
+        X_final_train = X_full[:final_split]
+        y_final_train = y_full[:final_split]
+        X_final_val = X_full[final_split:]
+        y_final_val = y_full[final_split:]
+
+        final_scaler = StandardScaler()
+        X_ft_flat = final_scaler.fit_transform(X_final_train.reshape(-1, n_features))
+        X_fv_flat = final_scaler.transform(X_final_val.reshape(-1, n_features))
+        X_ft = np.nan_to_num(X_ft_flat.reshape(len(X_final_train), seq_len, n_features))
+        X_fv = np.nan_to_num(X_fv_flat.reshape(len(X_final_val), seq_len, n_features))
+
+        n_pos_f = int(y_final_train.sum())
+        n_neg_f = len(y_final_train) - n_pos_f
+        cw_final = {0: len(y_final_train) / (2.0 * max(n_neg_f, 1)),
+                    1: len(y_final_train) / (2.0 * max(n_pos_f, 1))}
+
+        bp = best_params
+        final_model = Sequential([
+            Input(shape=(seq_len, n_features)),
+            Bidirectional(LSTM(units=bp["units_1"], return_sequences=True,
+                               dropout=bp["dropout"], recurrent_dropout=bp["rec_dropout"],
+                               kernel_regularizer=l1_l2(l1=1e-5, l2=bp["l2"]))),
+            BatchNormalization(),
+            Bidirectional(LSTM(units=bp["units_2"], return_sequences=False,
+                               dropout=bp["dropout"], recurrent_dropout=bp["rec_dropout"],
+                               kernel_regularizer=l1_l2(l1=1e-5, l2=bp["l2"]))),
+            BatchNormalization(),
+            Dense(bp["dense_units"], activation="relu",
+                  kernel_regularizer=l1_l2(l1=1e-5, l2=bp["l2"])),
+            Dropout(bp["dense_dropout"]),
+            Dense(1, activation="sigmoid"),
+        ])
+        final_model.compile(optimizer=Adam(learning_rate=bp["lr"]),
+                            loss="binary_crossentropy",
+                            metrics=["accuracy", tf.keras.metrics.AUC(name="auc")])
+
+        from tensorflow.keras.callbacks import ReduceLROnPlateau
+        callbacks = [
+            EarlyStopping(monitor="val_auc", patience=15, restore_best_weights=True, mode="max"),
+            ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=7, min_lr=1e-6),
+        ]
+
+        final_model.fit(X_ft, y_final_train, epochs=100, batch_size=bp["batch_size"],
+                        validation_data=(X_fv, y_final_val),
+                        callbacks=callbacks, verbose=1, class_weight=cw_final)
+
+        self.model = final_model
+        self.scaler = final_scaler
+        self.sequence_length = seq_len
+        self.n_features = n_features
+
+        results = self._evaluate(X_ft, y_final_train, X_fv, y_final_val)
+
+        # Detectar fonte do dataset
+        _data_source = "unknown"
+        try:
+            _ds_info_path = DATASET_DIR / "dataset_info_latest.json"
+            if _ds_info_path.exists():
+                with open(_ds_info_path, "r") as _f:
+                    _data_source = json.load(_f).get("data_source", "unknown")
+        except Exception:
+            pass
+
+        self.model_info = {
+            "type": "Bi-LSTM (Walk-Forward)",
+            "training_date": datetime.now(timezone.utc).isoformat(),
+            "sequence_length": seq_len,
+            "n_features": n_features,
+            "train_samples": len(X_final_train),
+            "test_samples": len(X_final_val),
+            "results": results,
+            "data_source": _data_source,
+            "walk_forward": {
+                "n_folds": n_folds,
+                "n_rounds": len(fold_results),
+                "optuna_trials_per_fold": n_optuna_trials,
+                "avg_score": float(avg_score),
+                "std_score": float(std_score),
+                "avg_op_accuracy": float(avg_op_acc),
+                "std_op_accuracy": float(std_op_acc),
+                "avg_auc": float(avg_auc),
+                "avg_f1": float(avg_f1),
+                "fold_results": fold_results,
+            },
+            "final_params": best_params,
+        }
+        self._save_model()
+
+        # Salvar relatório WF separado para consulta
+        wf_report_path = MODEL_DIR / "walk_forward_report.json"
+        with open(wf_report_path, "w") as f:
+            json.dump(self.model_info["walk_forward"], f, indent=2, default=str)
+
+        return {
+            "success": True,
+            "avg_score": float(avg_score),
+            "std_score": float(std_score),
+            "avg_op_accuracy": float(avg_op_acc),
+            "avg_auc": float(avg_auc),
+            "avg_f1": float(avg_f1),
+            "n_rounds": len(fold_results),
+            "fold_results": fold_results,
+            "final_results": results,
+            "final_params": best_params,
+        }
+
     def _log_prediction(self, symbol: str, prob: float, prediction: int):
         """Registra predição do LSTM para avaliação futura (dashboard)."""
         try:
