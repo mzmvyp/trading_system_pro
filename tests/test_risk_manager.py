@@ -57,7 +57,7 @@ class TestValidateRiskAndPosition:
     @patch('src.trading.risk_manager._get_daily_trades_count', return_value=0)
     @patch('src.trading.risk_manager.os.path.exists', return_value=False)
     def test_validate_high_risk_percentage(self, mock_exists, mock_daily, mock_dd, mock_dt):
-        """Signal with risk > 2.5% should be rejected"""
+        """Signal with risk > 5% should be rejected"""
         mock_dt.now.return_value = _safe_datetime_now()
         mock_dt.fromisoformat = datetime.fromisoformat
         signal = {
