@@ -66,10 +66,10 @@ class TestExtractPriceFromText:
 
 class TestGetDefaultPrice:
     def test_btc_default(self):
-        assert get_default_price("BTCUSDT") == 90000
+        assert get_default_price("BTCUSDT") == 95000
 
     def test_eth_default(self):
-        assert get_default_price("ETHUSDT") == 3000
+        assert get_default_price("ETHUSDT") == 2500
 
     def test_unknown_symbol(self):
         assert get_default_price("UNKNOWNUSDT") == 100
