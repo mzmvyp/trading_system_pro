@@ -19,6 +19,31 @@ _sl_cooldown_registry: Dict[str, datetime] = {}
 _direction_cooldown_hours = 10.0
 _direction_cooldown_registry: Dict[str, dict] = {}
 
+# Cooldown bidirecional pós-close: bloqueia QUALQUER direção no símbolo por N horas
+# Evita whipsaw tipo DOT BUY 14:00 → DOT SELL 18:00 (ambas perderam em 15/abr)
+_bidirectional_cooldown_hours = 6.0
+
+# Buckets de correlação: cada bucket só pode ter 1 posição na mesma DIREÇÃO
+# Em mercados com BTC dominante, altcoins se movem em conjunto. 4+ altcoins LONG
+# simultâneas = stops em cascata quando BTC cai (15/abr: LINK+DOT+ADA+XRP).
+# Buckets baseados em comportamento histórico vs BTC.
+_CORRELATION_BUCKETS = {
+    "majors_l1": {"BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "AVAXUSDT"},
+    "alt_l1": {"ADAUSDT", "DOTUSDT", "ATOMUSDT", "NEARUSDT", "APTUSDT", "SUIUSDT"},
+    "alt_defi_app": {"LINKUSDT", "UNIUSDT", "AAVEUSDT", "MKRUSDT", "INJUSDT", "OPUSDT", "ARBUSDT"},
+    "alt_payments": {"XRPUSDT", "XLMUSDT", "LTCUSDT", "BCHUSDT"},
+    "memes_high_beta": {"DOGEUSDT", "SHIBUSDT", "PEPEUSDT", "WIFUSDT", "BONKUSDT", "FLOKIUSDT", "HYPEUSDT"},
+    "commodities_safe": {"PAXGUSDT", "XAUUSDT", "XAGUSDT", "CLUSDT"},
+}
+
+
+def _get_correlation_bucket(symbol: str) -> str:
+    """Retorna o bucket de correlação do símbolo (ou 'isolated' se não mapeado)."""
+    for bucket_name, symbols in _CORRELATION_BUCKETS.items():
+        if symbol in symbols:
+            return bucket_name
+    return "isolated"
+
 # Arquivo de persistência para cooldowns
 _COOLDOWN_FILE = Path("data/cooldowns.json")
 
@@ -259,6 +284,18 @@ def validate_risk_and_position(
         dir_cd = _direction_cooldown_registry.get(symbol)
         if dir_cd:
             hours_since = (datetime.now(timezone.utc) - dir_cd["time"]).total_seconds() / 3600
+            # Bloqueio BIDIRECIONAL nas primeiras 6h: evita whipsaw direcional
+            # (ex: DOT BUY 14:00 + DOT SELL 18:00 em 15/abr = ambas stopadas)
+            if hours_since < _bidirectional_cooldown_hours:
+                remaining = _bidirectional_cooldown_hours - hours_since
+                return {
+                    "can_execute": False,
+                    "reason": f"Cooldown bidirecional: {symbol} bloqueado por {remaining:.1f}h "
+                              f"em qualquer direção (última posição {dir_cd['direction']} fechada há {hours_since:.1f}h, "
+                              f"evita whipsaw)",
+                    "risk_level": "medium"
+                }
+            # Após 6h, ainda bloqueia MESMA direção até 10h (cooldown clássico)
             if hours_since < _direction_cooldown_hours and sig_type == dir_cd["direction"]:
                 remaining = _direction_cooldown_hours - hours_since
                 return {
@@ -306,6 +343,29 @@ def validate_risk_and_position(
                             "risk_level": "high"
                         }
 
+                    # Check 1c: FILTRO DE CORRELAÇÃO — só 1 posição por bucket+direção
+                    new_bucket = _get_correlation_bucket(symbol)
+                    if new_bucket != "isolated":
+                        for pos in open_positions:
+                            pos_symbol = pos.get("symbol", "")
+                            pos_signal = (pos.get("signal") or "").upper()
+                            pos_bucket = _get_correlation_bucket(pos_symbol)
+                            if (
+                                pos_bucket == new_bucket
+                                and pos_signal == sig_type
+                                and pos_symbol != symbol
+                            ):
+                                logger.warning(
+                                    f"[CORRELACAO] {symbol} BLOQUEADO: ja existe {pos_signal} "
+                                    f"em {pos_symbol} no mesmo bucket de correlacao '{new_bucket}'."
+                                )
+                                return {
+                                    "can_execute": False,
+                                    "reason": f"Correlacao: ja existe {pos_signal} {pos_symbol} no bucket "
+                                              f"'{new_bucket}'. Evita stops em cascata em altcoins correlacionadas.",
+                                    "risk_level": "high"
+                                }
+
                     # Guarda direcional removida — respeitamos apenas max_open_positions
         except Exception as e:
             logger.warning(f"Erro ao verificar posicoes existentes: {e}")
@@ -334,6 +394,7 @@ def validate_risk_and_position(
                 }
 
         # Filtro de volatilidade: não operar se stop muito apertado (mercado choppy)
+        # Limite alinhado com MAX_SL_DISTANCE_PCT (4.0% — zona estatistica OTIMA)
         entry_price = signal.get('entry_price', 0)
         stop_loss_check = signal.get('stop_loss', 0)
         if entry_price and stop_loss_check:
@@ -344,10 +405,10 @@ def validate_risk_and_position(
                     "reason": f"Stop loss muito apertado: {sl_distance_pct:.2f}% (minimo 0.5%). Mercado choppy, evitar.",
                     "risk_level": "high"
                 }
-            if sl_distance_pct > 2.5:
+            if sl_distance_pct > 4.0:
                 return {
                     "can_execute": False,
-                    "reason": f"Stop loss muito largo: {sl_distance_pct:.2f}% (maximo 2.5%). Dados mostram WR 42% com SL<=2% vs 22% com SL>3%.",
+                    "reason": f"Stop loss muito largo: {sl_distance_pct:.2f}% (maximo 4.0%). Acima da zona estatistica viavel.",
                     "risk_level": "high"
                 }
 
@@ -447,10 +508,10 @@ def validate_risk_and_position(
         risk_per_trade = abs(entry_price - stop_loss)
         risk_percentage = (risk_per_trade / entry_price) * 100
 
-        if risk_percentage > 2.5:
+        if risk_percentage > 4.0:
             return {
                 "can_execute": False,
-                "reason": f"SL muito largo: {risk_percentage:.2f}% (max 2.5%). Dados: WR 42% com SL<=2% vs 16% com SL>3%.",
+                "reason": f"SL muito largo: {risk_percentage:.2f}% (max 4.0%). Acima da zona estatistica viavel.",
                 "risk_level": "high"
             }
 

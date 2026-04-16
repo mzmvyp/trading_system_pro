@@ -41,7 +41,10 @@ class Settings(BaseSettings):
     max_exposure: float = 0.50  # Máximo 50% de exposição total
     max_daily_trades: int = 8  # Máximo 8 trades/dia (up from 5 — agora só passam sinais bons)
     base_risk_percentage: float = 0.01  # 1% base de risco
-    max_open_positions: int = 6  # 6 posições simultâneas
+    # REDUZIDO 6 -> 3: 6 posições altcoin simultâneas em mercados correlacionados
+    # produzem liquidações em cascata quando BTC se move (15/abr: LINK+DOT+ADA+XRP
+    # todos LONG perderam juntos). 3 posições com filtro de correlação evitam isso.
+    max_open_positions: int = 3
 
     # ========================================
     # GESTAO DE CAPITAL E RISCO POR TRADE
@@ -51,8 +54,10 @@ class Settings(BaseSettings):
     initial_capital: float = 100.0  # Capital atual em USDT (saldo real Binance)
 
     # Porcentagem do capital a arriscar por trade
-    # 5% = se o stop loss for atingido, perde 5% do capital
-    risk_percent_per_trade: float = 5.0  # 5% do capital arriscado por trade
+    # REDUZIDO 5% -> 1%: com 5% e leverage 40x, sequência de 3 stops = -15% capital
+    # 1% mantém capital sustentável durante drawdowns. Kelly aproximado para
+    # WR 38% / RR 1.0 sugere risco ótimo abaixo de 1.5%.
+    risk_percent_per_trade: float = 1.0  # 1% do capital arriscado por trade
 
     # Como calcular o tamanho da posicao:
     # 1. Risco em $ = capital * (risk_percent_per_trade / 100)
@@ -169,9 +174,23 @@ class Settings(BaseSettings):
     # ========================================
     # ML é apenas 1 voto no sistema de confluência (10 votos possíveis)
     # Nunca bloqueia sozinho — precisa de maioria dos indicadores contra
-    ml_validation_enabled: bool = True
+    # DESATIVADO: deep_analysis_report.txt mostra correlação ML<->outcome r=-0.1257
+    # (estatisticamente INVERSO, p<0.001). Causa raiz: features risk_distance_pct,
+    # reward_distance_pct e risk_reward_ratio têm semântica diferente entre
+    # treino (bootstrap em backtest_dataset_generator.py) e inferência. Backtest
+    # com ML desligado: PnL +1764% vs PnL +398% com ML ligado.
+    # Reativar APENAS após corrigir feature alignment no dataset generator.
+    ml_validation_enabled: bool = False
     ml_validation_threshold: float = 0.6  # prob >= 0.6 = voto a favor, < 0.4 = voto contra
     ml_validation_required: bool = False  # ML não tem mais poder de veto
+
+    # ========================================
+    # VALIDAÇÃO LSTM SEQUENCE - DESATIVADA
+    # ========================================
+    # deep_analysis_report.txt mostra correlação LSTM<->outcome r=-0.0255 (p=0.32)
+    # — estatisticamente ZERO poder discriminativo. Mesmos issues de data leakage
+    # do ML clássico. Reativar APENAS após retreinar com dataset corrigido.
+    lstm_validation_enabled: bool = False
 
     # ========================================
     # ONLINE LEARNING - RETREINAMENTO AUTOMÁTICO

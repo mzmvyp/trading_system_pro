@@ -647,7 +647,7 @@ class BinanceFuturesExecutor:
         # PROTEÇÃO: Garantir distância mínima e MÁXIMA do SL
         sl_distance_pct = abs(entry_price - stop_loss) / entry_price * 100
         MIN_SL_DISTANCE_PCT = 1.0  # Mínimo 1.0%
-        MAX_SL_DISTANCE_PCT = 2.5  # Máximo 2.5% — dados mostram WR 42% com SL<=2% vs 16% com SL>3%
+        MAX_SL_DISTANCE_PCT = 4.0  # Máximo 4.0% — zona estatistica OTIMA (WR 64% com SL 2-3%)
 
         if sl_distance_pct < MIN_SL_DISTANCE_PCT:
             old_sl = stop_loss
@@ -830,7 +830,10 @@ class BinanceFuturesExecutor:
             # Leverage = posição / margem_alvo, onde margem_alvo ≈ risco × 1.2
             margin_target = risk_amount * 1.2  # 20% buffer acima do risco
             target_leverage = position_value / margin_target
-            calculated_leverage = max(1, min(int(target_leverage), symbol_max_leverage))
+            # HARD CAP 10x: análise mostrou que 40x+ liquidava com SL normal de 1-2.5%
+            # (perdas ROI -60 a -71% reproduzidas na conta em 15-16/abr eram leverage*sl_pct)
+            HARD_LEVERAGE_CAP = 10
+            calculated_leverage = max(1, min(int(target_leverage), symbol_max_leverage, HARD_LEVERAGE_CAP))
 
             actual_margin = position_value / calculated_leverage
 

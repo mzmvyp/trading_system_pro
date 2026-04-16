@@ -102,6 +102,11 @@ class AgnoTradingAgent:
 
     def _load_lstm_sequence_validator(self):
         """Carrega o Bi-LSTM sequence validator se treinado."""
+        from src.core.config import settings
+        if not getattr(settings, "lstm_validation_enabled", True):
+            logger.info("[Bi-LSTM] DESATIVADO via settings.lstm_validation_enabled=False (correlação r=-0.025 com outcomes)")
+            self.lstm_sequence_validator = None
+            return
         try:
             from src.ml.lstm_sequence_validator import LSTMSequenceValidator
             validator = LSTMSequenceValidator()
@@ -546,23 +551,22 @@ class AgnoTradingAgent:
         else:
             voter_votes["rsi"] = 0
 
-        # 2. MACD histogram direction (zona morta para valores insignificantes)
+        # 2. MACD histogram direction — VETO-ONLY (revalidation_report.txt:48
+        # mostra Favor WR=26.7% / Contra Acc=70.5%). MACD não confirma bem,
+        # mas refuta com 70% de acerto. Só vota CONTRA, nunca a favor.
         macd_hist = indicators.get("macd", {}).get("histogram", 0)
-        # Zona morta: MACD muito próximo de zero = neutro (não vota)
-        # Threshold relativo ao preço do ativo (0.01% do preço)
         _price = indicators.get("close", indicators.get("price", 1))
         _macd_deadzone = abs(_price) * 0.0001 if _price else 0.0001
         if abs(macd_hist) < _macd_deadzone:
             voter_votes["macd"] = 0
             details.append(f"MACD neutro ({macd_hist:.6f}, zona morta)")
-        elif (is_buy and macd_hist > 0) or (not is_buy and macd_hist < 0):
-            votes_for += 1
-            voter_votes["macd"] = 1
-            details.append(f"MACD aligned ({macd_hist:.4f})")
         elif (is_buy and macd_hist < 0) or (not is_buy and macd_hist > 0):
             votes_against += 1
             voter_votes["macd"] = -1
             details.append(f"MACD contra ({macd_hist:.4f})")
+        else:
+            voter_votes["macd"] = 0
+            details.append(f"MACD aligned ({macd_hist:.4f}) — sem voto (veto-only)")
 
         # 3. EMA alignment (trend direction)
         primary_trend = trend_data.get("primary_trend", "neutral")
@@ -579,47 +583,35 @@ class AgnoTradingAgent:
         else:
             voter_votes["trend"] = 0
 
-        # 4. ADX trend strength
-        # ADX < 20 = mercado lateral forte → vota CONTRA (não neutro!)
-        # ADX 20-25 = mercado indeciso → neutro
-        # ADX >= 25 = tendência → vota a favor
+        # 4. ADX trend strength — VETO-ONLY (revalidation_report.txt:49
+        # Favor WR=27.4% / Contra Acc=67.2%). ADX só vota CONTRA quando o
+        # mercado está lateral (sem tendência) — refuta o setup direcional.
         adx = trend_data.get("trend_strength_adx", trend_data.get("adx", 0))
-        if adx >= adx_threshold:
-            votes_for += 1
-            voter_votes["adx"] = 1
-            details.append(f"ADX strong trend ({adx:.1f} >= {adx_threshold})")
-        elif adx < 20:
+        if adx < 20:
             votes_against += 1
             voter_votes["adx"] = -1
             details.append(f"ADX LATERAL ({adx:.1f} < 20 — mercado sem tendência)")
         else:
             voter_votes["adx"] = 0
-            details.append(f"ADX weak trend ({adx:.1f} < {adx_threshold})")
+            details.append(f"ADX {adx:.1f} (veto-only, sem voto a favor)")
 
-        # 5. Bollinger Band position (thresholds ajustados pelo bb_std otimizado)
+        # 5. Bollinger Band position — VETO-ONLY (revalidation_report.txt:50
+        # Favor WR=28.6% / Contra Acc=76.1%). BB só refuta: se está perto da
+        # banda errada para a direção, vota contra. Banda "favorável" não confirma.
         bb_pos = indicators.get("bollinger", {}).get("position", 0.5)
-        # bb_std mais alto = bandas mais largas = threshold mais generoso
-        # bb_std=2.0 → 0.20/0.80, bb_std=1.5 → 0.25/0.75, bb_std=3.0 → 0.15/0.85
         bb_lower_thr = max(0.10, 0.40 - bb_std * 0.10)
         bb_upper_thr = min(0.90, 0.60 + bb_std * 0.10)
-        if is_buy and bb_pos < bb_lower_thr:
-            votes_for += 1
-            voter_votes["bb"] = 1
-            details.append(f"BB near lower band ({bb_pos:.2f} < {bb_lower_thr:.2f})")
-        elif not is_buy and bb_pos > bb_upper_thr:
-            votes_for += 1
-            voter_votes["bb"] = 1
-            details.append(f"BB near upper band ({bb_pos:.2f} > {bb_upper_thr:.2f})")
-        elif is_buy and bb_pos > bb_upper_thr:
+        if is_buy and bb_pos > bb_upper_thr:
             votes_against += 1
             voter_votes["bb"] = -1
-            details.append(f"BB contra BUY ({bb_pos:.2f} > {bb_upper_thr:.2f})")
+            details.append(f"BB contra BUY ({bb_pos:.2f} > {bb_upper_thr:.2f}, sobrecomprado)")
         elif not is_buy and bb_pos < bb_lower_thr:
             votes_against += 1
             voter_votes["bb"] = -1
-            details.append(f"BB contra SELL ({bb_pos:.2f} < {bb_lower_thr:.2f})")
+            details.append(f"BB contra SELL ({bb_pos:.2f} < {bb_lower_thr:.2f}, sobrevendido)")
         else:
             voter_votes["bb"] = 0
+            details.append(f"BB neutro ({bb_pos:.2f}, veto-only)")
 
         # 6. Orderbook imbalance + volume surge alignment
         ob_imbalance = volume_flow.get("orderbook_imbalance", 0)
