@@ -1110,7 +1110,28 @@ Responda APENAS com JSON:
             analysis_data = await prepare_analysis_for_llm(symbol, mover_type=mover_type)
 
             # ========================================
-            # DETECÇÃO DE REGIME DE MERCADO
+            # FILTRO DE REGIME BTC (HARD BLOCK)
+            # Bloqueia SHORT em STRONG_BULLISH, LONG em STRONG_BEARISH.
+            # Evita trades contra-tendência macro (ex: SELL em 15/abr quando BTC
+            # estava em rali = probabilidade muito baixa de vingar).
+            # ========================================
+            btc_regime_data = None
+            try:
+                from src.analysis.market_regime_filter import MarketRegimeFilter
+                if not hasattr(self, "_btc_regime_filter"):
+                    self._btc_regime_filter = MarketRegimeFilter()
+                btc_regime_data = await self._btc_regime_filter.analyze_btc_regime()
+                btc_regime = btc_regime_data.get("regime", "NEUTRAL")
+                btc_regime_conf = btc_regime_data.get("confidence", 0.5)
+                logger.info(
+                    f"[BTC REGIME] {btc_regime} (conf={btc_regime_conf:.0%}) — cache_valid"
+                )
+            except Exception as e:
+                logger.warning(f"[BTC REGIME] Erro ao detectar: {e}")
+                btc_regime_data = {"regime": "NEUTRAL", "confidence": 0.0}
+
+            # ========================================
+            # DETECÇÃO DE REGIME DE MERCADO (POR SÍMBOLO)
             # Identifica: BULL, BEAR, SIDEWAYS + volatilidade
             # Usado para: ajustar TP/SL, penalizar sinais laterais
             # ========================================
@@ -1231,6 +1252,30 @@ Responda APENAS com JSON:
             llm_signal_dir = agno_signal.get("signal", "NO_SIGNAL")
             is_buy = llm_signal_dir == "BUY"
             is_sideways = market_regime and market_regime.get("base_regime") == "SIDEWAYS"
+
+            if llm_signal_dir in ["BUY", "SELL"] and "error" not in analysis_data:
+                # ========================================
+                # HARD BLOCK: BTC regime contra-tendência
+                # Em 15/abr/2026 BTC estava em rali forte e o sistema abriu SHORTs
+                # em LINK/DOT/ADA/XRP juntos — todos liquidados. Bloquear sinais
+                # que nadam contra a maré macro.
+                # ========================================
+                try:
+                    if btc_regime_data and hasattr(self, "_btc_regime_filter"):
+                        allow, reason = self._btc_regime_filter.should_allow_signal(
+                            llm_signal_dir
+                        )
+                        if not allow:
+                            logger.warning(
+                                f"[BTC REGIME BLOCK] {symbol}: {llm_signal_dir} bloqueado — {reason}"
+                            )
+                            agno_signal["signal"] = "NO_SIGNAL"
+                            agno_signal["block_reason"] = f"BTC regime: {reason}"
+                except Exception as e:
+                    logger.warning(f"[BTC REGIME BLOCK] Erro ao aplicar filtro: {e}")
+
+            # Re-check after BTC regime filter
+            llm_signal_dir = agno_signal.get("signal", "NO_SIGNAL")
 
             if llm_signal_dir in ["BUY", "SELL"] and "error" not in analysis_data:
                 # ========================================
