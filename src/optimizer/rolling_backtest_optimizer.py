@@ -29,7 +29,6 @@ import json
 import os
 import random
 import sys
-import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -42,9 +41,9 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.backtesting.backtest_engine import BacktestEngine, BacktestMetrics, BacktestParams
-from src.backtesting.optimization_engine import OptimizationEngine, PARAM_SPACE
-from src.core.logger import get_logger
+from src.backtesting.backtest_engine import BacktestEngine, BacktestMetrics, BacktestParams  # noqa: E402
+from src.backtesting.optimization_engine import OptimizationEngine  # noqa: E402
+from src.core.logger import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -420,7 +419,6 @@ class RollingBacktestOptimizer:
             return None
 
         # 3. Monte Carlo no OOS agregado
-        last_window = windows_results[-1]
         avg_oos_score = np.mean([w["oos_score"] for w in windows_results])
         avg_degradation = np.mean([w["degradation_pct"] for w in windows_results])
 
@@ -557,9 +555,10 @@ class RollingBacktestOptimizer:
         # Drift Detector: verificar se features mudaram vs baseline
         drift_report = None
         try:
-            from src.analysis.drift_detector import get_drift_detector
             import glob
             import json as _json
+
+            from src.analysis.drift_detector import get_drift_detector
 
             detector = get_drift_detector()
 

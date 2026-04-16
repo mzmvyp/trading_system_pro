@@ -15,6 +15,7 @@ Data: 2026-01-13
 import json
 import os
 import pickle
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
@@ -24,13 +25,10 @@ import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score
-from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 
 # Sklearn
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_sample_weight
-
-import threading
 
 # Lock global para evitar retrains concorrentes (drift-retrain + auto-train)
 _retrain_lock = threading.Lock()
@@ -508,7 +506,7 @@ class OnlineLearningManager:
             cal = CalibratedClassifierCV(final, method='isotonic', cv=3)
             cal.fit(X_all_s, y_all, sample_weight=sw)
             final = cal
-            print(f"[OL] Modelo calibrado")
+            print("[OL] Modelo calibrado")
         except Exception:
             pass
 
@@ -837,7 +835,6 @@ def seed_from_evaluated_signals(force_retrain: bool = True, max_signals: int = 0
     Returns:
         Dict com resultado da operacao
     """
-    import time
 
     # Lock para evitar retrains concorrentes (drift-retrain thread + auto-train thread)
     if not _retrain_lock.acquire(blocking=False):

@@ -401,7 +401,7 @@ class ContinuousOptimizer:
                 avg = {}
                 for field in fields(BacktestParams):
                     values = [getattr(c, field.name) for c in configs]
-                    if field.type == int:
+                    if field.type is int:
                         avg[field.name] = int(round(sum(values) / len(values)))
                     else:
                         avg[field.name] = round(sum(values) / len(values), 4)

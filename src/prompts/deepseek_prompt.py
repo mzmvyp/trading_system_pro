@@ -232,8 +232,9 @@ async def prepare_analysis_for_llm(symbol: str, mover_type: Optional[str] = None
         # Carregar parâmetros otimizados por símbolo (com fallback de categoria)
         _opt_params = None
         try:
-            from src.backtesting.continuous_optimizer import load_best_config
             from dataclasses import asdict
+
+            from src.backtesting.continuous_optimizer import load_best_config
             best = load_best_config(symbol, "1h", mover_type=mover_type)
             if best:
                 _opt_params = asdict(best)
@@ -496,7 +497,7 @@ async def get_deepseek_analysis(symbol: str) -> Dict[str, Any]:
         if not api_key:
             raise ValueError("DEEPSEEK_API_KEY não encontrada.")
 
-        model = DeepSeek(id="deepseek-reasoner", api_key=api_key, temperature=0.3, max_tokens=500)
+        model = DeepSeek(id="deepseek-chat", api_key=api_key, temperature=0.3, max_tokens=500)
         agent = Agent(
             model=model,
             instructions="Trader profissional. Analise dados e retorne sinal JSON."

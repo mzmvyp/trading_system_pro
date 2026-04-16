@@ -16,7 +16,6 @@ Baseado no drift_detector.py do bot_trade_20260115.
 """
 
 import json
-import os
 import warnings
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
