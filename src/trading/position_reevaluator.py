@@ -123,9 +123,10 @@ class PositionReevaluator:
         }
 
         # ============================================
-        # REGRA 1: Breakeven — lucro >= 50% do TP1
+        # REGRA 1: Breakeven — lucro >= 70% do TP1
+        # Antes era 50% — movia cedo demais, preço retrai e stopa no breakeven
         # ============================================
-        if (tp1_progress >= 0.5 and pnl_pct > 0
+        if (tp1_progress >= 0.70 and pnl_pct > 0
                 and not self._breakeven_moved.get(pos_key, False)):
             new_sl = entry_price
             self._breakeven_moved[pos_key] = True
@@ -138,14 +139,15 @@ class PositionReevaluator:
             return result
 
         # ============================================
-        # REGRA 2: Trailing Stop — lucro >= 75% do TP1
-        # ADX removido: altcoins voláteis têm ADX baixo mas PRECISAM de trailing
+        # REGRA 2: Trailing Stop — lucro >= 90% do TP1
+        # Antes era 75% com lock de 50% — cortava winners cedo demais
+        # Agora espera 90% e trava 65% do lucro
         # ============================================
-        if tp1_progress >= 0.75 and pnl_pct > 0:
+        if tp1_progress >= 0.90 and pnl_pct > 0:
             if signal_type == "BUY":
-                new_sl = entry_price + (current_price - entry_price) * 0.5
+                new_sl = entry_price + (current_price - entry_price) * 0.65
             else:
-                new_sl = entry_price - (entry_price - current_price) * 0.5
+                new_sl = entry_price - (entry_price - current_price) * 0.65
 
             # Só mover se o novo SL é melhor que o atual
             if signal_type == "BUY" and new_sl > stop_loss:

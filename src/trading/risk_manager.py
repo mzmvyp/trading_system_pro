@@ -344,10 +344,10 @@ def validate_risk_and_position(
                     "reason": f"Stop loss muito apertado: {sl_distance_pct:.2f}% (minimo 0.5%). Mercado choppy, evitar.",
                     "risk_level": "high"
                 }
-            if sl_distance_pct > 2.5:
+            if sl_distance_pct > 5.0:
                 return {
                     "can_execute": False,
-                    "reason": f"Stop loss muito largo: {sl_distance_pct:.2f}% (maximo 2.5%). Dados mostram WR 42% com SL<=2% vs 22% com SL>3%.",
+                    "reason": f"Stop loss muito largo: {sl_distance_pct:.2f}% (maximo 5.0%). Position sizing compensa SL largo.",
                     "risk_level": "high"
                 }
 
@@ -369,19 +369,6 @@ def validate_risk_and_position(
                 "reason": "BUY em strong_bullish bloqueado: dados mostram 11.8% WR (momento ja exauriu).",
                 "risk_level": "medium"
             }
-
-        # Filtro de horario: horas com WR < 15%
-        _BAD_HOURS = {0, 1, 5, 6, 10, 20, 21}
-        try:
-            _hour_now = datetime.now(timezone.utc).hour
-            if _hour_now in _BAD_HOURS:
-                return {
-                    "can_execute": False,
-                    "reason": f"Horario {_hour_now}h UTC bloqueado: dados mostram WR 0-15% nessas horas.",
-                    "risk_level": "low"
-                }
-        except Exception:
-            pass
 
         # Filtro ML dead zone: probabilidade 0.35-0.50 tem 12% WR
         _ml_prob = signal.get('ml_probability')
