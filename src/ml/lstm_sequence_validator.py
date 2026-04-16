@@ -155,7 +155,7 @@ class LSTMSequenceValidator:
                   f"weights: 0→{weight_neg:.2f}, 1→{weight_pos:.2f}")
         else:
             class_weights = {0: 1.0, 1: 1.0}
-            print(f"[CLASS_WEIGHT] Dataset com apenas uma classe, pesos iguais")
+            print("[CLASS_WEIGHT] Dataset com apenas uma classe, pesos iguais")
 
         # Normalizar features — fit APENAS no train (evita data leakage)
         from sklearn.preprocessing import StandardScaler
@@ -222,7 +222,12 @@ class LSTMSequenceValidator:
         # Rebuild fresh model para treinar do zero com os pesos
         self.build_model()
 
-        print(f"\n[TRAIN] Iniciando... (hard examples: {n_hard}, class_weight ativo)")
+        # Merge class_weights into sample_weight (Keras não permite ambos simultaneamente)
+        for cls_idx, weight in class_weights.items():
+            mask = (y_train == cls_idx)
+            sample_weight[mask] *= weight
+
+        print(f"\n[TRAIN] Iniciando... (hard examples: {n_hard}, class_weight merged into sample_weight)")
         start = datetime.now(timezone.utc)
 
         history = self.model.fit(
@@ -232,7 +237,6 @@ class LSTMSequenceValidator:
             validation_data=(X_test_scaled, y_test),
             callbacks=callbacks,
             sample_weight=sample_weight,
-            class_weight=class_weights,
             verbose=1,
         )
 
@@ -272,8 +276,11 @@ class LSTMSequenceValidator:
     def _evaluate(self, X_train, y_train, X_test, y_test) -> Dict:
         """Avalia modelo no treino e teste com métricas completas."""
         from sklearn.metrics import (
-            accuracy_score, balanced_accuracy_score, classification_report,
-            f1_score, roc_auc_score,
+            accuracy_score,
+            balanced_accuracy_score,
+            classification_report,
+            f1_score,
+            roc_auc_score,
         )
 
         results = {}
@@ -594,14 +601,19 @@ class LSTMSequenceValidator:
         """
         import optuna
         import tensorflow as tf
+        from sklearn.preprocessing import StandardScaler
         from tensorflow.keras.callbacks import EarlyStopping
         from tensorflow.keras.layers import (
-            LSTM, BatchNormalization, Bidirectional, Dense, Dropout, Input,
+            LSTM,
+            BatchNormalization,
+            Bidirectional,
+            Dense,
+            Dropout,
+            Input,
         )
         from tensorflow.keras.models import Sequential
         from tensorflow.keras.optimizers import Adam
         from tensorflow.keras.regularizers import l1_l2
-        from sklearn.preprocessing import StandardScaler
 
         print("\n" + "=" * 60)
         print("OPTUNA — OTIMIZAÇÃO DE HIPERPARÂMETROS Bi-LSTM")
@@ -626,7 +638,7 @@ class LSTMSequenceValidator:
                   f"weights: 0→{weight_neg:.2f}, 1→{weight_pos:.2f}")
         else:
             class_weights = {0: 1.0, 1: 1.0}
-            print(f"[CLASS_WEIGHT] Dataset com apenas uma classe, pesos iguais")
+            print("[CLASS_WEIGHT] Dataset com apenas uma classe, pesos iguais")
 
         # Normalizar
         scaler = StandardScaler()
@@ -636,8 +648,6 @@ class LSTMSequenceValidator:
         X_test_flat = scaler.transform(X_test.reshape(-1, n_features))
         X_train_sc = np.nan_to_num(X_train_flat.reshape(len(X_train_raw), seq_len, n_features))
         X_test_sc = np.nan_to_num(X_test_flat.reshape(len(X_test), seq_len, n_features))
-
-        best_val_auc = [0.0]
 
         def objective(trial):
             tf.keras.backend.clear_session()
@@ -676,7 +686,7 @@ class LSTMSequenceValidator:
             early_stop = EarlyStopping(monitor="val_auc", patience=8,
                                        restore_best_weights=True, mode="max")
 
-            history = model.fit(
+            model.fit(
                 X_train_sc, y_train_raw, epochs=epochs_per_trial, batch_size=batch_size,
                 validation_data=(X_test_sc, y_test),
                 callbacks=[early_stop], verbose=0,
@@ -789,7 +799,7 @@ class LSTMSequenceValidator:
         final_val_auc = results.get("test_auc", 0)
         if final_val_auc < 0.52:
             print(f"\n[AVISO] val_auc={final_val_auc:.3f} < 0.52 — modelo pior que aleatório!")
-            print(f"[AVISO] O modelo será salvo mas marcado como LOW_QUALITY.")
+            print("[AVISO] O modelo será salvo mas marcado como LOW_QUALITY.")
             results["quality"] = "LOW_QUALITY"
             results["quality_warning"] = (
                 f"val_auc={final_val_auc:.3f} indica que o modelo não generaliza. "
@@ -883,7 +893,12 @@ class LSTMSequenceValidator:
         from sklearn.preprocessing import StandardScaler
         from tensorflow.keras.callbacks import EarlyStopping
         from tensorflow.keras.layers import (
-            LSTM, BatchNormalization, Bidirectional, Dense, Dropout, Input,
+            LSTM,
+            BatchNormalization,
+            Bidirectional,
+            Dense,
+            Dropout,
+            Input,
         )
         from tensorflow.keras.models import Sequential
         from tensorflow.keras.optimizers import Adam
@@ -1073,7 +1088,7 @@ class LSTMSequenceValidator:
         # Treinar modelo final com TODOS os dados e melhores parâmetros do último fold
         # (o último fold tem mais dados de treino e é mais representativo)
         best_params = fold_results[-1]["best_params"]
-        print(f"\n[FINAL] Treinando modelo com params do último fold e TODOS os dados...")
+        print("\n[FINAL] Treinando modelo com params do último fold e TODOS os dados...")
 
         tf.keras.backend.clear_session()
         # Split final: usar 90% treino / 10% validação do dataset completo

@@ -373,7 +373,6 @@ def validate_risk_and_position(
         # Filtro de horario: horas com WR < 15%
         _BAD_HOURS = {0, 1, 5, 6, 10, 20, 21}
         try:
-            from datetime import datetime, timezone
             _hour_now = datetime.now(timezone.utc).hour
             if _hour_now in _BAD_HOURS:
                 return {

@@ -446,10 +446,10 @@ def _detect_candle_patterns(df: pd.DataFrame, mover_type: str) -> list:
     for i in range(-2, 0):
         try:
             row = df.iloc[i]
-            o, h, l, c = float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])
+            o, h, lo, c = float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])
 
             body = abs(c - o)
-            full_range = h - l
+            full_range = h - lo
             if full_range <= 0:
                 continue
 
@@ -469,7 +469,7 @@ def _detect_candle_patterns(df: pd.DataFrame, mover_type: str) -> list:
 
             else:
                 # Dump: procurar hammer, bullish engulfing
-                lower_wick = min(o, c) - l
+                lower_wick = min(o, c) - lo
                 if lower_wick > body * 2 and body_ratio < 0.3:
                     patterns.append("hammer")
                 if c > o and body_ratio > 0.6:
@@ -492,7 +492,7 @@ def _calculate_wick_rejection(df: pd.DataFrame, mover_type: str) -> float:
     ratios = []
     for _, row in df.iterrows():
         try:
-            o, h, l, c = float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])
+            o, h, lo, c = float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])
             body = abs(c - o)
             if body <= 0:
                 body = 0.0001 * max(abs(o), 1)
@@ -502,7 +502,7 @@ def _calculate_wick_rejection(df: pd.DataFrame, mover_type: str) -> float:
                 wick = h - max(o, c)
             else:
                 # Lower wick = rejeição no fundo
-                wick = min(o, c) - l
+                wick = min(o, c) - lo
 
             ratios.append(wick / body if body > 0 else 0)
         except (KeyError, ZeroDivisionError):

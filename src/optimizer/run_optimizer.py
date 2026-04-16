@@ -34,11 +34,10 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 os.chdir(_ROOT)
 
-from src.core.logger import get_logger
-from src.optimizer.rolling_backtest_optimizer import (
+from src.core.logger import get_logger  # noqa: E402
+from src.optimizer.rolling_backtest_optimizer import (  # noqa: E402
     RollingBacktestOptimizer,
     get_current_dynamic_params,
-    get_optimizer_log,
     get_optimizer_status,
 )
 

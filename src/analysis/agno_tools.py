@@ -506,8 +506,9 @@ async def analyze_technical_indicators(symbol: str = "BTCUSDT", optimized_params
         # Auto-carregar parâmetros otimizados se não fornecidos
         if optimized_params is None:
             try:
-                from src.backtesting.continuous_optimizer import load_best_config
                 from dataclasses import asdict
+
+                from src.backtesting.continuous_optimizer import load_best_config
                 best = load_best_config(symbol, "1h", mover_type=mover_type)
                 if best:
                     optimized_params = asdict(best)
@@ -1246,8 +1247,9 @@ async def prepare_analysis_for_llm(symbol: str, mover_type: Optional[str] = None
         # Carregar parâmetros otimizados por símbolo (com fallback de categoria)
         _opt_params = None
         try:
-            from src.backtesting.continuous_optimizer import load_best_config
             from dataclasses import asdict
+
+            from src.backtesting.continuous_optimizer import load_best_config
             best = load_best_config(symbol, "1h", mover_type=mover_type)
             if best:
                 _opt_params = asdict(best)
@@ -1854,9 +1856,16 @@ def validate_risk_and_position(
         # Bug fix: DRIFTUSDT bateu TP2 e reabriu imediatamente, perdendo o lucro
         # ========================================
         try:
-            from src.trading.risk_manager import _check_sl_cooldown, _sl_cooldown_registry, _sl_cooldown_hours
-            from src.trading.risk_manager import _direction_cooldown_registry, _direction_cooldown_hours
-            from datetime import datetime as _dt_cd, timezone as _tz_cd
+            from datetime import datetime as _dt_cd
+            from datetime import timezone as _tz_cd
+
+            from src.trading.risk_manager import (
+                _check_sl_cooldown,
+                _direction_cooldown_hours,
+                _direction_cooldown_registry,
+                _sl_cooldown_hours,
+                _sl_cooldown_registry,
+            )
 
             # Check 1: Cooldown geral pós-fechamento (4h após qualquer fechamento)
             if _check_sl_cooldown(symbol):

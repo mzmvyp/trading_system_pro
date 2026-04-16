@@ -58,6 +58,24 @@ def _identify_conflicting_signals(data: Dict) -> List[str]:
     return conflicts
 
 
+def _format_twitter_section(twitter_data) -> str:
+    """Formata seção de sentimento Twitter para o prompt. Retorna string vazia se indisponível."""
+    if not twitter_data or not twitter_data.get("available"):
+        return ""
+    score = twitter_data.get("score", 0)
+    sentiment = twitter_data.get("sentiment", "neutral")
+    volume = twitter_data.get("tweet_volume", "unknown")
+    summary = twitter_data.get("summary", "")
+    topics = ", ".join(twitter_data.get("key_topics", [])[:3])
+    return (
+        f"\n## SENTIMENTO TWITTER/X (via Grok, tempo real)\n"
+        f"- Sentimento: {sentiment} (score: {score:+d}/10)\n"
+        f"- Volume de tweets: {volume}\n"
+        f"- Tópicos: {topics}\n"
+        f"- Resumo: {summary}\n"
+    )
+
+
 def _interpret_confluence(bullish_count: int, bearish_count: int) -> str:
     """Interpreta alinhamento de timeframes"""
     try:
@@ -160,6 +178,19 @@ def _calculate_overall_bias(data: Dict) -> Dict[str, Any]:
         else:
             neutral_count += 1
 
+        # Twitter/X sentiment (se disponível)
+        twitter = sentiment_data.get("twitter")
+        if twitter and twitter.get("available"):
+            tw_score = twitter.get("score", 0)
+            if tw_score >= 5:
+                bullish_count += 2
+            elif tw_score >= 2:
+                bullish_count += 1
+            elif tw_score <= -5:
+                bearish_count += 2
+            elif tw_score <= -2:
+                bearish_count += 1
+
         overall_bias = max(-10, min(10, bullish_count - bearish_count))
 
         if overall_bias >= 7:
@@ -201,8 +232,9 @@ async def prepare_analysis_for_llm(symbol: str, mover_type: Optional[str] = None
         # Carregar parâmetros otimizados por símbolo (com fallback de categoria)
         _opt_params = None
         try:
-            from src.backtesting.continuous_optimizer import load_best_config
             from dataclasses import asdict
+
+            from src.backtesting.continuous_optimizer import load_best_config
             best = load_best_config(symbol, "1h", mover_type=mover_type)
             if best:
                 _opt_params = asdict(best)
@@ -215,6 +247,14 @@ async def prepare_analysis_for_llm(symbol: str, mover_type: Optional[str] = None
         sentiment = await analyze_market_sentiment(symbol)
         multi_timeframe = await analyze_multiple_timeframes(symbol)
         order_flow = await analyze_order_flow(symbol)
+
+        # Twitter/X sentiment via Grok (opcional — requer XAI_API_KEY)
+        twitter_sentiment = {"available": False, "sentiment": "neutral", "score": 0}
+        try:
+            from src.analysis.twitter_sentiment import analyze_twitter_sentiment
+            twitter_sentiment = await analyze_twitter_sentiment(symbol)
+        except Exception as e:
+            logger.debug(f"[{symbol}] Twitter sentiment indisponível: {e}")
 
         errors = []
         if "error" in market_data:
@@ -307,7 +347,7 @@ async def prepare_analysis_for_llm(symbol: str, mover_type: Optional[str] = None
             },
             "key_levels": {"immediate_support": support, "immediate_resistance": resistance, "fib_382": fib_levels.get("fib_38.2", support), "fib_50": fib_levels.get("fib_50", current_price), "fib_618": fib_levels.get("fib_61.8", resistance), "volume_poc": poc_price, "distance_to_support_pct": distance_to_support, "distance_to_resistance_pct": distance_to_resistance},
             "volume_flow": {"volume_24h": market_data.get("volume_24h", 0), "volume_trend": "stable", "obv_trend": obv_trend, "orderbook_imbalance": order_flow.get("orderbook_imbalance", 0), "orderbook_bias": orderbook_bias, "cvd_direction": "positive" if order_flow.get("cvd", 0) > 0 else "negative"},
-            "sentiment": {"overall": sentiment.get("sentiment", "neutral"), "confidence": sentiment.get("confidence", 0.5), "funding_rate": market_data.get("funding_rate", 0), "funding_interpretation": funding_interpretation, "open_interest_trend": "stable"},
+            "sentiment": {"overall": sentiment.get("sentiment", "neutral"), "confidence": sentiment.get("confidence", 0.5), "funding_rate": market_data.get("funding_rate", 0), "funding_interpretation": funding_interpretation, "open_interest_trend": "stable", "twitter": twitter_sentiment if twitter_sentiment.get("available") else None},
             "volatility": {"atr_value": atr_value, "atr_pct": atr_pct, "level": volatility_level, "suggested_stop_pct": suggested_stops["suggested_stop_pct"], "suggested_tp1_pct": suggested_stops["suggested_tp1_pct"], "suggested_tp2_pct": suggested_stops["suggested_tp2_pct"]},
             "conflicting_signals": [],
             "aggregated_scores": {},
@@ -406,9 +446,9 @@ Posicao no range 24h: {analysis['price_context']['position_in_range_pct']:.0f}% 
 ## FLUXO DE ORDENS
 - Orderbook: {analysis['volume_flow']['orderbook_bias']} (imbalance: {analysis['volume_flow']['orderbook_imbalance']:.2f})
 - CVD: {analysis['volume_flow']['cvd_direction']}
-- Sentimento: {analysis['sentiment']['overall']}
+- Sentimento (mercado): {analysis['sentiment']['overall']}
 - Funding Rate: {analysis['sentiment']['funding_interpretation']}
-
+{_format_twitter_section(analysis.get('sentiment', {}).get('twitter'))}
 ## VOLATILIDADE
 - Nivel: {analysis['volatility']['level']} (ATR: {analysis['volatility']['atr_pct']:.2f}%)
 - Stop sugerido: {analysis['volatility']['suggested_stop_pct']:.2f}%

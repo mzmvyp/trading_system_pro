@@ -491,8 +491,6 @@ def enrich_signal_with_klines(signal: Dict) -> Optional[Dict]:
     timestamp_str = signal.get('timestamp', '')
     signal_type = signal.get('signal', '')
     entry_price = signal.get('entry_price', 0)
-    stop_loss = signal.get('stop_loss', 0)
-    tp1 = signal.get('take_profit_1', 0)
     outcome = signal.get('outcome', '')
 
     if not symbol or not entry_price or signal_type not in ('BUY', 'SELL'):

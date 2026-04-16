@@ -258,6 +258,7 @@ class AgnoTradingAgent:
                 try:
                     logger.info("[LSTM-RETRAIN] Iniciando retrain Bi-LSTM...")
                     import asyncio
+
                     from src.ml.lstm_sequence_validator import LSTMSequenceValidator
                     lstm = LSTMSequenceValidator()
                     try:
@@ -525,7 +526,6 @@ class AgnoTradingAgent:
         adx_threshold = getattr(best, "adx_min_strength", getattr(best, "adx_threshold", 25)) if best else 25
         bb_std = getattr(best, "bb_std", 2.0) if best else 2.0
         volume_surge = getattr(best, "volume_surge_multiplier", 1.5) if best else 1.5
-        thresholds_source = "optimizer" if best else "default"
         indicators = analysis_data.get("key_indicators", {})
         trend_data = analysis_data.get("trend_analysis", {})
         volume_flow = analysis_data.get("volume_flow", {})
@@ -682,7 +682,6 @@ class AgnoTradingAgent:
         # 9. Setup Validator — valida contexto contra win rate histórico
         try:
             from src.optimizer.setup_validator import validate_signal_before_trade
-            symbol = analysis_data.get("symbol", "")
             rsi_val = indicators.get("rsi", {}).get("rsi", 50)
             adx_val = trend_data.get("adx", 25)
             atr_val = trend_data.get("atr", 0)
@@ -917,7 +916,7 @@ Responda APENAS com JSON:
         # Bug fix: DRIFTUSDT bateu TP2 e reabriu no mesmo ciclo
         # ========================================
         try:
-            from src.trading.risk_manager import _check_sl_cooldown, _sl_cooldown_registry, _sl_cooldown_hours
+            from src.trading.risk_manager import _check_sl_cooldown, _sl_cooldown_hours, _sl_cooldown_registry
             if _check_sl_cooldown(symbol):
                 remaining = _sl_cooldown_hours - (datetime.now(timezone.utc) - _sl_cooldown_registry[symbol]).total_seconds() / 3600
                 logger.warning(f"[COOLDOWN PÓS-FECHAMENTO] {symbol}: análise bloqueada — cooldown ativo ({remaining:.1f}h restantes)")
@@ -1649,8 +1648,8 @@ Responda APENAS com JSON:
                     if sideways_mean_rev and "error" not in analysis_data:
                         try:
                             from src.analysis.technical_levels_calculator import (
-                                calculate_sideways_mean_reversion_levels,
                                 _collect_all_levels,
+                                calculate_sideways_mean_reversion_levels,
                             )
                             range_quality = agno_signal.get("_range_quality", {})
                             bb_data = range_quality.get("bb_data", {})

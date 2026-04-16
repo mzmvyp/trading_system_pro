@@ -122,6 +122,7 @@ def _register_trade_result(symbol: str, add_trade_result_fn):
         if result == 'TIMEOUT':
             try:
                 import asyncio
+
                 from src.exchange.executor import BinanceFuturesExecutor
                 _exec = BinanceFuturesExecutor()
                 # Get recent income (realized PnL) for this symbol
@@ -247,11 +248,10 @@ async def main():
 
                     def _auto_train_ml_loop(interval_hours: int):
                         """Thread daemon que treina ML/LSTM periodicamente."""
-                        import time as _time
-                        import traceback as _tb
-
                         # Garantir diretórios existem
                         import pathlib
+                        import time as _time
+                        import traceback as _tb
                         pathlib.Path("data/drift").mkdir(parents=True, exist_ok=True)
                         pathlib.Path("data/ml").mkdir(parents=True, exist_ok=True)
                         pathlib.Path("logs").mkdir(parents=True, exist_ok=True)
@@ -454,8 +454,11 @@ async def main():
                             logger.warning(f"[TOP_MOVERS] Erro ao buscar top movers: {e} (usando apenas pares fixos)")
 
                     # Filtrar símbolos sem posição ativa E sem cooldown ativo
-                    from src.trading.risk_manager import _check_sl_cooldown, _sl_cooldown_registry, _sl_cooldown_hours
-                    from src.trading.risk_manager import _direction_cooldown_registry
+                    from src.trading.risk_manager import (
+                        _check_sl_cooldown,
+                        _sl_cooldown_hours,
+                        _sl_cooldown_registry,
+                    )
                     symbols_to_analyze = []
                     for s in all_symbols:
                         if s in active_positions_set:

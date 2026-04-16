@@ -16,7 +16,6 @@ Regras baseadas no position_reevaluator.py do bot_trade_20260115.
 """
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -77,7 +76,6 @@ class PositionReevaluator:
         entry_price = float(position.get("entry_price", 0))
         stop_loss = float(position.get("stop_loss", 0))
         tp1 = float(position.get("take_profit_1", position.get("tp1", 0)))
-        tp2 = float(position.get("take_profit_2", position.get("tp2", 0)))
         current_price = float(position.get("current_price", 0))
 
         if not entry_price or not current_price:

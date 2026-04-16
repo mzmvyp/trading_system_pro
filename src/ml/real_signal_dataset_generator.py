@@ -17,13 +17,11 @@ Pipeline:
 
 import asyncio
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-import pandas as pd
 
 from src.core.config import settings
 from src.core.logger import get_logger
@@ -231,7 +229,6 @@ class RealSignalDatasetGenerator:
         # Already sorted by timestamp above
         X = np.array([v[0] for v in valid], dtype=np.float32)
         y = np.array([v[1] for v in valid], dtype=np.int32)
-        meta = [v[2] for v in valid]
 
         # 80/20 temporal split
         split_idx = int(len(X) * 0.8)

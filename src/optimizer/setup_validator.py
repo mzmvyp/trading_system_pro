@@ -19,16 +19,12 @@ Uso no sistema:
 - Setup com win rate > 55% = voto FOR, < 40% = voto AGAINST
 """
 
-import asyncio
 import json
-import os
-from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import pandas as pd
 
 from src.backtesting.backtest_engine import BacktestEngine, BacktestParams
@@ -259,10 +255,10 @@ class SetupValidator:
 
         tp1_hit = False
         for j, (_, row) in enumerate(future.iterrows()):
-            h, l = row["high"], row["low"]
+            h, lo = row["high"], row["low"]
 
             if sig.signal_type == "BUY":
-                if l <= sig.stop_loss:
+                if lo <= sig.stop_loss:
                     sig.result = "SL"
                     sig.exit_price = sig.stop_loss
                     sig.pnl_pct = (sig.stop_loss - sig.entry_price) / sig.entry_price * 100
@@ -287,13 +283,13 @@ class SetupValidator:
                     sig.pnl_pct = (sig.entry_price - sig.stop_loss) / sig.entry_price * 100
                     sig.hours_to_exit = j + 1
                     return sig
-                if l <= sig.take_profit_2:
+                if lo <= sig.take_profit_2:
                     sig.result = "TP2"
                     sig.exit_price = sig.take_profit_2
                     sig.pnl_pct = (sig.entry_price - sig.take_profit_2) / sig.entry_price * 100
                     sig.hours_to_exit = j + 1
                     return sig
-                if l <= sig.take_profit_1 and not tp1_hit:
+                if lo <= sig.take_profit_1 and not tp1_hit:
                     tp1_hit = True
                     sig.result = "TP1"
                     sig.exit_price = sig.take_profit_1
