@@ -403,6 +403,25 @@ class AgnoTradingAgent:
             # Registrar predicao no dashboard
             self.ml_validator._log_prediction(signal, result)
 
+            # Health gate: se a distribuição dos últimos N outputs está
+            # degenerada (near-constant ou severely biased), o voto é
+            # forçado a NEUTRO. Rodada Abril/2026 mostrou ML emitindo
+            # ~0.436 em 92/100 casos — tratar como entropia zero.
+            from src.ml.model_health import health_gate
+            allow_vote, health = health_gate("ml", probability)
+            if not allow_vote:
+                logger.warning(
+                    f"[ML VOTO] BLOQUEADO por health gate: {health['reason']} "
+                    f"(prob={probability:.1%}, n={health['n']})"
+                )
+                return {
+                    "skip_signal": False,
+                    "ml_vote": 0,
+                    "probability": probability,
+                    "prediction": prediction,
+                    "reason": f"ML degenerate ({health['reason']}) — vote forçado neutro",
+                }
+
             # ML como VOTO (não veto):
             # Dados reais mostram: SKIP (prob<50%) tem 81% accuracy,
             # EXECUTE (prob>50%) tem apenas 32% accuracy.
@@ -1490,6 +1509,24 @@ Responda APENAS com JSON:
                                 lstm_acc is not None
                                 and lstm_acc >= MIN_ACCURACY_TO_VOTE
                             )
+
+                            # Health gate — mesma proteção do ML:
+                            # se as últimas N probabilidades LSTM estão
+                            # degeneradas (mean fora de [0.35,0.65] ou
+                            # stdev<0.03 — foi o caso em Abril/2026, mean=0.59
+                            # mas WR real 33%), force vote neutro.
+                            from src.ml.model_health import health_gate
+                            lstm_allow, lstm_health = health_gate("lstm", lstm_prob)
+                            if not lstm_allow:
+                                logger.warning(
+                                    f"[Bi-LSTM VOTO] BLOQUEADO por health gate: "
+                                    f"{lstm_health['reason']} (prob={lstm_prob:.1%}, "
+                                    f"n={lstm_health['n']})"
+                                )
+                                confluence["details"].append(
+                                    f"Bi-LSTM BLOQUEADO ({lstm_health['reason']})"
+                                )
+                                lstm_is_reliable = False
 
                             # Mesmos thresholds calibrados do ML:
                             # prob >= 0.75 → FOR, prob < 0.30 → FORTE CONTRA,

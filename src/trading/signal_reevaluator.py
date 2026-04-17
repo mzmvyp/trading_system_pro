@@ -55,8 +55,14 @@ class SignalReevaluator:
     def __init__(self):
         """Inicializa o sistema de reavaliacao"""
         self.last_reevaluation = {}  # {position_key: datetime}
+        self.last_reevaluation_price = {}  # {position_key: float} — preço no momento da última reavaliação DeepSeek
         self.reevaluation_history = []  # Historico de reavaliacoes
         self.tp1_stop_adjusted = {}  # {position_key: datetime} - posicoes que ja tiveram stop ajustado apos TP1
+
+        # Price-change gate: só chama DeepSeek se o preço se moveu ao menos
+        # este % desde a última reavaliação. Evita gastar quota da LLM em
+        # mercados laterais onde nada mudou.
+        self.reevaluation_min_price_change_pct = 0.3
 
         # Criar diretorio para logs de reavaliacao
         Path("reevaluation_logs").mkdir(exist_ok=True)
@@ -235,6 +241,28 @@ class SignalReevaluator:
             if hours_since_eval < settings.reevaluation_interval_hours:
                 logger.info(f"[REEVALUATOR] {position_key}: Ultima reavaliacao ha {hours_since_eval:.2f}h (intervalo: {settings.reevaluation_interval_hours}h) - PULANDO")
                 return False
+
+        # Price-change gate: em mercados laterais o preço basicamente não se
+        # move entre reavaliações. Chamar DeepSeek toda vez queima quota e
+        # introduz ruído (a LLM pode inverter a recomendação por causa de
+        # variação sub-ATR). Só passa o gate se o preço mudou >= N% OU se
+        # ainda não temos preço de referência.
+        last_price = self.last_reevaluation_price.get(position_key)
+        if last_price and last_price > 0:
+            current_price = position.get("current_price") or position.get("entry_price", 0)
+            try:
+                current_price = float(current_price or 0)
+            except (TypeError, ValueError):
+                current_price = 0
+            if current_price > 0:
+                change_pct = abs(current_price - last_price) / last_price * 100
+                if change_pct < self.reevaluation_min_price_change_pct:
+                    logger.info(
+                        f"[REEVALUATOR] {position_key}: Preço variou apenas "
+                        f"{change_pct:.2f}% desde última reav "
+                        f"(mín {self.reevaluation_min_price_change_pct}%) - PULANDO"
+                    )
+                    return False
 
         logger.info(f"[REEVALUATOR] {position_key}: OK para reavaliar (aberta ha {hours_open:.2f}h)")
         return True
@@ -563,8 +591,14 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
             result["pnl_percent"] = self._calculate_pnl_percent(position, market_data.get("current_price", 0))
             result["timestamp"] = datetime.now(timezone.utc).isoformat()
 
-            # 5. Atualizar timestamp de ultima reavaliacao
+            # 5. Atualizar timestamp e preço de referência da última reavaliacao
             self.last_reevaluation[position_key] = datetime.now(timezone.utc)
+            try:
+                ref_price = float(market_data.get("current_price") or 0)
+                if ref_price > 0:
+                    self.last_reevaluation_price[position_key] = ref_price
+            except (TypeError, ValueError):
+                pass
 
             # 6. Salvar no historico
             self.reevaluation_history.append(result)
@@ -1298,75 +1332,20 @@ Analise cuidadosamente todos os dados e responda APENAS com JSON:
                     logger.error(f"[TP1] Erro ao verificar TP1 para {position_key}: {e}")
 
             # ============================================
-            # 3b. PROTEÇÃO AUTOMÁTICA DE LUCRO (sem DeepSeek)
+            # 3b. PROTEÇÃO AUTOMÁTICA DE LUCRO — desativada aqui
             # ============================================
-            # Move stop para breakeven ou trailing baseado em regras fixas
-            # Não depende de position_manager nem de DeepSeek
-            try:
-                current_price = await self._get_current_price(symbol)
-                if current_price > 0:
-                    pnl_pct = self._calculate_pnl_percent(position, current_price)
-                    entry_price = position.get("entry_price", 0)
-                    current_stop = position.get("stop_loss", 0)
-                    signal_type = position.get("signal", "BUY")
-
-                    # A) AUTO BREAKEVEN: Mover stop para entry quando lucro >= trigger
-                    if settings.auto_breakeven_enabled and pnl_pct >= settings.auto_breakeven_trigger_pct:
-                        # Verificar se stop ainda está abaixo do entry (para BUY) ou acima (para SELL)
-                        should_move = False
-                        if signal_type == "BUY" and current_stop < entry_price:
-                            should_move = True
-                        elif signal_type == "SELL" and current_stop > entry_price:
-                            should_move = True
-
-                        if should_move:
-                            logger.warning(f"[AUTO BREAKEVEN] {position_key}: P&L={pnl_pct:.2f}% >= {settings.auto_breakeven_trigger_pct}% - Movendo stop para breakeven (${entry_price:.4f})")
-                            if auto_execute:
-                                be_result = await self._execute_adjust_stop(position, entry_price)
-                                results.append({
-                                    "position_key": position_key,
-                                    "action": "AUTO_BREAKEVEN",
-                                    "executed": be_result.get("executed", False),
-                                    "pnl_percent": pnl_pct,
-                                    "new_stop": entry_price
-                                })
-                                continue
-
-                    # B) AUTO TRAILING STOP: Trail stop quando lucro >= trigger
-                    if settings.auto_trailing_stop_enabled and pnl_pct >= settings.auto_trailing_stop_trigger_pct:
-                        trail_distance = entry_price * (settings.auto_trailing_stop_distance_pct / 100)
-
-                        if signal_type == "BUY":
-                            new_trailing_stop = current_price - trail_distance
-                            # Só move se novo stop é melhor que o atual
-                            if new_trailing_stop > current_stop:
-                                logger.warning(f"[AUTO TRAILING] {position_key}: P&L={pnl_pct:.2f}% - Trailing stop: ${current_stop:.4f} -> ${new_trailing_stop:.4f}")
-                                if auto_execute:
-                                    trail_result = await self._execute_adjust_stop(position, new_trailing_stop)
-                                    results.append({
-                                        "position_key": position_key,
-                                        "action": "AUTO_TRAILING_STOP",
-                                        "executed": trail_result.get("executed", False),
-                                        "pnl_percent": pnl_pct,
-                                        "new_stop": new_trailing_stop
-                                    })
-                                    continue
-                        else:  # SELL
-                            new_trailing_stop = current_price + trail_distance
-                            if new_trailing_stop < current_stop:
-                                logger.warning(f"[AUTO TRAILING] {position_key}: P&L={pnl_pct:.2f}% - Trailing stop: ${current_stop:.4f} -> ${new_trailing_stop:.4f}")
-                                if auto_execute:
-                                    trail_result = await self._execute_adjust_stop(position, new_trailing_stop)
-                                    results.append({
-                                        "position_key": position_key,
-                                        "action": "AUTO_TRAILING_STOP",
-                                        "executed": trail_result.get("executed", False),
-                                        "pnl_percent": pnl_pct,
-                                        "new_stop": new_trailing_stop
-                                    })
-                                    continue
-            except Exception as e:
-                logger.warning(f"[AUTO PROTECT] Erro na protecao automatica de {position_key}: {e}")
+            # Breakeven/trailing absolutos (1.5% / 2.5% fixos) foram REMOVIDOS
+            # deste caminho porque entravam em corrida com o trailing
+            # proporcional de position_reevaluator (70% / 90% do TP1): um
+            # movia o stop e o outro tentava mover de novo na próxima
+            # rodada, produzindo travas de BE em trades ainda dentro da
+            # zona normal de volatilidade.
+            #
+            # A proteção proporcional ao TP1 é canônica — vive em
+            # src/trading/position_reevaluator.py. As settings
+            # auto_breakeven_* e auto_trailing_stop_* permanecem como
+            # fallback legacy; se alguém ligar aqui de novo, vai duplicar
+            # o comportamento.
 
             # ============================================
             # 4. REAVALIACAO VIA DEEPSEEK (normal)
