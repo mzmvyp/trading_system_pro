@@ -816,6 +816,8 @@ def add_trade_result(signal: Dict, result: str, return_pct: float = 0.0):
 
 def manual_retrain(force_save: bool = True):
     """Forca retreino manual. Com force_save=True, substitui o modelo mesmo se F1 na validacao nao melhorar."""
+    from src.ml.feature_alignment_guard import assert_features_aligned
+    assert_features_aligned()
     return online_learning_manager.retrain(force_save=force_save)
 
 
@@ -835,6 +837,10 @@ def seed_from_evaluated_signals(force_retrain: bool = True, max_signals: int = 0
     Returns:
         Dict com resultado da operacao
     """
+
+    # Guard contra feature-alignment regression (Apr/2026 inverted-ML bug)
+    from src.ml.feature_alignment_guard import assert_features_aligned
+    assert_features_aligned()
 
     # Lock para evitar retrains concorrentes (drift-retrain thread + auto-train thread)
     if not _retrain_lock.acquire(blocking=False):

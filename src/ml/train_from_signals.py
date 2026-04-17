@@ -962,6 +962,9 @@ def save_models(train_result: Dict, df: pd.DataFrame):
 
 def run_training_pipeline():
     """Pipeline completo de treinamento ML."""
+    from src.ml.feature_alignment_guard import assert_features_aligned
+    assert_features_aligned()
+
     print("=" * 60)
     print("ML TRAINING PIPELINE")
     print(f"Timestamp: {datetime.now().isoformat()}")
