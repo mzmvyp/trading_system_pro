@@ -113,6 +113,14 @@ def test_online_learning_uses_aligned_semantics():
     )
 
 
+def test_feature_alignment_guard_passes_on_current_tree():
+    """Runtime guard must agree with the static tests on the current tree."""
+    from src.ml.feature_alignment_guard import check_feature_alignment
+
+    ok, failures = check_feature_alignment()
+    assert ok, f"Guard detectou desalinhamento: {failures}"
+
+
 def test_train_from_signals_uses_aligned_semantics():
     """Active training path must match inference."""
     src = _read("src/ml/train_from_signals.py")

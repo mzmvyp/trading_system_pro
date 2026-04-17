@@ -49,6 +49,8 @@ VOTER_NAMES = [
     "lstm",
     "llm",
     "regime",
+    "chart_patterns",
+    "setup_validator",
 ]
 
 WINNING_OUTCOMES = {"TP1_HIT", "TP2_HIT"}

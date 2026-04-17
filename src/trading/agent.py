@@ -482,6 +482,62 @@ class AgnoTradingAgent:
         sentiment_map = {'bullish': 1, 'neutral': 0, 'bearish': -1}
         return sentiment_map.get(sentiment.lower() if sentiment else 'neutral', 0)
 
+    async def _vote_chart_patterns(self, symbol: str, direction: str) -> Dict:
+        """Busca últimos candles 1h e roda detectores de chart pattern.
+
+        Retorna {"vote": -1|0|1, "pattern": str, "reason": str}.
+        - Vote +1 se um pattern CONFIRMADO aponta na mesma direção do sinal.
+        - Vote -1 se um pattern CONFIRMADO aponta contra o sinal (ex: SELL
+          quando Double Bottom confirmou).
+        - Vote 0 se não há pattern ou só padrões não confirmados.
+
+        Padrões não confirmados são ruído — só o confirmed=True conta.
+        """
+        try:
+            from src.analysis.chart_patterns import detect_all
+            from src.exchange.client import BinanceClient
+
+            async with BinanceClient() as client:
+                klines = await client.get_klines(symbol, "1h", limit=100)
+            if klines is None or len(klines) < 30:
+                return {"vote": 0, "pattern": "", "reason": "poucos candles"}
+
+            import pandas as pd
+            df = pd.DataFrame(
+                klines,
+                columns=[
+                    "open_time", "open", "high", "low", "close", "volume",
+                    "close_time", "quote_volume", "trades",
+                    "taker_buy_base", "taker_buy_quote", "ignore",
+                ],
+            ) if not isinstance(klines, pd.DataFrame) else klines
+            for col in ("open", "high", "low", "close"):
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            df = df.dropna(subset=["open", "high", "low", "close"])
+
+            patterns = detect_all(df)
+            confirmed = [p for p in patterns if p.metadata.get("confirmed")]
+            if not confirmed:
+                return {"vote": 0, "pattern": "", "reason": "sem pattern confirmado"}
+
+            # Escolhe o padrão mais confiável entre os confirmados
+            best = max(confirmed, key=lambda p: p.reliability)
+            is_buy = direction == "BUY"
+            aligned = (
+                (is_buy and best.direction == "BULLISH")
+                or (not is_buy and best.direction == "BEARISH")
+            )
+            vote = 1 if aligned else -1
+            return {
+                "vote": vote,
+                "pattern": best.name,
+                "reliability": best.reliability,
+                "reason": f"{best.name} {best.direction} (rel={best.reliability:.0%})",
+            }
+        except Exception as e:
+            logger.debug(f"[CHART PATTERNS] Erro votando {symbol}: {e}")
+            return {"vote": 0, "pattern": "", "reason": f"erro: {e}"}
+
     def _calc_risk_distance(self, signal: Dict) -> float:
         """ATR% — volatilidade relativa (substitui risk_distance derivado do SL)."""
         entry = signal.get('entry_price', 0)
@@ -1363,6 +1419,32 @@ Responda APENAS com JSON:
                 )
                 votes_for = confluence["votes_for"]
                 votes_against = confluence["votes_against"]
+
+                # Chart patterns voter (Double Top/Bottom, H&S, Inverse H&S).
+                # Só conta se o padrão foi confirmado (preço fechou fora do neckline).
+                chart_patterns_result = await self._vote_chart_patterns(symbol, llm_signal_dir)
+                cp_vote = chart_patterns_result.get("vote", 0)
+                if cp_vote > 0:
+                    votes_for += 1
+                    confluence.setdefault("details", []).append(
+                        f"Chart pattern a favor: {chart_patterns_result.get('reason', '')}"
+                    )
+                elif cp_vote < 0:
+                    votes_against += 1
+                    confluence.setdefault("details", []).append(
+                        f"Chart pattern contra: {chart_patterns_result.get('reason', '')}"
+                    )
+                confluence.setdefault("voter_votes", {})["chart_patterns"] = cp_vote
+                confluence["votes_for"] = votes_for
+                confluence["votes_against"] = votes_against
+                confluence["total_votes"] = votes_for + votes_against
+                confluence["score"] = round(
+                    votes_for / max(confluence["total_votes"], 1), 3
+                )
+                logger.info(
+                    f"[CHART PATTERNS] {symbol} {llm_signal_dir}: vote={cp_vote} "
+                    f"({chart_patterns_result.get('reason', 'sem pattern')})"
+                )
 
                 # LLM voto RECALIBRADO: dados mostram que conf>=7 SEMPRE vota +1
                 # (porque min_confidence_0_10 = 7), tornando o voter inútil como
