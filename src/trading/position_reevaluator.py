@@ -43,7 +43,15 @@ class PositionReevaluator:
         self._breakeven_moved: Dict[str, bool] = {}
         self._partial_closed: Dict[str, bool] = {}
         self.min_hours_between_checks = 0.083  # ~5 min (antes era 30min — muito lento para alta alavancagem)
-        self.min_hours_open = 1.0  # mínimo 1h aberta antes de reavaliar
+        # Source of truth para "quanto tempo esperar antes da 1a reavaliação"
+        # vive em settings.reevaluation_min_time_open_hours. Antes estava
+        # hardcoded em 1.0 aqui e criava divergência com signal_reevaluator
+        # e position_monitor.
+        try:
+            from src.core.config import settings
+            self.min_hours_open = float(settings.reevaluation_min_time_open_hours)
+        except Exception:
+            self.min_hours_open = 1.0
 
     async def reevaluate(self, position: Dict[str, Any]) -> Dict[str, Any]:
         """
