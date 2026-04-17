@@ -554,22 +554,37 @@ class DatasetGenerator:
         resultado_map = {'SL': 0, 'TP1': 1, 'TP2': 2}
         self.dataset['target_multiclass'] = self.dataset['resultado'].map(resultado_map).fillna(0)
 
-        # 6. Criar features derivadas (com cuidado para não causar leakage)
-        if 'entry_price' in self.dataset.columns and 'stop_loss' in self.dataset.columns:
-            # Risk/Reward ratio (calculável no momento do sinal, não é leakage)
-            self.dataset['risk_distance_pct'] = abs(
-                (self.dataset['entry_price'] - self.dataset['stop_loss']) / self.dataset['entry_price'] * 100
-            )
+        # 6. Criar features derivadas ALINHADAS com a semântica da inferência.
+        #
+        # IMPORTANTE (root cause da liquidação em abril/2026):
+        # As features abaixo DEVEM bater com `agent._calc_risk_distance/_reward/_risk_reward`
+        # e `simple_validator.deepseek_signal[...]` no ponto de inferência. Se divergirem,
+        # o modelo aprende relações invertidas — ver deep_analysis_report.txt:179-193
+        # (correlação ML<->outcome = -0.1257 quando havia mismatch).
+        #
+        # Convenção UNIFICADA (treino + inferência):
+        #   risk_distance_pct   = ATR / close * 100         (volatilidade relativa)
+        #   reward_distance_pct = candle_body_pct           (força do último candle)
+        #   risk_reward_ratio   = volume_ratio              (volume vs média)
+        #
+        # NÃO usar |entry - stop_loss| nem |tp1 - entry| aqui — isso era o bug antigo,
+        # pois fazia a feature significar "distância do SL/TP" no treino mas "ATR%" na
+        # inferência (semânticas diferentes = modelo inverte).
+        if 'atr' in self.dataset.columns and 'entry_price' in self.dataset.columns:
+            self.dataset['risk_distance_pct'] = (
+                self.dataset['atr'].abs() / self.dataset['entry_price'].replace(0, np.nan) * 100
+            ).fillna(2.0)
 
-        if 'entry_price' in self.dataset.columns and 'take_profit_1' in self.dataset.columns:
-            self.dataset['reward_distance_pct'] = abs(
-                (self.dataset['take_profit_1'] - self.dataset['entry_price']) / self.dataset['entry_price'] * 100
-            )
+        if 'candle_body_pct' in self.dataset.columns:
+            self.dataset['reward_distance_pct'] = self.dataset['candle_body_pct'].fillna(0.5)
+        else:
+            # Fallback conservador: sem candle_body_pct gravado, usar 0.5 (neutro)
+            self.dataset['reward_distance_pct'] = 0.5
 
-        if 'risk_distance_pct' in self.dataset.columns and 'reward_distance_pct' in self.dataset.columns:
-            self.dataset['risk_reward_ratio'] = (
-                self.dataset['reward_distance_pct'] / self.dataset['risk_distance_pct'].replace(0, np.nan)
-            ).fillna(1)
+        if 'volume_ratio' in self.dataset.columns:
+            self.dataset['risk_reward_ratio'] = self.dataset['volume_ratio'].fillna(1.0)
+        else:
+            self.dataset['risk_reward_ratio'] = 1.0
 
         print(f"  [OK] Dataset final: {len(self.dataset)} sinais")
 

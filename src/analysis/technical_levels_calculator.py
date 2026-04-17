@@ -14,9 +14,10 @@ logger = get_logger(__name__)
 # Consistente com executor.py MIN_SL_DISTANCE_PCT = 1.0
 # Valor anterior (0.3%) permitia SL muito apertado, causando stops prematuros
 MIN_SL_DISTANCE_PCT = 1.0
-# SL maximo tecnico: permite SL até 5% para respeitar níveis técnicos reais
-# Antes era 2.5% — forçava SL dentro do ruído do mercado (ATR típico 1.5-3%)
-# O position sizing ajusta automaticamente: SL maior = posição menor = mesmo risco em $
+# SL maximo tecnico: permite SL até 5% para respeitar níveis técnicos reais.
+# metrics_report.txt: SL 2-3% -> WR 64.3%, PnL +1082% vs SL <1% -> WR 36.6%.
+# Position sizing compensa automaticamente: SL maior = posição menor = mesmo risco em $.
+# Combinado com leverage cap 10x: pior caso 10x*5% = 50% perda da margem (vs 100% antes).
 MAX_SL_DISTANCE_PCT = 5.0
 # Minimo risk:reward aceitavel (1.0:1 — permite TPs em níveis técnicos reais)
 # Reduzido de 1.5 para 1.0: dados mostram que R:R forçado empurra TPs para
