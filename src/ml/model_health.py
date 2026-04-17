@@ -43,14 +43,19 @@ _MIN_SAMPLES = 30
 # Max samples kept per model (the rolling window).
 _WINDOW = 200
 
-# Degeneracy thresholds (tuned from the April/2026 incident data).
-#   * Standard deviation below _FLAT_STD → model is near-constant.
-#   * Mean outside [_BIAS_LOW, _BIAS_HIGH] → model has collapsed to one class.
-#   * Distinct-value count below _MIN_DISTINCT → discretized output.
-_FLAT_STD = 0.03
-_BIAS_LOW = 0.35
-_BIAS_HIGH = 0.65
-_MIN_DISTINCT = 3
+# Degeneracy thresholds. Recalibrated on 17-Abr-2026 after running
+# standalone_bilstm_last_signals_accuracy.py over the last 100 closed
+# trades. Observed degeneracy:
+#   - ML: mean 0.39, ~15 distinct values, stdev ≈ 0.05 — majority-class
+#     predictor (votes CONTRA in 96/100 cases, 58% accuracy ≈ base rate).
+#   - LSTM: mean 0.46, range [0.36, 0.54], stdev ≈ 0.035 — compressed
+#     narrow band, no confidence (only 8/100 ever cross 0.4/0.6 threshold).
+# Thresholds are set so BOTH cases fire while a real, calibrated binary
+# classifier (stdev ≥ 0.10, mean near 0.5, many distinct outputs) passes.
+_FLAT_STD = 0.08  # below this the model has no informational range
+_BIAS_LOW = 0.42  # a calibrated model averages near 0.5 ± ~0.08
+_BIAS_HIGH = 0.58
+_MIN_DISTINCT = 15  # per _WINDOW samples, rounded to 3 decimals
 
 
 _buffers: Dict[str, Deque[float]] = {}
